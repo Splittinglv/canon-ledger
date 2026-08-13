@@ -32,7 +32,7 @@ chapter-commit 由写章主流程运行，data-agent 不在此执行（见 §5 �
 
 **B 提取与消歧**：同一轮完成，不额外调 LLM。置信度>0.8 自动采用，0.5-0.8 采用+warning，<0.5 标记待人工。
 
-**C 生成 artifacts**：产出三份 JSON 到 `.webnovel/tmp/`，顶层结构见 §7。
+**C 生成 artifacts**：读取调用方传入的 `chapter_binding_file`，将其完整对象原样写入三份 JSON 的顶层 `chapter_binding`，再产出到 `.webnovel/tmp/`；顶层结构见 §7。禁止自行重算或改写 binding。
 
 **D 摘要与场景切片**：写入 `extraction_result.json` 的 `summary_text` 与 `scenes` 字段。摘要 100-150 字，场景切片 50-100 字/场景，字段为 `index/start_line/end_line/location/summary/characters/content`。
 
@@ -59,7 +59,7 @@ hook_strength: "strong"
 ## 4. 输入
 
 ```json
-{"chapter": 100, "chapter_file": "正文/第0100章-标题.md", "project_root": "D:/wk/斗破苍穹"}
+{"chapter": 100, "chapter_file": "正文/第0100章-标题.md", "chapter_binding_file": ".webnovel/tmp/chapter_binding.json", "project_root": "D:/wk/斗破苍穹"}
 ```
 
 ## 5. 边界
@@ -76,9 +76,10 @@ hook_strength: "strong"
 
 三份 artifact 的顶层结构如下。投影器只认规范字段名，必须严格遵守。
 
-- `fulfillment_result.json` 顶层四个数组：`planned_nodes`、`covered_nodes`、`missed_nodes`、`extra_nodes`。
-- `disambiguation_result.json` 顶层：`pending` 数组。
-- `extraction_result.json` 顶层（**直接放这些键，禁止包在外层对象里**）：`accepted_events`、`state_deltas`、`entity_deltas`、`entities_appeared`、`scenes`、`timeline_events`、`summary_text`；可选 `dominant_strand`、`entities_new`。
+- 三份 artifact 都必须有顶层 `chapter_binding`，且与 `chapter_binding_file` 字节级对应的对象完全一致。
+- `fulfillment_result.json` 顶层：`chapter_binding` + 四个数组 `planned_nodes`、`covered_nodes`、`missed_nodes`、`extra_nodes`。
+- `disambiguation_result.json` 顶层：`chapter_binding` + `pending` 数组。
+- `extraction_result.json` 顶层（**直接放这些键，禁止包在外层对象里**）：`chapter_binding`、`accepted_events`、`state_deltas`、`entity_deltas`、`entities_appeared`、`scenes`、`timeline_events`、`summary_text`；可选 `dominant_strand`、`entities_new`。
 
 ### 7.1 字段命名
 

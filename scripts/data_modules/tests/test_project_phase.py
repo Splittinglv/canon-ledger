@@ -27,6 +27,7 @@ from data_modules.project_phase import (  # noqa: E402
     resolve_project_phase,
 )
 from data_modules.projection_log import append_projection_run  # noqa: E402
+from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -60,6 +61,46 @@ def _make_contracts(project_root: Path, chapter: int = 1) -> None:
         project_root / ".story-system" / "reviews" / f"chapter_{chapter:03d}.review.json",
         {"meta": {"chapter": chapter}},
     )
+
+
+def _make_bound_chapter(project_root: Path, chapter: int = 1) -> dict:
+    chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_path.write_text(f"第 {chapter} 章正文\n", encoding="utf-8")
+    return build_chapter_binding(project_root, chapter)
+
+
+def _bound_commit(
+    binding: dict,
+    *,
+    chapter: int = 1,
+    status: str = "accepted",
+    projection_status: dict | None = None,
+) -> dict:
+    return {
+        "meta": {
+            "schema_version": "story-system/v1",
+            "chapter": chapter,
+            "status": status,
+        },
+        "chapter_binding": binding,
+        "provenance": {"chapter_binding": binding},
+        "review_result": {"blocking_count": 0, "chapter_binding": binding},
+        "fulfillment_result": {
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        "disambiguation_result": {"pending": [], "chapter_binding": binding},
+        "extraction_result": {
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [],
+            "chapter_binding": binding,
+        },
+        "projection_status": dict(projection_status or {}),
+    }
 
 
 def test_project_phase_reports_init_scaffolded_when_core_files_missing(tmp_path):
@@ -111,12 +152,13 @@ def test_project_phase_detects_draft_and_ready_to_commit(tmp_path):
 
 def test_project_phase_detects_projection_failed(tmp_path):
     _make_init_ready(tmp_path)
+    binding = _make_bound_chapter(tmp_path)
     _write_json(
         tmp_path / ".story-system" / "commits" / "chapter_001.commit.json",
-        {
-            "meta": {"chapter": 1, "status": "accepted"},
-            "projection_status": {"state": "done", "index": "failed:locked"},
-        },
+        _bound_commit(
+            binding,
+            projection_status={"state": "done", "index": "failed:locked"},
+        ),
     )
 
     snapshot = resolve_project_phase(tmp_path)
@@ -127,11 +169,12 @@ def test_project_phase_detects_projection_failed(tmp_path):
 
 def test_project_phase_prefers_projection_log_over_commit_status(tmp_path):
     _make_init_ready(tmp_path)
+    binding = _make_bound_chapter(tmp_path)
     commit_path = tmp_path / ".story-system" / "commits" / "chapter_001.commit.json"
-    commit_payload = {
-        "meta": {"chapter": 1, "status": "accepted"},
-        "projection_status": {"state": "done", "index": "done", "vector": "done"},
-    }
+    commit_payload = _bound_commit(
+        binding,
+        projection_status={"state": "done", "index": "done", "vector": "done"},
+    )
     _write_json(commit_path, commit_payload)
     append_projection_run(
         tmp_path,
@@ -150,11 +193,9 @@ def test_project_phase_prefers_projection_log_over_commit_status(tmp_path):
 
 def test_project_phase_treats_projection_log_pending_as_blocking(tmp_path):
     _make_init_ready(tmp_path)
+    binding = _make_bound_chapter(tmp_path)
     commit_path = tmp_path / ".story-system" / "commits" / "chapter_001.commit.json"
-    commit_payload = {
-        "meta": {"chapter": 1, "status": "accepted"},
-        "projection_status": {"state": "done"},
-    }
+    commit_payload = _bound_commit(binding, projection_status={"state": "done"})
     _write_json(commit_path, commit_payload)
     append_projection_run(
         tmp_path,
@@ -171,11 +212,12 @@ def test_project_phase_treats_projection_log_pending_as_blocking(tmp_path):
 
 def test_project_phase_ignores_projection_log_for_replaced_commit(tmp_path):
     _make_init_ready(tmp_path)
+    binding = _make_bound_chapter(tmp_path)
     commit_path = tmp_path / ".story-system" / "commits" / "chapter_001.commit.json"
-    old_payload = {
-        "meta": {"chapter": 1, "status": "accepted"},
-        "projection_status": {"state": "done", "index": "failed:old"},
-    }
+    old_payload = _bound_commit(
+        binding,
+        projection_status={"state": "done", "index": "failed:old"},
+    )
     append_projection_run(
         tmp_path,
         old_payload,
@@ -184,10 +226,10 @@ def test_project_phase_ignores_projection_log_for_replaced_commit(tmp_path):
     )
     _write_json(
         commit_path,
-        {
-            "meta": {"chapter": 1, "status": "accepted"},
-            "projection_status": {"state": "done", "index": "done"},
-        },
+        _bound_commit(
+            binding,
+            projection_status={"state": "done", "index": "done"},
+        ),
     )
 
     snapshot = resolve_project_phase(tmp_path)
@@ -198,13 +240,54 @@ def test_project_phase_ignores_projection_log_for_replaced_commit(tmp_path):
 
 def test_project_phase_blocks_legacy_plain_failed_status(tmp_path):
     _make_init_ready(tmp_path)
+    binding = _make_bound_chapter(tmp_path)
     _write_json(
         tmp_path / ".story-system" / "commits" / "chapter_001.commit.json",
-        {
-            "meta": {"chapter": 1, "status": "accepted"},
-            "projection_status": {"state": "done", "index": "failed"},
-        },
+        _bound_commit(
+            binding,
+            projection_status={"state": "done", "index": "failed"},
+        ),
     )
     snapshot = resolve_project_phase(tmp_path)
     assert snapshot.phase == PHASE_PROJECTION_FAILED
     assert "latest_commit_projection_failed" in snapshot.blocking
+
+
+def test_project_phase_marks_legacy_accepted_commit_stale(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_bound_chapter(tmp_path)
+    _write_json(
+        tmp_path / ".story-system" / "commits" / "chapter_001.commit.json",
+        {
+            "meta": {"chapter": 1, "status": "accepted"},
+            "projection_status": {"state": "done", "index": "done"},
+        },
+    )
+
+    snapshot = resolve_project_phase(tmp_path, chapter=1)
+
+    assert snapshot.latest_accepted_chapter == 0
+    assert snapshot.latest_commit is not None
+    assert snapshot.latest_commit.status == "stale"
+    assert snapshot.latest_commit.binding_trusted is False
+    assert snapshot.latest_commit.binding_error == "chapter_binding_missing"
+    assert snapshot.phase != PHASE_PROJECTION_FAILED
+
+
+def test_project_phase_marks_filename_meta_chapter_mismatch_stale(tmp_path):
+    _make_init_ready(tmp_path)
+    binding = _make_bound_chapter(tmp_path)
+    _write_json(
+        tmp_path / ".story-system" / "commits" / "chapter_001.commit.json",
+        {
+            "meta": {"chapter": 2, "status": "accepted"},
+            "chapter_binding": binding,
+            "projection_status": {"state": "done"},
+        },
+    )
+
+    snapshot = resolve_project_phase(tmp_path, chapter=1)
+
+    assert snapshot.latest_commit is not None
+    assert snapshot.latest_commit.status == "stale"
+    assert snapshot.latest_commit.binding_error == "commit_chapter_mismatch"

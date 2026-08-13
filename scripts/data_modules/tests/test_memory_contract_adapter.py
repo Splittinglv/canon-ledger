@@ -384,7 +384,9 @@ class TestLoadContext:
         pack = adapter.load_context(3)
 
         assert pack.sections["latest_commit"]["meta"]["status"] == "rejected"
-        assert pack.sections["runtime_status"]["latest_accepted_commit"]["meta"]["status"] == "accepted"
+        # Legacy commits without a content binding remain readable as latest
+        # history, but are no longer promoted as a trusted accepted source.
+        assert pack.sections["runtime_status"]["latest_accepted_commit"] is None
 
 
 class TestCommitChapter:
@@ -404,23 +406,37 @@ class TestCommitChapter:
     def test_commit_chapter_delegates_to_chapter_commit_mainline(self, tmp_path):
         cfg = _make_project(tmp_path)
         adapter = MemoryContractAdapter(cfg)
+        chapter_path = tmp_path / "正文" / "第0003章.md"
+        chapter_path.parent.mkdir(parents=True, exist_ok=True)
+        chapter_path.write_text("第3章最终正文\n", encoding="utf-8")
+        from data_modules.chapter_content_binding import build_chapter_binding
+
+        binding = build_chapter_binding(tmp_path, 3)
 
         result = adapter.commit_chapter(
             3,
             {
-                "review_result": {"blocking_count": 0},
+                "review_result": {
+                    "blocking_count": 0,
+                    "chapter_binding": binding,
+                },
                 "fulfillment_result": {
                     "planned_nodes": ["发现陷阱"],
                     "covered_nodes": ["发现陷阱"],
                     "missed_nodes": [],
                     "extra_nodes": [],
+                    "chapter_binding": binding,
                 },
-                "disambiguation_result": {"pending": []},
+                "disambiguation_result": {
+                    "pending": [],
+                    "chapter_binding": binding,
+                },
                 "extraction_result": {
                     "state_deltas": [],
                     "entity_deltas": [],
                     "accepted_events": [],
                     "summary_text": "本章摘要",
+                    "chapter_binding": binding,
                 },
             },
         )

@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from .chapter_commit_schema import (
+    ChapterCommitSchema,
     DisambiguationResult,
     ExtractionResult,
     FulfillmentResult,
@@ -241,7 +242,11 @@ def validate_commit_artifact_files(
     )
 
 
-def validate_chapter_commit(path: str | Path) -> dict[str, Any]:
+def validate_chapter_commit(
+    path: str | Path,
+    *,
+    expected_chapter: int | None = None,
+) -> dict[str, Any]:
     commit_path = Path(path)
     report = _empty_report("chapter_commit", str(commit_path))
     payload, error = _read_json_artifact(commit_path)
@@ -261,6 +266,44 @@ def validate_chapter_commit(path: str | Path) -> dict[str, Any]:
         )
         report["ok"] = False
         return report
+
+    try:
+        ChapterCommitSchema.model_validate(payload)
+    except Exception as exc:
+        report["errors"].append(
+            _issue(
+                ERROR_SCHEMA,
+                message=f"invalid chapter commit envelope: {_schema_error_message(exc)}",
+                path=str(commit_path),
+                impact="commit 顶层、provenance 与四份 artifact 必须绑定同一份正文。",
+                repair="基于当前正文重新运行 review、data 和 chapter-commit。",
+            )
+        )
+
+    if expected_chapter is not None:
+        meta = payload.get("meta")
+        try:
+            declared_chapter = int(
+                meta.get("chapter") if isinstance(meta, dict) else 0
+            )
+            expected = int(expected_chapter)
+        except (TypeError, ValueError):
+            declared_chapter = 0
+            expected = int(expected_chapter)
+        if declared_chapter != expected:
+            report["errors"].append(
+                _issue(
+                    ERROR_SCHEMA,
+                    message=(
+                        f"chapter_commit chapter {declared_chapter or 'missing'} "
+                        f"does not match expected chapter {expected}"
+                    ),
+                    path=str(commit_path),
+                    field="meta.chapter",
+                    impact="不能把其他章节的 commit 当作本章可信事实。",
+                    repair="使用本章正文重新生成 chapter commit。",
+                )
+            )
 
     nested_reports = []
     for artifact in ARTIFACT_SCHEMAS:

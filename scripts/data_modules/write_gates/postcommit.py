@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..artifact_validator import validate_chapter_commit
 from ..artifact_validator import OK_PROJECTION_STATUSES, REQUIRED_PROJECTION_WRITERS
+from ..chapter_content_binding import verify_commit_content_binding
 from ..config import DataModulesConfig
 from ..project_phase import resolve_project_phase
 from ..projection_log import commit_hash, latest_projection_run, projection_status_from_run
@@ -47,7 +48,7 @@ def run_postcommit_gate(project_root: Path, chapter: int) -> dict:
     errors: list[dict] = []
     warnings: list[dict] = []
     commit_path = _commit_path(project_root, chapter)
-    commit_report = validate_chapter_commit(commit_path)
+    commit_report = validate_chapter_commit(commit_path, expected_chapter=chapter)
 
     for item in commit_report.get("errors") or []:
         errors.append(
@@ -72,6 +73,32 @@ def run_postcommit_gate(project_root: Path, chapter: int) -> dict:
                 path=str(commit_path),
                 impact="写章充分性闸门要求 accepted commit 才能进入备份和下一章。",
                 repair="修复 review/fulfillment/disambiguation 阻断项后重新提交。",
+            )
+        )
+
+    binding_ok, binding_code = verify_commit_content_binding(
+        project_root,
+        chapter,
+        payload,
+    )
+    if not binding_ok:
+        if binding_code == "commit_chapter_mismatch":
+            issue_code = "commit_chapter_mismatch"
+            impact = "不能把其他章节的 accepted commit 用作本章门禁或备份依据。"
+        elif binding_code == "chapter_binding_missing":
+            issue_code = "commit_chapter_binding_missing"
+            impact = "无法证明 accepted commit 与当前正文相同；旧 commit 必须视为 stale/untrusted。"
+        else:
+            issue_code = "commit_chapter_binding_invalid"
+            impact = "commit envelope 或正文绑定不可信，不能作为本章事实与备份依据。"
+        errors.append(
+            issue(
+                issue_code,
+                message=f"chapter commit binding is not trusted: {binding_code}",
+                path=str(commit_path),
+                impact=impact,
+                repair="基于当前正文重新运行 review、data 和 chapter-commit。",
+                details={"binding_code": binding_code},
             )
         )
 

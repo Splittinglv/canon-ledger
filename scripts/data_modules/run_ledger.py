@@ -8,6 +8,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+import subprocess
 from typing import Any
 
 if __package__ in {None, ""}:  # pragma: no cover - direct script entry
@@ -22,12 +23,14 @@ except ImportError:  # pragma: no cover
 
 if __package__ in {None, ""}:  # pragma: no cover - direct script entry
     from data_modules.artifact_validator import OK_PROJECTION_STATUSES, REQUIRED_PROJECTION_WRITERS
+    from data_modules.chapter_content_binding import verify_chapter_binding, verify_commit_content_binding
     from data_modules.project_phase import COMMIT_ARTIFACT_FILES, contract_files_for_chapter
-    from data_modules.projection_log import latest_projection_run, projection_status_from_run
+    from data_modules.projection_log import commit_hash, latest_projection_run, projection_status_from_run
 else:
     from .artifact_validator import OK_PROJECTION_STATUSES, REQUIRED_PROJECTION_WRITERS
+    from .chapter_content_binding import verify_chapter_binding, verify_commit_content_binding
     from .project_phase import COMMIT_ARTIFACT_FILES, contract_files_for_chapter
-    from .projection_log import latest_projection_run, projection_status_from_run
+    from .projection_log import commit_hash, latest_projection_run, projection_status_from_run
 
 
 SCHEMA_VERSION = "webnovel-run-ledger/v1"
@@ -177,17 +180,39 @@ def _commit_path(project_root: Path, chapter: int) -> Path:
     return project_root / ".story-system" / "commits" / f"chapter_{chapter:03d}.commit.json"
 
 
-def _commit_status(project_root: Path, chapter: int) -> str:
+def _payload_binding_trusted(project_root: Path, chapter: int, payload: dict[str, Any]) -> bool:
+    binding = payload.get("chapter_binding") if isinstance(payload, dict) else None
+    if not isinstance(binding, dict):
+        return False
+    ok, _code = verify_chapter_binding(project_root, chapter, binding)
+    return ok
+
+
+def _artifact_binding_trusted(project_root: Path, chapter: int, path: Path) -> bool:
+    return _payload_binding_trusted(project_root, chapter, _read_json(path))
+
+
+def _commit_state(project_root: Path, chapter: int) -> tuple[str, bool]:
     payload = _read_json(_commit_path(project_root, chapter))
     meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
-    return str(meta.get("status") or "")
+    binding_ok, _binding_code = verify_commit_content_binding(
+        project_root,
+        chapter,
+        payload,
+    )
+    return str(meta.get("status") or ""), binding_ok
 
 
 def _projection_done(project_root: Path, chapter: int) -> bool:
+    payload = _read_json(_commit_path(project_root, chapter))
     run = latest_projection_run(project_root, chapter=chapter)
-    statuses = projection_status_from_run(run) if run else {}
+    run_matches_commit = bool(
+        run
+        and str(run.get("commit_hash") or "")
+        and str(run.get("commit_hash") or "") == commit_hash(payload)
+    )
+    statuses = projection_status_from_run(run) if run_matches_commit else {}
     if not statuses:
-        payload = _read_json(_commit_path(project_root, chapter))
         raw = payload.get("projection_status") if isinstance(payload.get("projection_status"), dict) else {}
         statuses = {str(key): str(value) for key, value in raw.items()}
     if not statuses:
@@ -195,11 +220,135 @@ def _projection_done(project_root: Path, chapter: int) -> bool:
     return all(str(statuses.get(writer) or "") in OK_PROJECTION_STATUSES for writer in REQUIRED_PROJECTION_WRITERS)
 
 
-def _backup_exists(project_root: Path, chapter: int) -> bool:
-    backup_dir = project_root / ".webnovel" / "backups"
-    if not backup_dir.is_dir():
+def _binding_bytes_match(binding: dict[str, Any], raw: bytes) -> bool:
+    try:
+        expected_size = int(binding.get("bytes") or 0)
+        expected_hash = str(binding.get("sha256") or "")
+    except (AttributeError, TypeError, ValueError):
         return False
-    return any(backup_dir.glob(f"ch{chapter:04d}*"))
+    return bool(
+        expected_size > 0
+        and len(raw) == expected_size
+        and hashlib.sha256(raw).hexdigest() == expected_hash
+    )
+
+
+def _commit_bytes_match(expected_hash: str, raw: bytes) -> bool:
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and commit_hash(payload) == expected_hash
+
+
+def backup_receipt_trusted(project_root: Path, chapter: int) -> bool:
+    backup_dir = project_root / ".webnovel" / "backups"
+    receipt = _read_json(backup_dir / f"ch{chapter:04d}.receipt.json")
+    if receipt.get("schema_version") != "webnovel-backup-receipt/v1":
+        return False
+    try:
+        if int(receipt.get("chapter") or 0) != int(chapter):
+            return False
+    except (TypeError, ValueError):
+        return False
+
+    commit_payload = _read_json(_commit_path(project_root, chapter))
+    commit_ok, _commit_code = verify_commit_content_binding(
+        project_root,
+        chapter,
+        commit_payload,
+    )
+    if not commit_ok:
+        return False
+    if str(receipt.get("chapter_commit_hash") or "") != commit_hash(commit_payload):
+        return False
+    if receipt.get("chapter_binding") != commit_payload.get("chapter_binding"):
+        return False
+
+    binding = receipt.get("chapter_binding")
+    if not isinstance(binding, dict):
+        return False
+    binding_path = str(binding.get("path") or "")
+    commit_rel = str(receipt.get("chapter_commit_path") or "")
+    expected_commit_hash = str(receipt.get("chapter_commit_hash") or "")
+    if (
+        not binding_path
+        or Path(binding_path).is_absolute()
+        or ".." in Path(binding_path).parts
+        or not commit_rel
+        or Path(commit_rel).is_absolute()
+        or ".." in Path(commit_rel).parts
+    ):
+        return False
+
+    mode = str(receipt.get("mode") or "")
+    if mode == "local":
+        snapshot = str(receipt.get("snapshot") or "")
+        if not snapshot or Path(snapshot).name != snapshot:
+            return False
+        snapshot_root = backup_dir / snapshot
+        try:
+            chapter_raw = (snapshot_root / binding_path).read_bytes()
+            commit_raw = (snapshot_root / commit_rel).read_bytes()
+        except OSError:
+            return False
+        return _binding_bytes_match(binding, chapter_raw) and _commit_bytes_match(
+            expected_commit_hash,
+            commit_raw,
+        )
+    if mode == "git":
+        tag_name = str(receipt.get("tag") or "")
+        if tag_name != f"ch{chapter:04d}":
+            return False
+        try:
+            check = subprocess.run(
+                ["git", "rev-parse", "--verify", tag_name],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if check.returncode != 0:
+                return False
+            receipt_rel = (
+                Path(".webnovel") / "backups" / f"ch{chapter:04d}.receipt.json"
+            ).as_posix()
+            stored = subprocess.run(
+                ["git", "show", f"{tag_name}:{receipt_rel}"],
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if stored.returncode != 0:
+                return False
+            stored_receipt = json.loads(stored.stdout)
+            stored_chapter = subprocess.run(
+                ["git", "show", f"{tag_name}:{binding_path}"],
+                cwd=project_root,
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            stored_commit = subprocess.run(
+                ["git", "show", f"{tag_name}:{commit_rel}"],
+                cwd=project_root,
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+            return False
+        return bool(
+            stored_receipt == receipt
+            and stored_chapter.returncode == 0
+            and stored_commit.returncode == 0
+            and _binding_bytes_match(binding, stored_chapter.stdout)
+            and _commit_bytes_match(expected_commit_hash, stored_commit.stdout)
+        )
+    return False
 
 
 def _latest_contract_mtime(project_root: Path, chapter: int) -> int:
@@ -226,8 +375,9 @@ def build_write_resume_plan(
     draft_entry = _step_completed(run, "draft")
     review_entry = _step_completed(run, "review")
     data_entry = _step_completed(run, "data")
-    commit_status = _commit_status(root, chapter)
-    accepted_done = commit_status == "accepted"
+    backup_entry = _step_completed(run, "backup")
+    commit_status, commit_binding_trusted = _commit_state(root, chapter)
+    accepted_done = commit_status == "accepted" and commit_binding_trusted
     rejected_done = commit_status == "rejected"
 
     steps: list[dict[str, str]] = []
@@ -252,11 +402,21 @@ def build_write_resume_plan(
     steps.append({"step": "draft", "action": "skip" if draft_trusted else "run", "reason": "正文可信" if draft_trusted else "正文缺失或已过期"})
 
     review_path = root / COMMIT_ARTIFACT_FILES[0]
-    review_trusted = bool(accepted_done or (draft_trusted and review_path.is_file() and _trusted_input(review_entry, "chapter_file", chapter_file)))
+    review_trusted = bool(
+        draft_trusted
+        and review_path.is_file()
+        and _artifact_binding_trusted(root, chapter, review_path)
+        and (accepted_done or _trusted_input(review_entry, "chapter_file", chapter_file))
+    )
     steps.append({"step": "review", "action": "skip" if review_trusted else "run", "reason": "审查结果匹配当前正文" if review_trusted else "正文变更后需要重审"})
 
     data_paths = [root / rel for rel in COMMIT_ARTIFACT_FILES[1:]]
-    data_trusted = bool(accepted_done or (review_trusted and all(path.is_file() for path in data_paths) and _trusted_input(data_entry, "chapter_file", chapter_file)))
+    data_trusted = bool(
+        review_trusted
+        and all(path.is_file() for path in data_paths)
+        and all(_artifact_binding_trusted(root, chapter, path) for path in data_paths)
+        and (accepted_done or _trusted_input(data_entry, "chapter_file", chapter_file))
+    )
     steps.append({"step": "data", "action": "skip" if data_trusted else "run", "reason": "故事事实提取可信" if data_trusted else "data artifacts 缺失或过期"})
 
     if accepted_done:
@@ -264,6 +424,13 @@ def build_write_resume_plan(
             {
                 "code": "chapter_already_accepted",
                 "message": "本章已 accepted；重跑前需要确认是重写正文，还是只查看状态/补跑后续步骤。",
+            }
+        )
+    elif commit_status == "accepted":
+        confirmations.append(
+            {
+                "code": "chapter_commit_stale",
+                "message": "本章 accepted commit 与当前正文不匹配或缺少绑定；必须重跑审查、data 和 commit。",
             }
         )
     if rejected_done:
@@ -282,7 +449,7 @@ def build_write_resume_plan(
     )
     steps.append({"step": "commit", "action": "skip" if accepted_done else "run", "reason": commit_reason})
 
-    projection_done = bool(commit_status == "accepted" and _projection_done(root, chapter))
+    projection_done = bool(accepted_done and _projection_done(root, chapter))
     projection_action = "skip" if projection_done else ("retry" if accepted_done else "run")
     projection_reason = (
         "资料更新已完成"
@@ -293,8 +460,12 @@ def build_write_resume_plan(
     )
     steps.append({"step": "projection", "action": projection_action, "reason": projection_reason})
 
-    backup_done = _backup_exists(root, chapter)
-    backup_action = "skip" if backup_done else ("retry" if commit_status == "accepted" else "run")
+    backup_done = bool(
+        accepted_done
+        and backup_receipt_trusted(root, chapter)
+        and _trusted_input(backup_entry, "chapter_file", chapter_file)
+    )
+    backup_action = "skip" if backup_done else ("retry" if accepted_done else "run")
     steps.append({"step": "backup", "action": backup_action, "reason": "备份已确认" if backup_done else "备份未确认"})
 
     resume_from = "done"

@@ -16,6 +16,7 @@ from pydantic import (
 )
 
 from .story_event_schema import StoryEvent
+from .chapter_content_binding import ChapterContentBinding, chapter_bindings_equal
 
 EXTRACTION_CORE_FIELDS = ("accepted_events", "state_deltas", "entity_deltas")
 EXTRACTION_LIST_FIELDS = (
@@ -65,6 +66,8 @@ class CommitArtifactModel(BaseModel):
     wrapper_key: ClassVar[str | None] = None
     required_top_level_fields: ClassVar[tuple[str, ...]] = ()
 
+    chapter_binding: ChapterContentBinding
+
     @model_validator(mode="before")
     @classmethod
     def validate_top_level_shape(cls, value: Any) -> Any:
@@ -85,6 +88,8 @@ class CommitArtifactModel(BaseModel):
         missing = [
             field for field in cls.required_top_level_fields if field not in value
         ]
+        if "chapter_binding" not in value:
+            missing.append("chapter_binding")
         if missing:
             raise ValueError(
                 f"{cls.artifact_name} missing required top-level fields: "
@@ -172,6 +177,58 @@ class ExtractionResult(CommitArtifactModel):
         if not isinstance(value, str):
             raise ValueError("extraction_result.summary_text must be a string")
         return value
+
+
+class ChapterCommitMeta(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    schema_version: str
+    chapter: int = Field(ge=1)
+    status: str
+
+
+class ChapterCommitSchema(BaseModel):
+    """Strict binding envelope for a newly constructed chapter commit.
+
+    Legacy commits remain readable as dictionaries by existing readers, but
+    cannot pass this trusted-write schema without a complete content binding.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    meta: ChapterCommitMeta
+    provenance: dict[str, Any]
+    chapter_binding: ChapterContentBinding
+    review_result: ReviewResult
+    fulfillment_result: FulfillmentResult
+    disambiguation_result: DisambiguationResult
+    extraction_result: ExtractionResult
+    projection_status: dict[str, str]
+
+    @model_validator(mode="after")
+    def validate_shared_chapter_binding(self) -> "ChapterCommitSchema":
+        canonical = self.chapter_binding.model_dump()
+        if self.chapter_binding.chapter != self.meta.chapter:
+            raise ValueError("chapter_binding chapter does not match commit chapter")
+
+        artifacts = {
+            "review_result": self.review_result,
+            "fulfillment_result": self.fulfillment_result,
+            "disambiguation_result": self.disambiguation_result,
+            "extraction_result": self.extraction_result,
+        }
+        for artifact_name, artifact in artifacts.items():
+            if not chapter_bindings_equal(canonical, artifact.chapter_binding):
+                raise ValueError(
+                    f"{artifact_name}.chapter_binding does not match commit chapter_binding"
+                )
+
+        provenance_binding = self.provenance.get("chapter_binding")
+        if not chapter_bindings_equal(canonical, provenance_binding):
+            raise ValueError(
+                "provenance.chapter_binding does not match commit chapter_binding"
+            )
+        return self
 
 
 class AcceptedEventInput(BaseModel):

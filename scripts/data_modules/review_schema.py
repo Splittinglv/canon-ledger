@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .chapter_content_binding import ChapterContentBinding, chapter_bindings_equal
+
 try:
     from security_utils import atomic_write_json
 except ImportError:  # pragma: no cover
@@ -74,6 +76,7 @@ class ReviewIssue:
 @dataclass
 class ReviewResult:
     chapter: int
+    chapter_binding: Dict[str, Any] = field(default_factory=dict)
     issues: List[ReviewIssue] = field(default_factory=list)
     summary: str = ""
 
@@ -135,6 +138,7 @@ class ReviewResult:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "chapter": self.chapter,
+            "chapter_binding": dict(self.chapter_binding),
             "issues": [i.to_dict() for i in self.issues],
             "issues_count": self.issues_count,
             "blocking_count": self.blocking_count,
@@ -162,7 +166,32 @@ class ReviewResult:
         }
 
 
-def parse_review_output(chapter: int, raw: Dict[str, Any]) -> ReviewResult:
+def parse_review_output(
+    chapter: int,
+    raw: Dict[str, Any],
+    *,
+    expected_binding: Dict[str, Any] | None = None,
+) -> ReviewResult:
+    if not isinstance(raw, dict):
+        raise ValueError("review output must be a JSON object")
+    try:
+        declared_chapter = int(raw.get("chapter") or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("review_result.chapter must be an integer") from exc
+    if declared_chapter != int(chapter):
+        raise ValueError(
+            f"review_result.chapter {declared_chapter} does not match requested chapter {chapter}"
+        )
+    raw_binding = raw.get("chapter_binding")
+    try:
+        binding = ChapterContentBinding.model_validate(raw_binding).model_dump()
+    except Exception as exc:
+        raise ValueError("review_result.chapter_binding is missing or invalid") from exc
+    if expected_binding is not None and not chapter_bindings_equal(
+        binding,
+        expected_binding,
+    ):
+        raise ValueError("review_result.chapter_binding does not match expected manuscript")
     issues = []
     for item in raw.get("issues", []):
         if not isinstance(item, dict):
@@ -178,6 +207,7 @@ def parse_review_output(chapter: int, raw: Dict[str, Any]) -> ReviewResult:
         ))
     return ReviewResult(
         chapter=chapter,
+        chapter_binding=binding,
         issues=issues,
         summary=str(raw.get("summary", "")),
     )

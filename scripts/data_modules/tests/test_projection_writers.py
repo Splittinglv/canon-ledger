@@ -4,6 +4,7 @@
 import json
 import sqlite3
 
+from data_modules.chapter_content_binding import build_chapter_binding
 from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.config import DataModulesConfig
 from data_modules.index_manager import IndexManager
@@ -13,6 +14,26 @@ from data_modules.memory_projection_writer import MemoryProjectionWriter
 from data_modules.state_projection_writer import StateProjectionWriter
 from data_modules.summary_projection_writer import SummaryProjectionWriter
 from data_modules.vector_projection_writer import VectorProjectionWriter
+
+
+def _build_bound_commit(service: ChapterCommitService, **kwargs):
+    chapter = int(kwargs["chapter"])
+    chapter_path = service.project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    if not chapter_path.exists():
+        chapter_path.write_text(f"第{chapter}章测试正文\n", encoding="utf-8")
+    binding = build_chapter_binding(service.project_root, chapter)
+    for artifact_name in (
+        "review_result",
+        "fulfillment_result",
+        "disambiguation_result",
+        "extraction_result",
+    ):
+        kwargs[artifact_name] = {
+            **kwargs[artifact_name],
+            "chapter_binding": dict(binding),
+        }
+    return service.build_commit(**kwargs)
 
 
 def _commit_payload(*, chapter=3, status="accepted", **extraction):
@@ -74,7 +95,8 @@ def test_accepted_chapter_commits_advance_progress_and_word_count(tmp_path):
 
     service = ChapterCommitService(tmp_path)
     for chapter in (1, 2):
-        payload = service.build_commit(
+        payload = _build_bound_commit(
+            service,
             chapter=chapter,
             review_result={"blocking_count": 0},
             fulfillment_result={"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
@@ -185,7 +207,8 @@ def test_accepted_commit_updates_state_json_end_to_end(tmp_path):
     (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
 
     service = ChapterCommitService(tmp_path)
-    commit_payload = service.build_commit(
+    commit_payload = _build_bound_commit(
+        service,
         chapter=3,
         review_result={"blocking_count": 0},
         fulfillment_result={"planned_nodes": ["发现陷阱"], "covered_nodes": ["发现陷阱"], "missed_nodes": [], "extra_nodes": []},
@@ -350,7 +373,8 @@ def test_accepted_commit_writes_chapter_index_tables(tmp_path):
     (chapters_dir / "第0003章.md").write_text("第三章正文内容", encoding="utf-8")
 
     service = ChapterCommitService(tmp_path)
-    payload = service.build_commit(
+    payload = _build_bound_commit(
+        service,
         chapter=3,
         review_result={"blocking_count": 0},
         fulfillment_result={"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
@@ -396,7 +420,8 @@ def test_index_projection_writer_is_idempotent_for_replay(tmp_path):
     (chapters_dir / "第0003章.md").write_text("第三章正文内容", encoding="utf-8")
 
     service = ChapterCommitService(tmp_path)
-    payload = service.build_commit(
+    payload = _build_bound_commit(
+        service,
         chapter=3,
         review_result={"blocking_count": 0},
         fulfillment_result={"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},

@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover
     from scripts.chapter_outline_loader import volume_num_for_chapter_from_state
     from scripts.chapter_paths import find_chapter_file, volume_num_for_chapter
 
+from .chapter_content_binding import verify_commit_content_binding
 from .projection_log import commit_hash, latest_projection_run, projection_status_from_run
 
 
@@ -80,6 +81,8 @@ class ChapterCommitInfo:
     path: str
     projection_status: dict[str, str] = field(default_factory=dict)
     projection_source: str = "commit"
+    binding_trusted: bool = False
+    binding_error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -88,6 +91,8 @@ class ChapterCommitInfo:
             "path": self.path,
             "projection_status": dict(self.projection_status),
             "projection_source": self.projection_source,
+            "binding_trusted": self.binding_trusted,
+            "binding_error": self.binding_error,
         }
 
 
@@ -181,6 +186,15 @@ def _scan_commits(project_root: Path) -> list[ChapterCommitInfo]:
             status = str(meta.get("status") or "missing").strip() or "missing"
         else:
             status = "missing"
+        binding_trusted, binding_error = verify_commit_content_binding(
+            project_root,
+            chapter,
+            payload,
+        )
+        if status == "accepted" and not binding_trusted:
+            # Pre-binding accepted commits must never advance the authoritative
+            # chapter pointer or make resume logic trust unrelated manuscript text.
+            status = "stale"
         raw_projection = payload.get("projection_status") if isinstance(payload, dict) else {}
         projection_status = {
             str(key): str(value)
@@ -209,6 +223,8 @@ def _scan_commits(project_root: Path) -> list[ChapterCommitInfo]:
                 path=str(path),
                 projection_status=projection_status,
                 projection_source=projection_source,
+                binding_trusted=binding_trusted,
+                binding_error=binding_error,
             )
         )
     return commits
@@ -311,7 +327,7 @@ def missing_init_files(project_root: Path) -> tuple[str, ...]:
 
 
 def has_projection_blocker(commit: ChapterCommitInfo | None) -> bool:
-    if commit is None:
+    if commit is None or commit.status != "accepted" or not commit.binding_trusted:
         return False
     return any(
         str(value).startswith("failed:") or str(value) in {"failed", "pending"}

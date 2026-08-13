@@ -36,6 +36,58 @@ from data_modules.chapter_commit_schema import (  # noqa: E402
     FulfillmentResult,
     ReviewResult,
 )
+from data_modules.chapter_content_binding import (  # noqa: E402
+    SCHEMA_VERSION as CHAPTER_BINDING_SCHEMA_VERSION,
+)
+
+
+def _dummy_binding(chapter: int = 1) -> dict:
+    """Return a schema-valid binding for payload-only validator tests."""
+    return {
+        "schema_version": CHAPTER_BINDING_SCHEMA_VERSION,
+        "chapter": chapter,
+        "path": f"正文/第{chapter:04d}章.md",
+        "sha256": "0" * 64,
+        "bytes": 1,
+    }
+
+
+def _with_binding(payload: dict, *, chapter: int = 1) -> dict:
+    return {**payload, "chapter_binding": _dummy_binding(chapter)}
+
+
+def _commit_envelope(*, chapter: int = 1, projection_status: dict | None = None) -> dict:
+    binding = _dummy_binding(chapter)
+    return {
+        "meta": {
+            "schema_version": "story-system/v1",
+            "chapter": chapter,
+            "status": "accepted",
+        },
+        "chapter_binding": dict(binding),
+        "provenance": {"chapter_binding": dict(binding)},
+        "review_result": _with_binding({"blocking_count": 0}, chapter=chapter),
+        "fulfillment_result": _with_binding(
+            {
+                "planned_nodes": [],
+                "covered_nodes": [],
+                "missed_nodes": [],
+                "extra_nodes": [],
+            },
+            chapter=chapter,
+        ),
+        "disambiguation_result": _with_binding({"pending": []}, chapter=chapter),
+        "extraction_result": _with_binding(
+            {
+                "accepted_events": [],
+                "state_deltas": [],
+                "entity_deltas": [],
+                "summary_text": "摘要",
+            },
+            chapter=chapter,
+        ),
+        "projection_status": projection_status or {},
+    }
 
 
 def _write_json(path: Path, payload: dict) -> Path:
@@ -59,7 +111,10 @@ def test_artifact_validator_reports_missing_artifact(tmp_path):
 
 
 def test_artifact_validator_reports_schema_errors_for_wrapped_payloads(tmp_path):
-    path = _write_json(tmp_path / "fulfillment_result.json", {"fulfillment": {"missed_nodes": []}})
+    path = _write_json(
+        tmp_path / "fulfillment_result.json",
+        _with_binding({"fulfillment": {"missed_nodes": []}}),
+    )
 
     report = validate_fulfillment_result(path)
 
@@ -69,17 +124,23 @@ def test_artifact_validator_reports_schema_errors_for_wrapped_payloads(tmp_path)
 
 
 def test_artifact_validator_reports_policy_blockers(tmp_path):
-    review = _write_json(tmp_path / "review_results.json", {"blocking_count": 1})
+    review = _write_json(
+        tmp_path / "review_results.json",
+        _with_binding({"blocking_count": 1}),
+    )
     fulfillment = _write_json(
         tmp_path / "fulfillment_result.json",
-        {
+        _with_binding({
             "planned_nodes": ["A"],
             "covered_nodes": [],
             "missed_nodes": ["A"],
             "extra_nodes": [],
-        },
+        }),
     )
-    disambiguation = _write_json(tmp_path / "disambiguation_result.json", {"pending": [{"mention": "宗主"}]})
+    disambiguation = _write_json(
+        tmp_path / "disambiguation_result.json",
+        _with_binding({"pending": [{"mention": "宗主"}]}),
+    )
 
     assert validate_review_result(review)["errors"][0]["type"] == ERROR_BLOCKING_REVIEW
     assert validate_fulfillment_result(fulfillment)["errors"][0]["type"] == ERROR_MISSED_OUTLINE_NODE
@@ -89,14 +150,14 @@ def test_artifact_validator_reports_policy_blockers(tmp_path):
 def test_artifact_validator_accepts_valid_extraction(tmp_path):
     path = _write_json(
         tmp_path / "extraction_result.json",
-        {
+        _with_binding({
             "accepted_events": [],
             "state_deltas": [],
             "entity_deltas": [],
             "entities_appeared": [],
             "scenes": [],
             "summary_text": "摘要",
-        },
+        }),
     )
 
     report = validate_extraction_result(path)
@@ -106,15 +167,30 @@ def test_artifact_validator_accepts_valid_extraction(tmp_path):
 
 
 def test_validate_commit_artifact_files_merges_reports(tmp_path):
-    review = _write_json(tmp_path / "review_results.json", {"blocking_count": 0})
+    review = _write_json(
+        tmp_path / "review_results.json",
+        _with_binding({"blocking_count": 0}),
+    )
     fulfillment = _write_json(
         tmp_path / "fulfillment_result.json",
-        {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
+        _with_binding(
+            {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []}
+        ),
     )
-    disambiguation = _write_json(tmp_path / "disambiguation_result.json", {"pending": []})
+    disambiguation = _write_json(
+        tmp_path / "disambiguation_result.json",
+        _with_binding({"pending": []}),
+    )
     extraction = _write_json(
         tmp_path / "extraction_result.json",
-        {"accepted_events": [], "state_deltas": [], "entity_deltas": [], "summary_text": "摘要"},
+        _with_binding(
+            {
+                "accepted_events": [],
+                "state_deltas": [],
+                "entity_deltas": [],
+                "summary_text": "摘要",
+            }
+        ),
     )
 
     report = validate_commit_artifact_files(
@@ -136,24 +212,9 @@ def test_validate_commit_artifact_files_merges_reports(tmp_path):
 def test_validate_chapter_commit_reports_projection_failure(tmp_path):
     commit = _write_json(
         tmp_path / "chapter_001.commit.json",
-        {
-            "meta": {"chapter": 1, "status": "accepted"},
-            "review_result": {"blocking_count": 0},
-            "fulfillment_result": {
-                "planned_nodes": [],
-                "covered_nodes": [],
-                "missed_nodes": [],
-                "extra_nodes": [],
-            },
-            "disambiguation_result": {"pending": []},
-            "extraction_result": {
-                "accepted_events": [],
-                "state_deltas": [],
-                "entity_deltas": [],
-                "summary_text": "摘要",
-            },
-            "projection_status": {"state": "done", "index": "failed:locked"},
-        },
+        _commit_envelope(
+            projection_status={"state": "done", "index": "failed:locked"}
+        ),
     )
 
     report = validate_chapter_commit(commit)
@@ -165,29 +226,14 @@ def test_validate_chapter_commit_reports_projection_failure(tmp_path):
 def test_validate_chapter_commit_requires_all_projection_writers(tmp_path):
     commit = _write_json(
         tmp_path / "chapter_001.commit.json",
-        {
-            "meta": {"chapter": 1, "status": "accepted"},
-            "review_result": {"blocking_count": 0},
-            "fulfillment_result": {
-                "planned_nodes": [],
-                "covered_nodes": [],
-                "missed_nodes": [],
-                "extra_nodes": [],
-            },
-            "disambiguation_result": {"pending": []},
-            "extraction_result": {
-                "accepted_events": [],
-                "state_deltas": [],
-                "entity_deltas": [],
-                "summary_text": "摘要",
-            },
-            "projection_status": {
+        _commit_envelope(
+            projection_status={
                 "state": "done",
                 "index": "done",
                 "summary": "done",
                 "memory": "skipped",
-            },
-        },
+            }
+        ),
     )
 
     report = validate_chapter_commit(commit)
@@ -200,6 +246,54 @@ def test_validate_chapter_commit_requires_all_projection_writers(tmp_path):
     assert any("vector" in item["message"] for item in incomplete)
 
 
+def test_validate_chapter_commit_rejects_mismatched_binding_envelope(tmp_path):
+    payload = _commit_envelope(
+        projection_status={
+            "state": "done",
+            "index": "done",
+            "summary": "done",
+            "memory": "done",
+            "vector": "done",
+        }
+    )
+    payload["extraction_result"]["chapter_binding"]["sha256"] = "f" * 64
+    commit = _write_json(tmp_path / "chapter_001.commit.json", payload)
+
+    report = validate_chapter_commit(commit, expected_chapter=1)
+
+    assert report["ok"] is False
+    assert any(
+        item["type"] == ERROR_SCHEMA
+        and "extraction_result.chapter_binding" in item["message"]
+        for item in report["errors"]
+    )
+
+
+def test_validate_chapter_commit_checks_expected_chapter(tmp_path):
+    commit = _write_json(
+        tmp_path / "chapter_002.commit.json",
+        _commit_envelope(
+            chapter=1,
+            projection_status={
+                "state": "done",
+                "index": "done",
+                "summary": "done",
+                "memory": "done",
+                "vector": "done",
+            },
+        ),
+    )
+
+    report = validate_chapter_commit(commit, expected_chapter=2)
+
+    assert report["ok"] is False
+    assert any(
+        item.get("field") == "meta.chapter"
+        and "does not match expected chapter 2" in item["message"]
+        for item in report["errors"]
+    )
+
+
 def test_artifact_validator_rejects_missing_required_top_level_fields(tmp_path):
     """precommit 负向用例：缺关键顶层字段时 runtime validator 必须拦截。
 
@@ -209,7 +303,7 @@ def test_artifact_validator_rejects_missing_required_top_level_fields(tmp_path):
     # fulfillment_result 缺 missed_nodes
     fulfillment = _write_json(
         tmp_path / "fulfillment_result.json",
-        {"planned_nodes": [], "covered_nodes": [], "extra_nodes": []},
+        _with_binding({"planned_nodes": [], "covered_nodes": [], "extra_nodes": []}),
     )
     report = validate_fulfillment_result(fulfillment)
     assert report["ok"] is False
@@ -217,7 +311,10 @@ def test_artifact_validator_rejects_missing_required_top_level_fields(tmp_path):
     assert "missed_nodes" in report["errors"][0]["message"]
 
     # disambiguation_result 缺 pending
-    disambiguation = _write_json(tmp_path / "disambiguation_result.json", {})
+    disambiguation = _write_json(
+        tmp_path / "disambiguation_result.json",
+        _with_binding({}),
+    )
     report = validate_disambiguation_result(disambiguation)
     assert report["ok"] is False
     assert report["errors"][0]["type"] == ERROR_SCHEMA
@@ -226,7 +323,7 @@ def test_artifact_validator_rejects_missing_required_top_level_fields(tmp_path):
     # extraction_result 缺核心字段 accepted_events
     extraction = _write_json(
         tmp_path / "extraction_result.json",
-        {"state_deltas": [], "entity_deltas": []},
+        _with_binding({"state_deltas": [], "entity_deltas": []}),
     )
     report = validate_extraction_result(extraction)
     assert report["ok"] is False

@@ -12,6 +12,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from data_modules.config import DataModulesConfig
+from data_modules.chapter_commit_service import ChapterCommitService
+from data_modules.chapter_content_binding import build_chapter_binding
 from data_modules.index_manager import (
     ChapterMeta,
     ChapterReadingPowerMeta,
@@ -243,22 +245,37 @@ def _build_project_data(project_root: Path) -> None:
         ),
         encoding="utf-8",
     )
+    chapter_path = project_root / "正文" / "第0002章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("第二章最终正文\n", encoding="utf-8")
+    binding = build_chapter_binding(project_root, 2)
+    accepted_commit = ChapterCommitService(project_root).build_commit(
+        chapter=2,
+        review_result={"blocking_count": 0, "chapter_binding": binding},
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        disambiguation_result={"pending": [], "chapter_binding": binding},
+        extraction_result={
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [],
+            "chapter_binding": binding,
+        },
+    )
+    accepted_commit["projection_status"] = {
+        "state": "done",
+        "index": "done",
+        "summary": "done",
+        "memory": "done",
+        "vector": "done",
+    }
     (story_root / "commits" / "chapter_002.commit.json").write_text(
-        json.dumps(
-            {
-                "meta": {"schema_version": "story-system/v1", "chapter": 2, "status": "accepted"},
-                "provenance": {"write_fact_role": "chapter_commit"},
-                "projection_status": {
-                    "state": "done",
-                    "index": "done",
-                    "summary": "done",
-                    "memory": "done",
-                    "vector": "done",
-                },
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
+        json.dumps(accepted_commit, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     (story_root / "commits" / "chapter_003.commit.json").write_text(

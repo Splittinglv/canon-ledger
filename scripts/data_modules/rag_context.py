@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .commit_artifacts import retrieval_source_marker
+from .chapter_content_binding import verify_commit_content_binding
 from .config import DataModulesConfig
 from .fact_text import sanitize_fact_text
 
@@ -437,6 +438,12 @@ def _trusted_commit_chapters(
                         and str(meta.get("status") or "") == "accepted"
                         and vector_status in {"done", "skipped"}
                     )
+                    if allowed:
+                        allowed, _binding_code = verify_commit_content_binding(
+                            project_root,
+                            source_chapter,
+                            commit,
+                        )
                     if allowed:
                         from .vector_projection_writer import VectorProjectionWriter
 

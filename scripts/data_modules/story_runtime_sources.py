@@ -9,6 +9,7 @@ from typing import Any
 from chapter_outline_loader import volume_num_for_chapter_from_state
 
 from .story_contracts import StoryContractPaths, read_json_if_exists
+from .chapter_content_binding import verify_commit_content_binding
 
 
 @dataclass
@@ -35,18 +36,62 @@ def _volume_for_chapter(project_root: Path, chapter: int) -> int:
     return volume_num_for_chapter_from_state(project_root, chapter) or 1
 
 
-def _load_latest_commit(paths: StoryContractPaths, chapter: int) -> dict[str, Any] | None:
+def _status_only_commit(payload: dict[str, Any], *, binding_error: str) -> dict[str, Any]:
+    """Expose workflow status without leaking untrusted artifact facts."""
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    projection = (
+        payload.get("projection_status")
+        if isinstance(payload.get("projection_status"), dict)
+        else {}
+    )
+    return {
+        "meta": dict(meta),
+        "projection_status": dict(projection),
+        "trust": {
+            "content_binding": False,
+            "reason": binding_error,
+        },
+    }
+
+
+def _load_latest_commit(
+    project_root: Path,
+    paths: StoryContractPaths,
+    chapter: int,
+) -> dict[str, Any] | None:
     for current in range(chapter, 0, -1):
         payload = read_json_if_exists(paths.commit_json(current))
         if payload:
-            return payload
+            status = str((payload.get("meta") or {}).get("status") or "")
+            trusted, code = verify_commit_content_binding(
+                project_root,
+                current,
+                payload,
+            )
+            if status == "accepted" and trusted:
+                return payload
+            reason = code if not trusted else f"commit_status_{status or 'missing'}"
+            return _status_only_commit(payload, binding_error=reason)
     return None
 
 
-def _load_latest_accepted_commit(paths: StoryContractPaths, chapter: int) -> dict[str, Any] | None:
+def _load_latest_accepted_commit(
+    project_root: Path,
+    paths: StoryContractPaths,
+    chapter: int,
+) -> dict[str, Any] | None:
     for current in range(chapter, 0, -1):
         payload = read_json_if_exists(paths.commit_json(current))
-        if payload and (payload.get("meta") or {}).get("status") == "accepted":
+        trusted, _code = verify_commit_content_binding(
+            project_root,
+            current,
+            payload,
+        )
+        if (
+            trusted
+            and payload
+            and (payload.get("meta") or {}).get("status") == "accepted"
+        ):
             return payload
     return None
 
@@ -62,8 +107,12 @@ def load_runtime_sources(project_root: Path, chapter: int) -> RuntimeSourceSnaps
         "chapter": read_json_if_exists(paths.chapter_json(chapter)) or {},
         "review": read_json_if_exists(paths.review_json(chapter)) or {},
     }
-    latest_commit = _load_latest_commit(paths, chapter)
-    latest_accepted_commit = _load_latest_accepted_commit(paths, chapter)
+    latest_commit = _load_latest_commit(project_root, paths, chapter)
+    latest_accepted_commit = _load_latest_accepted_commit(
+        project_root,
+        paths,
+        chapter,
+    )
 
     fallback_sources: list[str] = []
     for key, payload in contracts.items():

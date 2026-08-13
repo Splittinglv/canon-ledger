@@ -89,10 +89,19 @@ cat "${PROJECT_ROOT}/.webnovel/state.json"
 
 必须通过 `Task` 工具调用 `reviewer`。审查方法与维度细则由 reviewer 自带，本 Skill 不展开。
 
+先固化本次待审正文的字节级绑定：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" chapter-binding \
+  --chapter {chapter_num} \
+  --out "${PROJECT_ROOT}/.webnovel/tmp/chapter_binding.json" \
+  --format json
+```
+
 ```text
 Use the Task tool to run the plugin agent `reviewer`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/reviewer.md`, then execute that spec. Pass Task `model` only when `subagent-models` says `agents["reviewer"].pass_to_task` is true.
 
-Prompt: chapter={chapter_num}; chapter_file={chapter_file}; project_root=${PROJECT_ROOT}; scripts_dir=${SCRIPTS_DIR}。严格输出 reviewer schema JSON，不评分，不口头总结。
+Prompt: chapter={chapter_num}; chapter_file={chapter_file}; chapter_binding_file=${PROJECT_ROOT}/.webnovel/tmp/chapter_binding.json; project_root=${PROJECT_ROOT}; scripts_dir=${SCRIPTS_DIR}。读取 binding 后将完整对象原样放入输出 JSON 顶层 `chapter_binding`；严格输出 reviewer schema JSON，不评分，不口头总结。
 ```
 
 reviewer 返回后，主流程把严格 JSON 写入 `${PROJECT_ROOT}/.webnovel/tmp/review_results.json`（reviewer 不持 Write，是这份 artifact 的非写入方）。`review-pipeline` 必须把同一路径覆盖为标准 review_result artifact（含 `blocking_count`）。
@@ -120,6 +129,7 @@ reviewer 跳过、失败、输出不完整、正文为空、维度跳过、block
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" review-pipeline \
   --chapter {chapter_num} \
   --review-results "${PROJECT_ROOT}/.webnovel/tmp/review_results.json" \
+  --chapter-binding "${PROJECT_ROOT}/.webnovel/tmp/chapter_binding.json" \
   --metrics-out "${PROJECT_ROOT}/.webnovel/tmp/review_metrics.json" \
   --report-file "审查报告/第{chapter_num}章审查报告.md" \
   --save-metrics

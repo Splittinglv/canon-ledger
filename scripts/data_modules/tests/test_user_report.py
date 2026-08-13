@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -16,6 +17,10 @@ def _ensure_scripts_on_path() -> None:
 _ensure_scripts_on_path()
 
 from data_modules.projection_log import append_projection_run  # noqa: E402
+from data_modules.projection_log import commit_hash  # noqa: E402
+from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
+from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
+from data_modules.run_ledger import record_write_step  # noqa: E402
 from data_modules.user_report import build_user_report, render_user_report_text  # noqa: E402
 
 
@@ -55,7 +60,14 @@ def _make_project(project_root: Path) -> None:
         path.write_text("placeholder\n", encoding="utf-8")
 
 
-def _write_review(project_root: Path, *, chapter: int = 1, blocking_count: int = 0, review_skipped: bool = False) -> None:
+def _write_review(
+    project_root: Path,
+    *,
+    chapter: int = 1,
+    blocking_count: int = 0,
+    review_skipped: bool = False,
+    chapter_binding: dict | None = None,
+) -> None:
     review = {
         "chapter": chapter,
         "issues": [],
@@ -79,6 +91,8 @@ def _write_review(project_root: Path, *, chapter: int = 1, blocking_count: int =
     if review_skipped:
         review["review_skipped"] = True
         review["review_mode"] = "minimal"
+    if chapter_binding is not None:
+        review["chapter_binding"] = dict(chapter_binding)
     _write_json(project_root / ".webnovel" / "tmp" / "review_results.json", review)
     _write_json(
         project_root / ".webnovel" / "tmp" / "review_metrics.json",
@@ -95,28 +109,86 @@ def _write_review(project_root: Path, *, chapter: int = 1, blocking_count: int =
     report_path.write_text("# 审查报告\n", encoding="utf-8")
 
 
-def _write_data_artifacts(project_root: Path) -> None:
+def _write_data_artifacts(
+    project_root: Path,
+    *,
+    chapter_binding: dict | None = None,
+) -> None:
+    def _bound(payload: dict) -> dict:
+        if chapter_binding is not None:
+            payload["chapter_binding"] = dict(chapter_binding)
+        return payload
+
     _write_json(
         project_root / ".webnovel" / "tmp" / "fulfillment_result.json",
-        {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
+        _bound(
+            {
+                "planned_nodes": [],
+                "covered_nodes": [],
+                "missed_nodes": [],
+                "extra_nodes": [],
+            }
+        ),
     )
-    _write_json(project_root / ".webnovel" / "tmp" / "disambiguation_result.json", {"pending": []})
+    _write_json(
+        project_root / ".webnovel" / "tmp" / "disambiguation_result.json",
+        _bound({"pending": []}),
+    )
     _write_json(
         project_root / ".webnovel" / "tmp" / "extraction_result.json",
-        {"accepted_events": [], "state_deltas": [], "entity_deltas": [], "summary_text": "摘要"},
+        _bound(
+            {
+                "accepted_events": [],
+                "state_deltas": [],
+                "entity_deltas": [],
+                "summary_text": "摘要",
+            }
+        ),
     )
 
 
-def _commit_payload(*, chapter: int = 1, status: str = "accepted", projection_status: dict | None = None) -> dict:
-    return {
-        "meta": {"chapter": chapter, "status": status},
-        "review_result": {"blocking_count": 0},
-        "fulfillment_result": {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
-        "disambiguation_result": {"pending": []},
-        "extraction_result": {"accepted_events": [], "state_deltas": [], "entity_deltas": [], "summary_text": "摘要"},
-        "projection_status": projection_status
-        or {"state": "done", "index": "skipped", "summary": "skipped", "memory": "skipped", "vector": "skipped"},
-    }
+def _commit_payload(
+    project_root: Path,
+    *,
+    chapter: int = 1,
+    blocking_count: int = 0,
+    projection_status: dict | None = None,
+) -> dict:
+    """Build a real, current-prose-bound commit rather than a legacy stub."""
+    binding = build_chapter_binding(project_root, chapter)
+    payload = ChapterCommitService(project_root).build_commit(
+        chapter=chapter,
+        review_result={
+            "blocking_count": blocking_count,
+            "chapter_binding": binding,
+        },
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        disambiguation_result={"pending": [], "chapter_binding": binding},
+        extraction_result={
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [],
+            "summary_text": "摘要",
+            "chapter_binding": binding,
+        },
+    )
+    payload["projection_status"] = dict(
+        projection_status
+        or {
+            "state": "done",
+            "index": "skipped",
+            "summary": "skipped",
+            "memory": "skipped",
+            "vector": "skipped",
+        }
+    )
+    return payload
 
 
 def _write_commit(project_root: Path, payload: dict) -> Path:
@@ -126,13 +198,55 @@ def _write_commit(project_root: Path, payload: dict) -> Path:
     return path
 
 
-def _write_success_case(project_root: Path, *, chapter: int = 1) -> None:
+def _write_success_case(project_root: Path, *, chapter: int = 1) -> dict:
     _make_project(project_root)
-    (project_root / "正文" / f"第{chapter:04d}章.md").write_text("正文\n", encoding="utf-8")
-    _write_review(project_root, chapter=chapter)
-    _write_data_artifacts(project_root)
-    _write_commit(project_root, _commit_payload(chapter=chapter))
-    (project_root / ".webnovel" / "backups" / f"ch{chapter:04d}_ok").mkdir(parents=True, exist_ok=True)
+    chapter_file = project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_file.write_text("正文\n", encoding="utf-8")
+    binding = build_chapter_binding(project_root, chapter)
+    _write_review(project_root, chapter=chapter, chapter_binding=binding)
+    _write_data_artifacts(project_root, chapter_binding=binding)
+    payload = _commit_payload(project_root, chapter=chapter)
+    _write_commit(project_root, payload)
+
+    # Mirror the evidence that the strict resume path accepts: the receipt
+    # must bind this exact accepted commit and the ledger must record the same
+    # current manuscript as its backup input.
+    backup_dir = project_root / ".webnovel" / "backups"
+    snapshot = backup_dir / f"snapshot_ch{chapter:04d}_current"
+    snapshot.mkdir(parents=True, exist_ok=True)
+    snapshot_chapter = snapshot / payload["chapter_binding"]["path"]
+    snapshot_chapter.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_chapter.write_bytes(chapter_file.read_bytes())
+    snapshot_commit = (
+        snapshot
+        / ".story-system"
+        / "commits"
+        / f"chapter_{chapter:03d}.commit.json"
+    )
+    snapshot_commit.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(snapshot_commit, payload)
+    receipt_path = backup_dir / f"ch{chapter:04d}.receipt.json"
+    _write_json(
+        receipt_path,
+        {
+            "schema_version": "webnovel-backup-receipt/v1",
+            "chapter": chapter,
+            "chapter_binding": payload["chapter_binding"],
+            "chapter_commit_path": f".story-system/commits/chapter_{chapter:03d}.commit.json",
+            "chapter_commit_hash": commit_hash(payload),
+            "mode": "local",
+            "snapshot": snapshot.name,
+        },
+    )
+    record_write_step(
+        project_root,
+        chapter=chapter,
+        step="backup",
+        status="completed",
+        inputs={"chapter_file": chapter_file},
+        outputs={"receipt": receipt_path},
+    )
+    return payload
 
 
 def test_render_write_report_success(tmp_path: Path) -> None:
@@ -172,8 +286,7 @@ def test_render_write_report_uses_commit_snapshots_when_tmp_artifacts_are_cleane
 
 def test_render_write_report_commit_rejected(tmp_path: Path) -> None:
     _write_success_case(tmp_path, chapter=1)
-    payload = _commit_payload(chapter=1, status="rejected")
-    payload["review_result"] = {"blocking_count": 1}
+    payload = _commit_payload(tmp_path, chapter=1, blocking_count=1)
     _write_commit(tmp_path, payload)
 
     report = build_user_report(tmp_path, stage="write", chapter=1)
@@ -188,6 +301,7 @@ def test_render_write_report_projection_failed(tmp_path: Path) -> None:
     _write_commit(
         tmp_path,
         _commit_payload(
+            tmp_path,
             chapter=1,
             projection_status={"state": "done", "index": "failed:locked", "summary": "skipped", "memory": "skipped", "vector": "skipped"},
         ),
@@ -202,6 +316,7 @@ def test_render_write_report_projection_failed(tmp_path: Path) -> None:
 def test_render_write_report_projection_retry_success_is_auto_handled(tmp_path: Path) -> None:
     _write_success_case(tmp_path, chapter=1)
     payload = _commit_payload(
+        tmp_path,
         chapter=1,
         projection_status={"state": "done", "index": "failed:locked", "summary": "skipped", "memory": "skipped", "vector": "skipped"},
     )
@@ -211,6 +326,29 @@ def test_render_write_report_projection_retry_success_is_auto_handled(tmp_path: 
         payload,
         {"index": {"status": "failed:locked"}},
         commit_path=commit_path,
+    )
+    # The commit snapshot changed, so refresh the backup receipt/snapshot to
+    # model a completed retry followed by the normal backup step.
+    binding = payload["chapter_binding"]
+    backup_dir = tmp_path / ".webnovel" / "backups"
+    snapshot = backup_dir / "snapshot_ch0001_retry"
+    snapshot_chapter = snapshot / binding["path"]
+    snapshot_chapter.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_chapter.write_bytes((tmp_path / binding["path"]).read_bytes())
+    snapshot_commit = snapshot / ".story-system" / "commits" / commit_path.name
+    snapshot_commit.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(snapshot_commit, payload)
+    _write_json(
+        backup_dir / "ch0001.receipt.json",
+        {
+            "schema_version": "webnovel-backup-receipt/v1",
+            "chapter": 1,
+            "chapter_binding": binding,
+            "chapter_commit_path": ".story-system/commits/chapter_001.commit.json",
+            "chapter_commit_hash": commit_hash(payload),
+            "mode": "local",
+            "snapshot": snapshot.name,
+        },
     )
     append_projection_run(
         tmp_path,
@@ -234,13 +372,38 @@ def test_render_write_report_projection_retry_success_is_auto_handled(tmp_path: 
 
 def test_render_review_report_blocking(tmp_path: Path) -> None:
     _make_project(tmp_path)
-    _write_review(tmp_path, chapter=4, blocking_count=1)
+    chapter_file = tmp_path / "正文" / "第0004章.md"
+    chapter_file.write_text("第4章正文\n", encoding="utf-8")
+    binding = build_chapter_binding(tmp_path, 4)
+    _write_review(
+        tmp_path,
+        chapter=4,
+        blocking_count=1,
+        chapter_binding=binding,
+    )
 
     report = build_user_report(tmp_path, stage="review", chapter=4)
 
     assert report["overall_status"] == "needs_user"
     assert report["review_author_view"]["status"] == "must_fix"
     assert any(item["code"] == "blocking_review" for item in report["issues"]["must_handle"])
+
+
+def test_review_report_rejects_review_after_manuscript_edit(tmp_path: Path) -> None:
+    _make_project(tmp_path)
+    chapter_file = tmp_path / "正文" / "第0001章.md"
+    chapter_file.write_text("待审正文 v1\n", encoding="utf-8")
+    binding = build_chapter_binding(tmp_path, 1)
+    _write_review(tmp_path, chapter=1, chapter_binding=binding)
+    chapter_file.write_text("待审正文 v2\n", encoding="utf-8")
+
+    report = build_user_report(tmp_path, stage="review", chapter=1)
+
+    assert report["overall_status"] == "failed"
+    assert any(
+        item["code"] == "review_result_stale"
+        for item in report["issues"]["must_handle"]
+    )
 
 
 def test_missing_artifact_does_not_crash_and_is_not_completed(tmp_path: Path) -> None:
@@ -268,3 +431,55 @@ def test_user_report_includes_log_path_only_on_failure(tmp_path: Path) -> None:
     completed_text = render_user_report_text(completed)
     assert completed["overall_status"] == "completed"
     assert ".webnovel/logs/run_last.log" not in completed_text
+
+
+def test_write_report_rejects_accepted_commit_after_manuscript_edit(tmp_path: Path) -> None:
+    _write_success_case(tmp_path, chapter=1)
+    (tmp_path / "正文" / "第0001章.md").write_text("正文已修改\n", encoding="utf-8")
+
+    report = build_user_report(tmp_path, stage="write", chapter=1)
+
+    assert report["overall_status"] == "needs_user"
+    assert any(
+        item["code"] == "chapter_commit_stale"
+        for item in report["issues"]["must_handle"]
+    )
+
+
+def test_write_report_does_not_accept_backup_name_glob_without_receipt(tmp_path: Path) -> None:
+    _write_success_case(tmp_path, chapter=1)
+    backup_dir = tmp_path / ".webnovel" / "backups"
+    (backup_dir / "ch0001.receipt.json").unlink()
+    for snapshot in backup_dir.glob("snapshot_ch0001_*"):
+        shutil.rmtree(snapshot)
+    (backup_dir / "ch0001_fake").mkdir()
+
+    report = build_user_report(tmp_path, stage="write", chapter=1)
+
+    backup_file = next(item for item in report["files"] if item["label"] == "备份")
+    assert backup_file["status"] == "unknown"
+    assert any(
+        item["code"] == "backup_unconfirmed"
+        for item in report["issues"]["needs_confirmation"]
+    )
+
+
+def test_write_report_ignores_projection_log_for_another_commit(tmp_path: Path) -> None:
+    current = _write_success_case(tmp_path, chapter=1)
+    commit_path = tmp_path / ".story-system" / "commits" / "chapter_001.commit.json"
+    old = dict(current)
+    old["outline_snapshot"] = {"stale": True}
+    append_projection_run(
+        tmp_path,
+        old,
+        {"index": {"status": "failed:old"}},
+        commit_path=commit_path,
+    )
+
+    report = build_user_report(tmp_path, stage="write", chapter=1)
+
+    assert report["overall_status"] == "completed"
+    assert not any(
+        item["title"] == "故事资料更新失败"
+        for item in report["issues"]["must_handle"]
+    )

@@ -596,34 +596,34 @@ def test_write_gate_cli_runs_prewrite(monkeypatch, tmp_path, capsys):
 
 def test_projections_retry_cli_runs(monkeypatch, tmp_path, capsys):
     module = _load_webnovel_module()
+    from data_modules.chapter_commit_service import ChapterCommitService
+    from data_modules.chapter_content_binding import build_chapter_binding
+
     project_root = tmp_path / "book"
     _make_cli_init_ready_project(project_root)
-    commit_path = project_root / ".story-system" / "commits" / "chapter_001.commit.json"
-    commit_path.parent.mkdir(parents=True, exist_ok=True)
-    commit_path.write_text(
-        json.dumps(
-            {
-                "meta": {"chapter": 1, "status": "rejected"},
-                "review_result": {"blocking_count": 1},
-                "fulfillment_result": {
-                    "planned_nodes": [],
-                    "covered_nodes": [],
-                    "missed_nodes": [],
-                    "extra_nodes": [],
-                },
-                "disambiguation_result": {"pending": []},
-                "extraction_result": {"accepted_events": [], "state_deltas": [], "entity_deltas": []},
-                "projection_status": {
-                    "state": "pending",
-                    "index": "pending",
-                    "summary": "pending",
-                    "memory": "pending",
-                    "vector": "pending",
-                },
+    chapter_path = project_root / "正文" / "第0001章.md"
+    chapter_path.write_text("第1章最终正文", encoding="utf-8")
+    binding = build_chapter_binding(project_root, 1)
+    service = ChapterCommitService(project_root)
+    service.persist_commit(
+        service.build_commit(
+            chapter=1,
+            review_result={"blocking_count": 1, "chapter_binding": binding},
+            fulfillment_result={
+                "planned_nodes": [],
+                "covered_nodes": [],
+                "missed_nodes": [],
+                "extra_nodes": [],
+                "chapter_binding": binding,
             },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
+            disambiguation_result={"pending": [], "chapter_binding": binding},
+            extraction_result={
+                "accepted_events": [],
+                "state_deltas": [],
+                "entity_deltas": [],
+                "chapter_binding": binding,
+            },
+        )
     )
 
     monkeypatch.setattr(
@@ -741,15 +741,28 @@ def test_quality_trend_report_writes_to_book_root_when_input_is_workspace_root(t
 def test_review_pipeline_builds_artifacts(tmp_path):
     _ensure_scripts_on_path()
     import review_pipeline as review_pipeline_module
+    from data_modules.chapter_content_binding import build_chapter_binding
 
     project_root = (tmp_path / "book").resolve()
     (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
     (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    chapter_path = project_root / "正文" / "第0020章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("第20章正文", encoding="utf-8")
+    chapter_binding = build_chapter_binding(project_root, 20)
+    chapter_binding_path = project_root / ".webnovel" / "tmp" / "chapter_binding.json"
+    chapter_binding_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_binding_path.write_text(
+        json.dumps(chapter_binding, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     review_results_path = tmp_path / "review_results.json"
     review_results_path.write_text(
         json.dumps(
             {
+                "chapter": 20,
+                "chapter_binding": chapter_binding,
                 "issues": [
                     {
                         "severity": "critical",
@@ -780,6 +793,7 @@ def test_review_pipeline_builds_artifacts(tmp_path):
         chapter=20,
         review_results_path=review_results_path,
         report_file="审查报告/第20章.md",
+        chapter_binding_path=chapter_binding_path,
     )
 
     assert payload["review_result"]["blocking_count"] == 1
@@ -807,6 +821,7 @@ def test_review_pipeline_forwards_with_resolved_project_root(monkeypatch, tmp_pa
 
     book_root = (tmp_path / "book").resolve()
     review_results = (tmp_path / "review_results.json").resolve()
+    chapter_binding = (tmp_path / "chapter_binding.json").resolve()
     called = {}
 
     def _fake_resolve(explicit_project_root=None):
@@ -831,6 +846,8 @@ def test_review_pipeline_forwards_with_resolved_project_root(monkeypatch, tmp_pa
             "18",
             "--review-results",
             str(review_results),
+            "--chapter-binding",
+            str(chapter_binding),
             "--metrics-out",
             str(tmp_path / "metrics.json"),
             "--report-file",
@@ -851,12 +868,59 @@ def test_review_pipeline_forwards_with_resolved_project_root(monkeypatch, tmp_pa
         "18",
         "--review-results",
         str(review_results),
+        "--chapter-binding",
+        str(chapter_binding),
         "--metrics-out",
         str(tmp_path / "metrics.json"),
         "--report-file",
         "审查报告/第18章.md",
         "--save-metrics",
     ]
+
+
+def test_review_pipeline_rejects_changed_manuscript_before_side_effects(tmp_path):
+    import review_pipeline as review_pipeline_module
+    from data_modules.chapter_content_binding import build_chapter_binding
+
+    project_root = tmp_path / "book"
+    chapter_file = project_root / "正文" / "第0020章.md"
+    chapter_file.parent.mkdir(parents=True, exist_ok=True)
+    chapter_file.write_text("待审正文 v1\n", encoding="utf-8")
+    binding = build_chapter_binding(project_root, 20)
+    binding_path = project_root / ".webnovel" / "tmp" / "chapter_binding.json"
+    binding_path.parent.mkdir(parents=True, exist_ok=True)
+    binding_path.write_text(json.dumps(binding, ensure_ascii=False), encoding="utf-8")
+    review_path = project_root / ".webnovel" / "tmp" / "review_results.json"
+    original_review = {
+        "chapter": 20,
+        "chapter_binding": binding,
+        "issues": [
+            {
+                "severity": "high",
+                "category": "ai_flavor",
+                "evidence": "唯一一个知道秘密的人。",
+            }
+        ],
+        "summary": "待审",
+    }
+    review_path.write_text(
+        json.dumps(original_review, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    chapter_file.write_text("待审正文 v2\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="chapter_content_hash_mismatch"):
+        review_pipeline_module.build_review_artifacts(
+            project_root=project_root,
+            chapter=20,
+            review_results_path=review_path,
+            report_file="审查报告/第20章.md",
+            chapter_binding_path=binding_path,
+        )
+
+    assert json.loads(review_path.read_text(encoding="utf-8")) == original_review
+    assert not (project_root / ".story-system" / "anti_patterns.json").exists()
+    assert not (project_root / "审查报告" / "第20章.md").exists()
 
 
 def test_project_memory_forwards_with_resolved_project_root(monkeypatch, tmp_path):
@@ -940,15 +1004,28 @@ def test_project_memory_add_pattern_escapes_quotes(tmp_path):
 def test_review_pipeline_main_creates_output_directories(tmp_path):
     _ensure_scripts_on_path()
     import review_pipeline as review_pipeline_module
+    from data_modules.chapter_content_binding import build_chapter_binding
 
     project_root = (tmp_path / "book").resolve()
     (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
     (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    chapter_path = project_root / "正文" / "第0009章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("第9章正文", encoding="utf-8")
+    chapter_binding = build_chapter_binding(project_root, 9)
+    chapter_binding_path = project_root / ".webnovel" / "tmp" / "chapter_binding.json"
+    chapter_binding_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_binding_path.write_text(
+        json.dumps(chapter_binding, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
     review_results_path = tmp_path / "review_results.json"
     review_results_path.write_text(
         json.dumps(
             {
+                "chapter": 9,
+                "chapter_binding": chapter_binding,
                 "issues": [
                     {
                         "severity": "low",
@@ -976,6 +1053,8 @@ def test_review_pipeline_main_creates_output_directories(tmp_path):
         "9",
         "--review-results",
         str(review_results_path),
+        "--chapter-binding",
+        str(chapter_binding_path),
         "--metrics-out",
         str(metrics_out),
         "--report-file",
@@ -1092,12 +1171,27 @@ def test_webnovel_skill_flow_runs_story_contract_context_and_review_pipeline_wit
     monkeypatch.setenv("EMBED_API_KEY", "fake-embed-key")
     monkeypatch.setattr(rag_module, "get_client", lambda config: _StubVectorClient())
 
+    from data_modules.chapter_commit_service import ChapterCommitService
+    from data_modules.chapter_content_binding import build_chapter_binding
     from data_modules.vector_projection_writer import VectorProjectionWriter
 
-    prior_payload = {
-        "meta": {"chapter": 2, "status": "accepted"},
-        "projection_status": {"vector": "done"},
-        "extraction_result": {
+    prior_chapter_path = project_root / "正文" / "第0002章.md"
+    prior_chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    prior_chapter_path.write_text("萧炎与药老在试炼前关系紧张。", encoding="utf-8")
+    prior_binding = build_chapter_binding(project_root, 2)
+    prior_service = ChapterCommitService(project_root)
+    prior_payload = prior_service.build_commit(
+        chapter=2,
+        review_result={"blocking_count": 0, "chapter_binding": prior_binding},
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": prior_binding,
+        },
+        disambiguation_result={"pending": [], "chapter_binding": prior_binding},
+        extraction_result={
             "accepted_events": [
                 {
                     "event_id": "evt-ch2-relationship",
@@ -1109,19 +1203,16 @@ def test_webnovel_skill_flow_runs_story_contract_context_and_review_pipeline_wit
             ],
             "state_deltas": [],
             "entity_deltas": [],
-            "scenes": [],
-            "summary_text": "",
+            "chapter_binding": prior_binding,
         },
-    }
+    )
+    # The fixture stores this exact projection below, so mark the persisted
+    # commit as retrieval-complete before exercising the read-side allowlist.
+    prior_payload["projection_status"]["vector"] = "done"
     prior_chunks = VectorProjectionWriter(project_root)._collect_chunks(prior_payload)
     adapter = rag_module.RAGAdapter(cfg)
     asyncio.run(adapter.store_chunks(prior_chunks))
-    prior_commit = project_root / ".story-system" / "commits" / "chapter_002.commit.json"
-    prior_commit.parent.mkdir(parents=True, exist_ok=True)
-    prior_commit.write_text(
-        json.dumps(prior_payload, ensure_ascii=False),
-        encoding="utf-8",
-    )
+    prior_service.persist_commit(prior_payload)
 
     script_to_module = {
         "story_system.py": "story_system",
@@ -1204,9 +1295,20 @@ def test_webnovel_skill_flow_runs_story_contract_context_and_review_pipeline_wit
 
     review_results_path = project_root / ".webnovel" / "tmp" / "review_results.json"
     review_results_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path = project_root / "正文" / "第0003章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("萧炎在试炼场发现规则异常。", encoding="utf-8")
+    chapter_binding = build_chapter_binding(project_root, 3)
+    chapter_binding_path = project_root / ".webnovel" / "tmp" / "chapter_binding.json"
+    chapter_binding_path.write_text(
+        json.dumps(chapter_binding, ensure_ascii=False),
+        encoding="utf-8",
+    )
     review_results_path.write_text(
         json.dumps(
             {
+                "chapter": 3,
+                "chapter_binding": chapter_binding,
                 "issues": [
                     {
                         "severity": "medium",
@@ -1234,6 +1336,8 @@ def test_webnovel_skill_flow_runs_story_contract_context_and_review_pipeline_wit
                 "3",
                 "--review-results",
                 str(review_results_path),
+                "--chapter-binding",
+                str(chapter_binding_path),
                 "--metrics-out",
                 str(metrics_out),
                 "--report-file",

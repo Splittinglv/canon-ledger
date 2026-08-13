@@ -273,6 +273,41 @@ def cmd_write_gate(args: argparse.Namespace) -> int:
     return 0 if report.get("ok") else 1
 
 
+def cmd_chapter_binding(args: argparse.Namespace) -> int:
+    from .chapter_content_binding import ChapterBindingError, build_chapter_binding
+
+    try:
+        project_root = _resolve_root(args.project_root)
+        payload = build_chapter_binding(project_root, args.chapter)
+        if args.out:
+            out_path = Path(args.out).expanduser()
+            if not out_path.is_absolute():
+                out_path = project_root / out_path
+            out_path = out_path.resolve()
+            try:
+                out_path.relative_to(project_root.resolve())
+            except ValueError as exc:
+                raise ValueError("chapter binding output must stay inside project_root") from exc
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+    except (ChapterBindingError, FileNotFoundError, OSError, ValueError) as exc:
+        code = getattr(exc, "code", "chapter_binding_error")
+        if args.format == "json":
+            print(json.dumps({"ok": False, "error": code, "message": str(exc)}, ensure_ascii=False))
+        else:
+            print(f"ERROR chapter-binding: {code}: {exc}", file=sys.stderr)
+        return 1
+
+    if args.format == "json":
+        print(json.dumps({"ok": True, "chapter_binding": payload}, ensure_ascii=False, indent=2))
+    else:
+        print(f"OK chapter-binding chapter={payload['chapter']} sha256={payload['sha256']}")
+    return 0
+
+
 def cmd_projections(args: argparse.Namespace) -> int:
     from .projections import format_projection_report, replay_projections, retry_projection
 
@@ -461,6 +496,12 @@ def main() -> None:
     p_write_gate.add_argument("--format", choices=["json", "text"], default="json", help="输出格式")
     p_write_gate.set_defaults(func=cmd_write_gate)
 
+    p_chapter_binding = sub.add_parser("chapter-binding", help="绑定当前章节正文的精确字节内容")
+    p_chapter_binding.add_argument("--chapter", type=int, required=True, help="目标章节号")
+    p_chapter_binding.add_argument("--out", default="", help="可选 JSON 输出文件（必须位于项目内）")
+    p_chapter_binding.add_argument("--format", choices=["json", "text"], default="json")
+    p_chapter_binding.set_defaults(func=cmd_chapter_binding)
+
     p_projections = sub.add_parser("projections", help="从已有 commit 补跑或重放 projection")
     projections_sub = p_projections.add_subparsers(dest="projection_action", required=True)
     p_projection_retry = projections_sub.add_parser("retry", help="补跑单章 projection")
@@ -586,6 +627,7 @@ def main() -> None:
     p_review_pipeline = sub.add_parser("review-pipeline", help="转发到 review_pipeline.py")
     p_review_pipeline.add_argument("--chapter", type=int, required=True, help="目标章节号")
     p_review_pipeline.add_argument("--review-results", required=True, help="reviewer 原始结果 JSON 文件")
+    p_review_pipeline.add_argument("--chapter-binding", required=True, help="审查开始前生成的正文内容绑定 JSON")
     p_review_pipeline.add_argument("--metrics-out", default="", help="metrics 输出文件")
     p_review_pipeline.add_argument("--report-file", default="", help="审查报告路径")
     p_review_pipeline.add_argument("--save-metrics", action="store_true", help="直接写入 index.db")
@@ -697,6 +739,7 @@ def main() -> None:
             *forward_args,
             "--chapter", str(args.chapter),
             "--review-results", str(args.review_results),
+            "--chapter-binding", str(args.chapter_binding),
         ]
         if args.metrics_out:
             return_args.extend(["--metrics-out", str(args.metrics_out)])

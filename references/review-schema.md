@@ -12,6 +12,10 @@
 - **blocking 语义**：替代原 timeline_gate，severity=critical 默认阻断
 - **单 agent**：不再区分 6 个 checker，统一由 reviewer agent 输出
 
+## 正文绑定
+
+reviewer 输出顶层必须包含调用方传入的 `chapter_binding`（`schema_version/chapter/path/sha256/bytes`），不得自行重算或修改。`review-pipeline` 在产生报告、metrics 或 anti-pattern 副作用前，必须确认它与当前正文字节完全一致。正文修改后旧审查自动失效，不可直接用于 chapter-commit。
+
 ## Issue Schema
 
 | 字段 | 类型 | 必填 | 说明 |

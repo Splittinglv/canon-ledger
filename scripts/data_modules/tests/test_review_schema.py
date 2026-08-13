@@ -4,12 +4,24 @@
 import json
 
 import pytest
+import hashlib
 from data_modules.review_schema import (
     ReviewIssue,
     ReviewResult,
     append_ai_flavor_anti_patterns,
     parse_review_output,
 )
+
+
+def _binding(chapter: int) -> dict:
+    raw = b"reviewed"
+    return {
+        "schema_version": "webnovel-chapter-content-binding/v1",
+        "chapter": chapter,
+        "path": f"正文/第{chapter:04d}章.md",
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "bytes": len(raw),
+    }
 
 
 def test_review_issue_blocking_defaults():
@@ -75,6 +87,8 @@ def test_review_result_to_dict_roundtrip():
 
 def test_parse_review_output_from_dict():
     raw = {
+        "chapter": 5,
+        "chapter_binding": _binding(5),
         "issues": [
             {"severity": "critical", "category": "continuity", "location": "p1",
              "description": "矛盾", "evidence": "证据", "fix_hint": "修复"},
@@ -88,6 +102,8 @@ def test_parse_review_output_from_dict():
 
 def test_parse_review_output_tolerates_missing_fields():
     raw = {
+        "chapter": 1,
+        "chapter_binding": _binding(1),
         "issues": [
             {"severity": "low", "description": "小问题"},
         ],

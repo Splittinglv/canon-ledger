@@ -8,11 +8,19 @@ from typing import Any, Dict
 from chapter_outline_loader import volume_num_for_chapter_from_state
 
 from .chapter_commit_schema import (
+    ChapterCommitSchema,
     DisambiguationResult,
     ExtractionResult,
     FulfillmentResult,
     ReviewResult,
     normalize_timeline_events,
+)
+from .chapter_content_binding import (
+    ChapterBindingError,
+    build_chapter_binding,
+    chapter_bindings_equal,
+    verify_chapter_binding,
+    verify_commit_content_binding,
 )
 from .commit_artifacts import extraction_list
 from .config import DataModulesConfig
@@ -43,6 +51,39 @@ class ChapterCommitService:
         fulfillment = FulfillmentResult.model_validate(fulfillment_result)
         disambiguation = DisambiguationResult.model_validate(disambiguation_result)
         extraction = ExtractionResult.model_validate(extraction_result)
+
+        artifact_models = {
+            "review_result": review,
+            "fulfillment_result": fulfillment,
+            "disambiguation_result": disambiguation,
+            "extraction_result": extraction,
+        }
+        for artifact_name, artifact in artifact_models.items():
+            binding_payload = artifact.chapter_binding.model_dump()
+            ok, code = verify_chapter_binding(
+                self.project_root,
+                chapter,
+                binding_payload,
+            )
+            if not ok:
+                raise ChapterBindingError(
+                    code,
+                    f"{artifact_name}.chapter_binding verification failed: {code}",
+                )
+
+        # Re-read once after all artifact checks.  This final fingerprint is
+        # the commit's source of truth and closes the normal review→commit
+        # mutation window.
+        chapter_binding = build_chapter_binding(self.project_root, chapter)
+        for artifact_name, artifact in artifact_models.items():
+            if not chapter_bindings_equal(
+                chapter_binding,
+                artifact.chapter_binding,
+            ):
+                raise ChapterBindingError(
+                    "chapter_content_hash_mismatch",
+                    f"{artifact_name}.chapter_binding is stale",
+                )
         rejected = bool(review.blocking_count) or bool(
             fulfillment.missed_nodes
         ) or bool(disambiguation.pending)
@@ -73,6 +114,7 @@ class ChapterCommitService:
                 "chapter": chapter,
                 "status": status,
             },
+            "chapter_binding": chapter_binding,
             "contract_refs": {
                 "master": "MASTER_SETTING.json",
                 "volume": f"volume_{volume:03d}.json",
@@ -83,6 +125,7 @@ class ChapterCommitService:
                 "write_fact_role": "chapter_commit",
                 "projection_role": "derived_read_models",
                 "legacy_state_role": "projection_only",
+                "chapter_binding": chapter_binding,
             },
             "outline_snapshot": {
                 "planned_nodes": fulfillment.planned_nodes,
@@ -110,7 +153,7 @@ class ChapterCommitService:
             ).validate_commit_projection(commit_payload)
             if lifecycle_errors:
                 raise ValueError(f"invalid_consistency_fact:{lifecycle_errors[0]}")
-        return commit_payload
+        return ChapterCommitSchema.model_validate(commit_payload).model_dump()
 
     def persist_commit(self, payload: Dict[str, Any]) -> Path:
         target = self.project_root / ".story-system" / "commits"
@@ -207,6 +250,47 @@ class ChapterCommitService:
         self._persist_projection_run(payload, writer_results)
         return True
 
+    def _verify_commit_content_binding(self, payload: Dict[str, Any]) -> str:
+        """Return a stable failure code when a commit no longer binds current prose."""
+        meta = payload.get("meta") if isinstance(payload, dict) else {}
+        try:
+            chapter = int((meta or {}).get("chapter") or 0)
+        except (TypeError, ValueError):
+            return "artifact_chapter_mismatch"
+        if chapter <= 0:
+            return "artifact_chapter_mismatch"
+        ok, code = verify_commit_content_binding(
+            self.project_root,
+            chapter,
+            payload,
+        )
+        return "" if ok else code
+
+    def _block_changed_chapter_content(self, payload: Dict[str, Any]) -> bool:
+        """Fail closed before any event or derived read-model write."""
+        status = str((payload.get("meta") or {}).get("status") or "")
+        if status not in {"accepted", "rejected"}:
+            return False
+
+        error_code = self._verify_commit_content_binding(payload)
+        if not error_code:
+            return False
+
+        payload.setdefault("projection_status", {})
+        if not isinstance(payload["projection_status"], dict):
+            payload["projection_status"] = {}
+        required = set(EventProjectionRouter().required_writers(payload)) or {"state"}
+        writer_results: dict[str, dict[str, Any]] = {}
+        for name in required:
+            payload["projection_status"][name] = "failed:chapter_content_changed"
+            writer_results[name] = {
+                "status": "failed:chapter_content_changed",
+                "error": error_code,
+                "reason": "chapter_content_changed",
+            }
+        self._persist_projection_run(payload, writer_results)
+        return True
+
     def apply_projection_writers(
         self,
         payload: Dict[str, Any],
@@ -221,6 +305,8 @@ class ChapterCommitService:
         if not isinstance(payload["projection_status"], dict):
             payload["projection_status"] = {}
 
+        if self._block_changed_chapter_content(payload):
+            return payload
         if self._block_invalid_lifecycle(payload):
             return payload
 
@@ -238,6 +324,25 @@ class ChapterCommitService:
                 payload["projection_status"][name] = "skipped"
                 writer_results[name] = {"status": "skipped", "reason": "not_required"}
                 continue
+            # A writer can execute arbitrary storage code.  Re-hash before
+            # every subsequent writer so a concurrent/manual prose edit
+            # cannot let the rest of the projection chain stamp stale facts
+            # as done.
+            binding_error = self._verify_commit_content_binding(payload)
+            if binding_error:
+                for pending_name in required_writers:
+                    current = str(payload["projection_status"].get(pending_name) or "")
+                    if current in {"", "pending"}:
+                        payload["projection_status"][pending_name] = (
+                            "failed:chapter_content_changed"
+                        )
+                        writer_results[pending_name] = {
+                            "status": "failed:chapter_content_changed",
+                            "error": binding_error,
+                            "reason": "chapter_content_changed",
+                        }
+                self._persist_projection_run(payload, writer_results)
+                return payload
             try:
                 result = writer.apply(payload)
                 payload["projection_status"][name] = self._writer_status(result)
@@ -256,6 +361,9 @@ class ChapterCommitService:
         if status not in {"accepted", "rejected"}:
             return payload
 
+        if self._block_changed_chapter_content(payload):
+            return payload
+
         if status == "accepted":
             chapter = int((payload.get("meta") or {}).get("chapter") or 0)
             event_store = EventLogStore(self.project_root)
@@ -267,6 +375,10 @@ class ChapterCommitService:
             extraction["accepted_events"] = event_store.normalize_events(
                 chapter, accepted_events
             )
+            # Normalization is a user-code boundary.  Re-read the manuscript
+            # immediately before lifecycle handling and the first event write.
+            if self._block_changed_chapter_content(payload):
+                return payload
             if self._block_invalid_lifecycle(payload):
                 return payload
             event_store.write_events(chapter, extraction["accepted_events"])

@@ -86,6 +86,38 @@ def _trusted_commit(chapter: int = 3) -> dict:
     }
 
 
+def _write_trusted_commit(project_root: Path, chapter: int = 3) -> dict:
+    """Persist a complete, manuscript-bound commit for read-path trust tests."""
+    from data_modules.chapter_commit_service import ChapterCommitService
+    from data_modules.chapter_content_binding import build_chapter_binding
+
+    chapter_file = project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_file.parent.mkdir(parents=True, exist_ok=True)
+    if not chapter_file.exists():
+        chapter_file.write_text("阿青把药箱交给掌柜。", encoding="utf-8")
+    binding = build_chapter_binding(project_root, chapter)
+    service = ChapterCommitService(project_root)
+    payload = service.build_commit(
+        chapter=chapter,
+        review_result={"blocking_count": 0, "chapter_binding": binding},
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        disambiguation_result={"pending": [], "chapter_binding": binding},
+        extraction_result={
+            **_trusted_commit(chapter)["extraction_result"],
+            "chapter_binding": binding,
+        },
+    )
+    payload["projection_status"]["vector"] = "done"
+    service.persist_commit(payload)
+    return payload
+
+
 def _hit(*, source: str = "bm25", chapter: int = 3) -> SearchResult:
     commit = _trusted_commit(chapter)
     chunk = VectorProjectionWriter(Path("."))._collect_chunks(commit)[0]
@@ -102,20 +134,7 @@ def _hit(*, source: str = "bm25", chapter: int = 3) -> SearchResult:
 
 def _permit_test_hits(monkeypatch, project_root: Path, *, chapter: int = 3) -> None:
     monkeypatch.setattr(rag_context_module, "_retrieval_index_state", lambda _cfg: "ready")
-    commit_path = (
-        project_root
-        / ".story-system"
-        / "commits"
-        / f"chapter_{chapter:03d}.commit.json"
-    )
-    commit_path.parent.mkdir(parents=True, exist_ok=True)
-    commit_path.write_text(
-        json.dumps(
-            _trusted_commit(chapter),
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
+    _write_trusted_commit(project_root, chapter)
 
 
 def _stub_read_only_bm25(monkeypatch, adapter: _FakeAdapter) -> None:
@@ -305,7 +324,7 @@ def test_semantic_retrieval_is_read_only_and_uses_embedded_rows(monkeypatch, tmp
         "IndexManager",
         lambda _cfg: SimpleNamespace(log_rag_query=lambda **_kwargs: None),
     )
-    commit = _trusted_commit(3)
+    commit = _write_trusted_commit(tmp_path, 3)
     chunk = VectorProjectionWriter(tmp_path)._collect_chunks(commit)[0]
     adapter = rag_adapter_module.RAGAdapter(cfg)
     outcome = asyncio.run(
@@ -322,9 +341,6 @@ def test_semantic_retrieval_is_read_only_and_uses_embedded_rows(monkeypatch, tmp
         )
     )
     assert outcome.mode == "vector"
-    commit_path = tmp_path / ".story-system" / "commits" / "chapter_003.commit.json"
-    commit_path.parent.mkdir(parents=True, exist_ok=True)
-    commit_path.write_text(json.dumps(commit, ensure_ascii=False), encoding="utf-8")
     assert not cfg.index_db.exists()
 
     payload = load_rag_assist(

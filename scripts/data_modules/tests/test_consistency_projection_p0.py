@@ -9,6 +9,7 @@ import json
 import pytest
 
 from data_modules.chapter_commit_service import ChapterCommitService
+from data_modules.chapter_content_binding import build_chapter_binding
 from data_modules.config import DataModulesConfig
 from data_modules.index_manager import IndexManager
 from data_modules.index_projection_writer import IndexProjectionWriter
@@ -27,25 +28,37 @@ def _prepare_project(tmp_path):
     return config
 
 
-def _commit(project_root, chapter: int, extraction: dict):
+def _build_commit(project_root, chapter: int, extraction: dict):
+    chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    if not chapter_path.exists():
+        chapter_path.write_text(f"第{chapter}章最终正文\n", encoding="utf-8")
+    binding = build_chapter_binding(project_root, chapter)
     service = ChapterCommitService(project_root)
-    payload = service.build_commit(
+    return service.build_commit(
         chapter=chapter,
-        review_result={"blocking_count": 0},
+        review_result={"blocking_count": 0, "chapter_binding": binding},
         fulfillment_result={
             "planned_nodes": [],
             "covered_nodes": [],
             "missed_nodes": [],
             "extra_nodes": [],
+            "chapter_binding": binding,
         },
-        disambiguation_result={"pending": []},
+        disambiguation_result={"pending": [], "chapter_binding": binding},
         extraction_result={
             "accepted_events": [],
             "state_deltas": [],
             "entity_deltas": [],
+            "chapter_binding": binding,
             **extraction,
         },
     )
+
+
+def _commit(project_root, chapter: int, extraction: dict):
+    service = ChapterCommitService(project_root)
+    payload = _build_commit(project_root, chapter, extraction)
     return service.apply_projections(payload)
 
 
@@ -325,14 +338,10 @@ def test_compaction_tombstones_legacy_payload_resolved_loop(tmp_path):
     assert "legacy-resolved-loop" in store.lifecycle_ids("open_loop")
     assert not store.query(category="open_loop", status="active")
 
-    delayed_create = ChapterCommitService(tmp_path).build_commit(
-        chapter=2,
-        review_result={"blocking_count": 0},
-        fulfillment_result={
-            "planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []
-        },
-        disambiguation_result={"pending": []},
-        extraction_result={
+    delayed_create = _build_commit(
+        tmp_path,
+        2,
+        {
             "accepted_events": [
                 {
                     "event_id": "evt-delayed-legacy",
@@ -342,8 +351,6 @@ def test_compaction_tombstones_legacy_payload_resolved_loop(tmp_path):
                     "payload": {"loop_id": "canonical-after-legacy", "content": "旧回收伏笔"},
                 }
             ],
-            "state_deltas": [],
-            "entity_deltas": [],
         },
     )
     MemoryProjectionWriter(tmp_path).apply(delayed_create)
@@ -431,17 +438,10 @@ def test_closed_legacy_lifecycle_cannot_be_reopened_by_delayed_canonical_create(
             ]
         },
     )
-    delayed_create = ChapterCommitService(tmp_path).build_commit(
-        chapter=2,
-        review_result={"blocking_count": 0},
-        fulfillment_result={
-            "planned_nodes": [],
-            "covered_nodes": [],
-            "missed_nodes": [],
-            "extra_nodes": [],
-        },
-        disambiguation_result={"pending": []},
-        extraction_result={
+    delayed_create = _build_commit(
+        tmp_path,
+        2,
+        {
             "accepted_events": [
                 {
                     "event_id": "evt-original-create",
@@ -451,8 +451,6 @@ def test_closed_legacy_lifecycle_cannot_be_reopened_by_delayed_canonical_create(
                     "payload": {"loop_id": "canonical-loop", "content": "旧伏笔"},
                 }
             ],
-            "state_deltas": [],
-            "entity_deltas": [],
         },
     )
     MemoryProjectionWriter(tmp_path).apply(delayed_create)

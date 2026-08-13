@@ -62,6 +62,8 @@ from typing import Optional, List, Tuple
 # ============================================================================
 from security_utils import sanitize_commit_message, is_git_available, is_git_repo, git_graceful_operation
 from project_locator import resolve_project_root
+from data_modules.chapter_content_binding import verify_commit_content_binding
+from data_modules.projection_log import commit_hash
 
 # Windows 编码兼容性修复
 if sys.platform == "win32":
@@ -211,6 +213,25 @@ __pycache__/
                 shutil.copy2(state_file, target_state_dir / "state.json")
                 copied.append(".webnovel/state.json")
 
+            commit_file = (
+                self.project_root
+                / ".story-system"
+                / "commits"
+                / f"chapter_{chapter_num:03d}.commit.json"
+            )
+            if commit_file.is_file():
+                target_commit = (
+                    backup_path
+                    / ".story-system"
+                    / "commits"
+                    / commit_file.name
+                )
+                target_commit.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(commit_file, target_commit)
+                copied.append(
+                    f".story-system/commits/{commit_file.name}"
+                )
+
             snapshots = sorted(
                 (path for path in backup_dir.glob("snapshot_ch*") if path.is_dir()),
                 key=lambda path: path.name,
@@ -228,7 +249,73 @@ __pycache__/
             print(f"❌ 本地备份失败: {e}")
             return False
 
-    def backup(self, chapter_num: int, chapter_title: str = "") -> bool:
+    def _receipt_path(self, chapter_num: int) -> Path:
+        return (
+            self.project_root
+            / ".webnovel"
+            / "backups"
+            / f"ch{chapter_num:04d}.receipt.json"
+        )
+
+    def _write_receipt(self, payload: dict) -> None:
+        path = self._receipt_path(int(payload["chapter"]))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
+    def _discard_receipt(self, chapter_num: int) -> None:
+        try:
+            self._receipt_path(chapter_num).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _accepted_receipt(self, chapter_num: int) -> dict | None:
+        commit_path = (
+            self.project_root
+            / ".story-system"
+            / "commits"
+            / f"chapter_{chapter_num:03d}.commit.json"
+        )
+        try:
+            payload = json.loads(commit_path.read_text(encoding="utf-8"))
+            status = str(((payload.get("meta") or {}).get("status") or ""))
+        except (OSError, json.JSONDecodeError, AttributeError, TypeError, ValueError) as exc:
+            print(f"❌ 备份失败：无法验证 accepted chapter commit: {exc}")
+            return None
+        binding_ok, binding_code = verify_commit_content_binding(
+            self.project_root,
+            chapter_num,
+            payload,
+        )
+        if status != "accepted" or not binding_ok:
+            reason = binding_code if not binding_ok else f"commit_status_{status or 'missing'}"
+            print(f"❌ 备份失败：当前正文没有可信 accepted binding（{reason}）")
+            return None
+        return {
+            "schema_version": "webnovel-backup-receipt/v1",
+            "chapter": chapter_num,
+            "chapter_binding": payload["chapter_binding"],
+            "chapter_commit_path": commit_path.relative_to(self.project_root).as_posix(),
+            "chapter_commit_hash": commit_hash(payload),
+        }
+
+    def _verify_backup_receipt(self, chapter_num: int) -> bool:
+        try:
+            from data_modules.run_ledger import backup_receipt_trusted
+
+            return backup_receipt_trusted(self.project_root, chapter_num)
+        except Exception:
+            return False
+
+    def backup(
+        self,
+        chapter_num: int,
+        chapter_title: str = "",
+        *,
+        require_accepted_binding: bool = False,
+    ) -> bool:
         """
         备份当前状态（Git commit + tag，或本地备份）
 
@@ -238,15 +325,93 @@ __pycache__/
         """
         print(f"📝 正在备份第 {chapter_num} 章...")
 
+        tag_name = f"ch{chapter_num:04d}"
+        receipt = self._accepted_receipt(chapter_num) if require_accepted_binding else None
+        if require_accepted_binding and receipt is None:
+            return False
+
+        if self.git_available:
+            if receipt is not None:
+                receipt.update({"mode": "git", "tag": tag_name})
+            tag_exists, existing_target, _ = self._run_git_command(
+                ["rev-parse", "--verify", tag_name],
+                check=False,
+            )
+            if tag_exists:
+                if receipt is not None:
+                    receipt_rel = self._receipt_path(chapter_num).relative_to(
+                        self.project_root
+                    ).as_posix()
+                    shown, stored_receipt, _ = self._run_git_command(
+                        ["show", f"{tag_name}:{receipt_rel}"],
+                        check=False,
+                    )
+                    try:
+                        receipt_matches = shown and json.loads(stored_receipt) == receipt
+                    except (json.JSONDecodeError, TypeError):
+                        receipt_matches = False
+                    if receipt_matches:
+                        if self._verify_backup_receipt(chapter_num):
+                            print(f"ℹ️  备份点 {tag_name} 已绑定当前 accepted 正文")
+                            return True
+                        print(f"❌ 备份失败：{tag_name} 缺少可验证的正文或 commit 快照")
+                        return False
+                print(f"❌ 备份失败：不可覆盖或移动已有备份点 {tag_name}")
+                return False
+
         # 如果 Git 不可用，使用本地备份
         if not self.git_available:
-            return self._local_backup(chapter_num)
+            ok = self._local_backup(chapter_num)
+            if ok and receipt is not None:
+                snapshots = sorted(
+                    (self.project_root / ".webnovel" / "backups").glob(
+                        f"snapshot_ch{chapter_num:04d}_*"
+                    )
+                )
+                receipt.update(
+                    {
+                        "mode": "local",
+                        "snapshot": snapshots[-1].name if snapshots else "",
+                    }
+                )
+                self._write_receipt(receipt)
+                if not self._verify_backup_receipt(chapter_num):
+                    self._discard_receipt(chapter_num)
+                    print("❌ 备份失败：本地快照与 accepted 正文或 commit 不一致")
+                    return False
+            return ok
+
+        if receipt is not None:
+            self._write_receipt(receipt)
 
         # Step 1: git add .
         success, stdout, stderr = self._run_git_command(["add", "."], check=False)
         if not success:
+            if receipt is not None:
+                self._discard_receipt(chapter_num)
             print(f"❌ 备份失败：git add 失败: {self._format_git_output(stdout, stderr)}")
             return False
+        if receipt is not None:
+            # These two files are the recovery proof.  Force-stage them even
+            # when a project-level ignore rule would otherwise omit them.
+            required_paths = [
+                str(receipt["chapter_binding"]["path"]),
+                str(receipt["chapter_commit_path"]),
+                self._receipt_path(chapter_num).relative_to(
+                    self.project_root
+                ).as_posix(),
+            ]
+            success, stdout, stderr = self._run_git_command(
+                ["add", "-f", "--", *required_paths],
+                check=False,
+            )
+            if not success:
+                self._discard_receipt(chapter_num)
+                print(
+                    "❌ 备份失败：无法将正文、commit 和 receipt 写入恢复点: "
+                    f"{self._format_git_output(stdout, stderr)}"
+                )
+                return False
 
         # Step 2: git commit
         commit_message = f"Chapter {chapter_num}"
@@ -266,9 +431,40 @@ __pycache__/
         commit_output = self._format_git_output(stdout, stderr)
 
         if not success and "nothing to commit" in commit_output.lower():
-            print("⚠️  本章无变更，跳过提交")
-            return True
+            if receipt is not None:
+                receipt_rel = self._receipt_path(chapter_num).relative_to(
+                    self.project_root
+                ).as_posix()
+                shown, stored_receipt, _ = self._run_git_command(
+                    ["show", f"HEAD:{receipt_rel}"],
+                    check=False,
+                )
+                try:
+                    receipt_matches = shown and json.loads(stored_receipt) == receipt
+                except (json.JSONDecodeError, TypeError):
+                    receipt_matches = False
+                if receipt_matches:
+                    tag_ok, tag_out, tag_err = self._run_git_command(
+                        ["tag", tag_name],
+                        check=False,
+                    )
+                    if tag_ok:
+                        if receipt is None or self._verify_backup_receipt(chapter_num):
+                            print(f"✅ Git tag 已从已验证的 receipt 恢复: {tag_name}")
+                            return True
+                        print(f"❌ 备份失败：{tag_name} 中的正文或 commit 与 receipt 不一致")
+                        return False
+                    print(
+                        f"❌ 创建 tag 失败: "
+                        f"{self._format_git_output(tag_out, tag_err)}"
+                    )
+                    return False
+                self._discard_receipt(chapter_num)
+            print("⚠️  本章无变更，无法生成新的不可变备份点")
+            return False
         elif not success:
+            if receipt is not None:
+                self._discard_receipt(chapter_num)
             print(f"❌ 备份失败：git commit 失败")
             if commit_output:
                 print(commit_output)
@@ -278,17 +474,16 @@ __pycache__/
         print(f"✅ Git 提交完成: {commit_message}")
 
         # Step 3: git tag
-        tag_name = f"ch{chapter_num:04d}"
-
-        # 删除旧 tag（如果存在）
-        self._run_git_command(["tag", "-d", tag_name], check=False)
-
         success, stdout, stderr = self._run_git_command(["tag", tag_name], check=False)
         if not success:
-            print(f"⚠️  创建 tag 失败（非致命）: {self._format_git_output(stdout, stderr)}")
+            print(f"❌ 创建 tag 失败: {self._format_git_output(stdout, stderr)}")
+            return False
         else:
             print(f"✅ Git tag 已创建: {tag_name}")
 
+        if receipt is not None and not self._verify_backup_receipt(chapter_num):
+            print(f"❌ 备份失败：{tag_name} 不包含与 receipt 匹配的正文和 commit")
+            return False
         return True
 
     def rollback(self, chapter_num: int) -> bool:
@@ -463,6 +658,11 @@ def main():
 
     parser.add_argument('--chapter', type=int, help='备份章节号')
     parser.add_argument('--chapter-title', help='章节标题（可选）')
+    parser.add_argument(
+        '--require-accepted-binding',
+        action='store_true',
+        help='写章流程使用：只备份与当前正文匹配的 accepted commit',
+    )
     parser.add_argument('--rollback', type=int, metavar='CHAPTER', help='回滚到指定章节')
     parser.add_argument('--diff', nargs=2, type=int, metavar=('A', 'B'), help='对比两个版本')
     parser.add_argument('--create-branch', type=int, metavar='CHAPTER', help='从指定章节创建分支')
@@ -484,7 +684,13 @@ def main():
 
     # 执行操作
     if args.chapter:
-        manager.backup(args.chapter, args.chapter_title or "")
+        ok = manager.backup(
+            args.chapter,
+            args.chapter_title or "",
+            require_accepted_binding=args.require_accepted_binding,
+        )
+        if not ok:
+            sys.exit(1)
 
     elif args.rollback:
         manager.rollback(args.rollback)

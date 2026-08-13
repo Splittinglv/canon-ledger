@@ -13,6 +13,7 @@ def _ensure_scripts_on_path() -> None:
 
 _ensure_scripts_on_path()
 
+from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
 from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
 from data_modules.rag_adapter import StoreOutcome  # noqa: E402
 from data_modules.projection_log import (  # noqa: E402
@@ -24,6 +25,26 @@ from data_modules.projection_log import (  # noqa: E402
     projection_status_from_run,
     read_projection_runs,
 )
+
+
+def _build_bound_commit(service: ChapterCommitService, **kwargs):
+    chapter = int(kwargs["chapter"])
+    chapter_path = service.project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    if not chapter_path.exists():
+        chapter_path.write_text(f"第{chapter}章测试正文\n", encoding="utf-8")
+    binding = build_chapter_binding(service.project_root, chapter)
+    for artifact_name in (
+        "review_result",
+        "fulfillment_result",
+        "disambiguation_result",
+        "extraction_result",
+    ):
+        kwargs[artifact_name] = {
+            **kwargs[artifact_name],
+            "chapter_binding": dict(binding),
+        }
+    return service.build_commit(**kwargs)
 
 
 def test_projection_log_appends_and_reads_jsonl(tmp_path):
@@ -89,7 +110,8 @@ def test_chapter_commit_service_writes_projection_log(tmp_path):
     (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
 
     service = ChapterCommitService(tmp_path)
-    payload = service.build_commit(
+    payload = _build_bound_commit(
+        service,
         chapter=7,
         review_result={"blocking_count": 1},
         fulfillment_result={
@@ -120,7 +142,8 @@ def test_chapter_commit_service_marks_vector_store_zero_as_failed(monkeypatch, t
     )
 
     service = ChapterCommitService(tmp_path)
-    payload = service.build_commit(
+    payload = _build_bound_commit(
+        service,
         chapter=8,
         review_result={"blocking_count": 0},
         fulfillment_result={
@@ -165,7 +188,8 @@ def test_chapter_commit_service_records_bm25_only_vector_as_skipped(monkeypatch,
     )
 
     service = ChapterCommitService(tmp_path)
-    payload = service.build_commit(
+    payload = _build_bound_commit(
+        service,
         chapter=9,
         review_result={"blocking_count": 0},
         fulfillment_result={

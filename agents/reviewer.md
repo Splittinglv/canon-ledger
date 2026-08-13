@@ -36,6 +36,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 
 - `chapter`：章节号
 - `chapter_file`：正文文件路径
+- `chapter_binding`：调用方在审查开始前生成的正文内容绑定；输出时必须原样回传
 - `project_root`：项目根目录
 - `scripts_dir`：脚本目录
 
@@ -100,6 +101,13 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 ```json
 {
   "chapter": 100,
+  "chapter_binding": {
+    "schema_version": "webnovel-chapter-content-binding/v1",
+    "chapter": 100,
+    "path": "正文/第0100章-标题.md",
+    "sha256": "<64位十六进制摘要>",
+    "bytes": 12345
+  },
   "issues": [
     {
       "severity": "critical | high | medium | low",

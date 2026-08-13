@@ -15,17 +15,39 @@ def _ensure_scripts_on_path() -> None:
 
 _ensure_scripts_on_path()
 
+from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
 from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
 from data_modules.projection_log import append_projection_run, read_projection_runs  # noqa: E402
 from data_modules.projections import replay_projections, retry_projection  # noqa: E402
 from data_modules.vector_projection_writer import VectorProjectionWriter  # noqa: E402
 
 
+def _build_bound_commit(service: ChapterCommitService, **kwargs):
+    chapter = int(kwargs["chapter"])
+    chapter_path = service.project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    if not chapter_path.exists():
+        chapter_path.write_text(f"第{chapter}章测试正文\n", encoding="utf-8")
+    binding = build_chapter_binding(service.project_root, chapter)
+    for artifact_name in (
+        "review_result",
+        "fulfillment_result",
+        "disambiguation_result",
+        "extraction_result",
+    ):
+        kwargs[artifact_name] = {
+            **kwargs[artifact_name],
+            "chapter_binding": dict(binding),
+        }
+    return service.build_commit(**kwargs)
+
+
 def _make_rejected_commit(project_root: Path, chapter: int) -> None:
     (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
     (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
     service = ChapterCommitService(project_root)
-    payload = service.build_commit(
+    payload = _build_bound_commit(
+        service,
         chapter=chapter,
         review_result={"blocking_count": 1},
         fulfillment_result={"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
@@ -39,7 +61,8 @@ def _make_accepted_commit_with_event(project_root: Path, chapter: int) -> None:
     (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
     (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
     service = ChapterCommitService(project_root)
-    payload = service.build_commit(
+    payload = _build_bound_commit(
+        service,
         chapter=chapter,
         review_result={"blocking_count": 0},
         fulfillment_result={"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
@@ -107,6 +130,17 @@ def test_retry_projection_rejects_filename_meta_chapter_mismatch(tmp_path):
     assert report["error"] == "commit_chapter_mismatch"
 
 
+def test_retry_projection_rejects_commit_after_manuscript_changed(tmp_path):
+    _make_accepted_commit_with_event(tmp_path, chapter=3)
+    chapter_path = tmp_path / "正文" / "第0003章.md"
+    chapter_path.write_text("第3章正文已修改\n", encoding="utf-8")
+
+    report = retry_projection(tmp_path, chapter=3)
+
+    assert report["ok"] is False
+    assert report["error"] == "chapter_content_hash_mismatch"
+
+
 def test_retry_projection_backfills_only_vector_after_key_is_configured(
     tmp_path,
     monkeypatch,
@@ -114,7 +148,8 @@ def test_retry_projection_backfills_only_vector_after_key_is_configured(
     (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
     service = ChapterCommitService(tmp_path)
-    payload = service.build_commit(
+    payload = _build_bound_commit(
+        service,
         chapter=4,
         review_result={"blocking_count": 0},
         fulfillment_result={
@@ -176,7 +211,8 @@ def test_retry_projection_refreshes_legacy_fact_filter_marker(tmp_path, monkeypa
     (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
     service = ChapterCommitService(tmp_path)
-    payload = service.build_commit(
+    payload = _build_bound_commit(
+        service,
         chapter=4,
         review_result={"blocking_count": 0},
         fulfillment_result={

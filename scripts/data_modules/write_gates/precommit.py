@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 try:
@@ -10,6 +11,7 @@ except ImportError:  # pragma: no cover
     from scripts.chapter_paths import find_chapter_file
 
 from ..artifact_validator import validate_commit_artifact_files
+from ..chapter_content_binding import verify_chapter_binding
 from ..project_phase import (
     COMMIT_ARTIFACT_FILES,
     PHASE_INIT_READY,
@@ -38,6 +40,46 @@ def _artifact_paths(project_root: Path) -> dict[str, Path]:
         "disambiguation_result": project_root / COMMIT_ARTIFACT_FILES[2],
         "extraction_result": project_root / COMMIT_ARTIFACT_FILES[3],
     }
+
+
+def _binding_issue_for_artifact(
+    project_root: Path,
+    chapter: int,
+    artifact: str,
+    path: Path,
+) -> dict | None:
+    """Return a blocker when an artifact is not bound to the current manuscript."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        # The authoritative artifact validator reports these failures with more
+        # specific repair instructions.
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    binding = payload.get("chapter_binding")
+    if not isinstance(binding, dict):
+        return issue(
+            "artifact.chapter_binding_missing",
+            message=f"{artifact} is not bound to chapter {chapter} manuscript",
+            path=str(path),
+            impact="无法证明审查或事实提取针对当前正文，继续提交可能固化旧稿事实。",
+            repair="基于当前正文重新运行 reviewer/data-agent，生成带 chapter_binding 的 artifact。",
+            details={"artifact": artifact, "binding_code": "chapter_binding_missing"},
+        )
+
+    ok, code = verify_chapter_binding(project_root, chapter, binding)
+    if ok:
+        return None
+    return issue(
+        "artifact.chapter_binding_invalid",
+        message=f"{artifact} chapter binding is not current: {code}",
+        path=str(path),
+        impact="artifact 对应的正文与当前磁盘正文不一致，不能作为本次 commit 输入。",
+        repair="重新审查当前正文并重新生成全部 data artifacts 后再提交。",
+        details={"artifact": artifact, "binding_code": code},
+    )
 
 
 def run_precommit_gate(project_root: Path, chapter: int) -> dict:
@@ -106,6 +148,17 @@ def run_precommit_gate(project_root: Path, chapter: int) -> dict:
                 details=item,
             )
         )
+
+    if chapter_file is not None:
+        for artifact, path in paths.items():
+            binding_issue = _binding_issue_for_artifact(
+                project_root,
+                chapter,
+                artifact,
+                path,
+            )
+            if binding_issue is not None:
+                errors.append(binding_issue)
 
     return gate_report(
         stage="precommit",

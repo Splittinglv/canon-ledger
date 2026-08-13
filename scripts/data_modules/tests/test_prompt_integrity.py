@@ -50,7 +50,7 @@ SUBAGENT_PROMPT_FILES = (
 
 # webnovel.py 注册的子命令（从 add_parser 提取）
 REGISTERED_CLI_SUBCOMMANDS = {
-    "where", "preflight", "project-status", "doctor", "write-gate", "projections", "user-report",
+    "where", "preflight", "project-status", "doctor", "write-gate", "chapter-binding", "projections", "user-report",
     "run-ledger", "run-log", "use",
     "index", "state", "rag", "style", "entity", "context", "memory",
     "migrate", "status", "update-state", "backup", "archive",

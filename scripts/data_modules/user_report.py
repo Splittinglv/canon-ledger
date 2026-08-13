@@ -29,6 +29,8 @@ if __package__ in {None, ""}:  # pragma: no cover - direct script entry
         validate_review_result,
     )
     from data_modules.error_catalog import AuthorError, classify_issue
+    from data_modules.chapter_content_binding import verify_commit_content_binding
+    from data_modules.chapter_content_binding import verify_chapter_binding
     from data_modules.project_phase import (
         COMMIT_ARTIFACT_FILES,
         INIT_REQUIRED_DIRS,
@@ -37,13 +39,14 @@ if __package__ in {None, ""}:  # pragma: no cover - direct script entry
     )
     from data_modules.project_status import build_project_status
     from data_modules.projection_log import (
-        latest_projection_run,
+        commit_hash,
         projection_run_failed,
         projection_run_pending,
         projection_status_from_run,
         read_projection_runs,
     )
     from data_modules.review_author_view import build_review_author_view
+    from data_modules.run_ledger import backup_receipt_trusted
 else:
     from .artifact_validator import (
         OK_PROJECTION_STATUSES,
@@ -55,6 +58,8 @@ else:
         validate_review_result,
     )
     from .error_catalog import AuthorError, classify_issue
+    from .chapter_content_binding import verify_commit_content_binding
+    from .chapter_content_binding import verify_chapter_binding
     from .project_phase import (
         COMMIT_ARTIFACT_FILES,
         INIT_REQUIRED_DIRS,
@@ -63,13 +68,14 @@ else:
     )
     from .project_status import build_project_status
     from .projection_log import (
-        latest_projection_run,
+        commit_hash,
         projection_run_failed,
         projection_run_pending,
         projection_status_from_run,
         read_projection_runs,
     )
     from .review_author_view import build_review_author_view
+    from .run_ledger import backup_receipt_trusted
 
 
 SCHEMA_VERSION = "webnovel-user-report/v1"
@@ -406,8 +412,13 @@ def _add_projection_issues(
     chapter: int,
     commit_payload: dict[str, Any],
 ) -> None:
-    runs = read_projection_runs(project_root, chapter=chapter)
-    latest_run = latest_projection_run(project_root, chapter=chapter)
+    current_hash = commit_hash(commit_payload)
+    runs = [
+        run
+        for run in read_projection_runs(project_root, chapter=chapter)
+        if str(run.get("commit_hash") or "") == current_hash
+    ]
+    latest_run = runs[-1] if runs else None
     latest_statuses = projection_status_from_run(latest_run) if latest_run else {}
     status_source = "projection_log" if latest_statuses else "commit"
     statuses = latest_statuses or _projection_status_from_commit(commit_payload)
@@ -448,13 +459,16 @@ def _add_projection_issues(
 
 
 def _backup_evidence(project_root: Path, chapter: int) -> tuple[bool, str]:
-    backup_dir = project_root / ".webnovel" / "backups"
-    if backup_dir.is_dir():
-        patterns = (f"ch{chapter:04d}*", f"*{chapter:04d}*", f"*第{chapter}章*")
-        for pattern in patterns:
-            if any(backup_dir.glob(pattern)):
-                return True, _rel(project_root, backup_dir)
-    return False, _rel(project_root, backup_dir)
+    receipt_path = (
+        project_root
+        / ".webnovel"
+        / "backups"
+        / f"ch{chapter:04d}.receipt.json"
+    )
+    return backup_receipt_trusted(project_root, chapter), _rel(
+        project_root,
+        receipt_path,
+    )
 
 
 def _status_from_issues(report: dict[str, Any], *, core_file_count: int = 0) -> str:
@@ -555,10 +569,33 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
     else:
         core_files += 1
         status = str((commit_payload.get("meta") or {}).get("status") or "")
-        file_status = "completed" if status == "accepted" else "failed"
+        binding_trusted, binding_code = verify_commit_content_binding(
+            project_root,
+            chapter,
+            commit_payload,
+        )
+        file_status = (
+            "completed" if status == "accepted" and binding_trusted else "failed"
+        )
         note = f"status={status or 'missing'}"
+        if not binding_trusted:
+            note += f", binding={binding_code}"
         _add_file(report, label="本章事实提交", path=_rel(project_root, commit_path), status=file_status, note=note)
-        if status == "rejected":
+        if status == "accepted" and not binding_trusted:
+            _add_manual_issue(
+                report,
+                "must_handle",
+                code="chapter_commit_stale",
+                title="本章事实提交已过期",
+                reason=f"accepted commit 与当前正文不一致（{binding_code}）。",
+                impact="旧审查和事实提取不能为当前正文背书。",
+                next_action="基于当前正文重新运行审查、data 和 chapter-commit。",
+                command=f"/webnovel-write {chapter}",
+                source="chapter_commit",
+                path=_rel(project_root, commit_path),
+                message=binding_code,
+            )
+        elif status == "rejected":
             _add_classified_issue(
                 report,
                 {"code": "chapter-commit rejected", "message": "chapter commit rejected"},
@@ -579,7 +616,7 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
                 source="chapter_commit",
                 path=_rel(project_root, commit_path),
             )
-        else:
+        elif binding_trusted:
             _add_projection_issues(report, project_root, chapter, commit_payload)
 
     backup_ok, backup_path = _backup_evidence(project_root, chapter)
@@ -596,7 +633,7 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             "needs_confirmation",
             code="backup_unconfirmed",
             title="备份状态未确认",
-            reason="没有在 `.webnovel/backups` 找到本章备份证据。",
+            reason="没有找到与当前 accepted commit 匹配的备份 receipt 和恢复点。",
             impact="本章事实已生成，但回滚保障需要再确认。",
             next_action="运行备份命令或重新执行写章收尾步骤。",
             command=f"/webnovel-write {chapter}",
@@ -646,12 +683,51 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
             message="review_results missing",
         )
     else:
-        core_files += 1
+        try:
+            review_chapter = int(review_result.get("chapter") or 0)
+        except (TypeError, ValueError):
+            review_chapter = 0
+        binding_ok, binding_code = verify_chapter_binding(
+            project_root,
+            chapter,
+            review_result.get("chapter_binding"),
+        )
+        review_trusted = review_chapter == int(chapter) and binding_ok
         blocking_count = int(review_result.get("blocking_count") or 0)
-        _add_file(report, label="审查结果", path=_rel(project_root, review_path), status="completed", note=f"blocking={blocking_count}")
-        view = build_review_author_view({"review_result": review_result})
-        report["review_author_view"] = view.to_dict()
-        if blocking_count > 0:
+        _add_file(
+            report,
+            label="审查结果",
+            path=_rel(project_root, review_path),
+            status="completed" if review_trusted else "failed",
+            note=(
+                f"blocking={blocking_count}"
+                if review_trusted
+                else f"stale={binding_code if review_chapter == int(chapter) else 'artifact_chapter_mismatch'}"
+            ),
+        )
+        if not review_trusted:
+            _add_manual_issue(
+                report,
+                "must_handle",
+                code="review_result_stale",
+                title="审查结果已过期",
+                reason="review_results 与当前章节或正文内容不一致。",
+                impact="旧审查不能为当前正文背书。",
+                next_action="重新运行本章 reviewer 和 review-pipeline。",
+                command="/webnovel-review",
+                source="review",
+                path=_rel(project_root, review_path),
+                message=(
+                    binding_code
+                    if review_chapter == int(chapter)
+                    else "artifact_chapter_mismatch"
+                ),
+            )
+        else:
+            core_files += 1
+            view = build_review_author_view({"review_result": review_result})
+            report["review_author_view"] = view.to_dict()
+        if review_trusted and blocking_count > 0:
             _add_manual_issue(
                 report,
                 "must_handle",

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import subprocess
 
 import backup_manager
 from backup_manager import GitBackupManager
+from data_modules.chapter_commit_service import ChapterCommitService
+from data_modules.chapter_content_binding import build_chapter_binding
 
 
 def test_backup_manager_gitignore_excludes_env(tmp_path, monkeypatch):
@@ -37,6 +40,34 @@ def _run_git(project_root, *args):
 def _configure_git_identity(project_root):
     assert _run_git(project_root, "config", "user.name", "Test Author").returncode == 0
     assert _run_git(project_root, "config", "user.email", "author@example.com").returncode == 0
+
+
+def _persist_accepted_bound_commit(project_root, chapter=1):
+    chapter_file = project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_file.parent.mkdir(parents=True, exist_ok=True)
+    chapter_file.write_text(f"第{chapter}章最终正文\n", encoding="utf-8")
+    binding = build_chapter_binding(project_root, chapter)
+    service = ChapterCommitService(project_root)
+    payload = service.build_commit(
+        chapter=chapter,
+        review_result={"blocking_count": 0, "chapter_binding": binding},
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        disambiguation_result={"pending": [], "chapter_binding": binding},
+        extraction_result={
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [],
+            "chapter_binding": binding,
+        },
+    )
+    service.persist_commit(payload)
+    return chapter_file
 
 
 def test_backup_aborts_when_git_commit_fails_without_identity(tmp_path, monkeypatch, capsys):
@@ -133,3 +164,84 @@ def test_local_backup_copies_manuscript_when_git_unavailable(tmp_path, monkeypat
     snapshots = sorted((webnovel_dir / "backups").glob("snapshot_ch*"))
     assert len(snapshots) == 10
     assert snapshot not in snapshots
+
+
+def test_backup_with_required_accepted_binding_succeeds(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    assert _run_git(project_root, "init", "-b", "main").returncode == 0
+    _configure_git_identity(project_root)
+    _persist_accepted_bound_commit(project_root, chapter=1)
+
+    manager = GitBackupManager(str(project_root))
+
+    assert manager.backup(1, require_accepted_binding=True) is True
+    assert _run_git(project_root, "rev-parse", "--verify", "ch0001").returncode == 0
+    receipt = json.loads(
+        (project_root / ".webnovel" / "backups" / "ch0001.receipt.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert receipt["chapter"] == 1
+    assert receipt["mode"] == "git"
+
+
+def test_backup_with_required_binding_rejects_changed_manuscript(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    assert _run_git(project_root, "init", "-b", "main").returncode == 0
+    _configure_git_identity(project_root)
+    chapter_file = _persist_accepted_bound_commit(project_root, chapter=1)
+    chapter_file.write_text("第1章正文已在 commit 后修改\n", encoding="utf-8")
+
+    manager = GitBackupManager(str(project_root))
+
+    assert manager.backup(1, require_accepted_binding=True) is False
+    assert _run_git(project_root, "rev-parse", "--verify", "ch0001").returncode != 0
+
+
+def test_backup_never_moves_existing_chapter_tag(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    assert _run_git(project_root, "init", "-b", "main").returncode == 0
+    _configure_git_identity(project_root)
+    _persist_accepted_bound_commit(project_root, chapter=1)
+    manager = GitBackupManager(str(project_root))
+
+    assert manager.backup(1, require_accepted_binding=True) is True
+    original_tag_target = _run_git(project_root, "rev-parse", "ch0001").stdout.strip()
+    (project_root / "unrelated.md").write_text("后续提交\n", encoding="utf-8")
+    assert _run_git(project_root, "add", "unrelated.md").returncode == 0
+    assert _run_git(project_root, "commit", "-m", "unrelated follow-up").returncode == 0
+    head_before_repeat = _run_git(project_root, "rev-parse", "HEAD").stdout.strip()
+
+    assert manager.backup(1, require_accepted_binding=True) is True
+    assert _run_git(project_root, "rev-parse", "ch0001").stdout.strip() == original_tag_target
+    assert _run_git(project_root, "rev-parse", "HEAD").stdout.strip() == head_before_repeat
+
+
+def test_strict_git_backup_forces_recovery_files_ignored_by_project(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    assert _run_git(project_root, "init", "-b", "main").returncode == 0
+    _configure_git_identity(project_root)
+    _persist_accepted_bound_commit(project_root, chapter=1)
+    (project_root / ".gitignore").write_text(
+        "正文/\n.story-system/commits/\n",
+        encoding="utf-8",
+    )
+    manager = GitBackupManager(str(project_root))
+
+    assert manager.backup(1, require_accepted_binding=True) is True
+    assert (
+        _run_git(project_root, "show", "ch0001:正文/第0001章.md").stdout
+        == "第1章最终正文\n"
+    )
+    assert (
+        _run_git(
+            project_root,
+            "show",
+            "ch0001:.story-system/commits/chapter_001.commit.json",
+        ).returncode
+        == 0
+    )

@@ -140,7 +140,8 @@ def _eval_data_agent_boundary(root: Path, case: dict[str, Any]) -> dict[str, Any
     path = _plugin_root(root) / "agents" / "data-agent.md"
     text = _read(path)
     required = [
-        "产出三份 JSON 到 `.webnovel/tmp/`",
+        "三份 JSON",
+        "`.webnovel/tmp/`",
         "不直接写 state/index/summaries/memory",
         "chapter-commit",
     ]
@@ -192,19 +193,35 @@ def _eval_commit_projection_runtime(root: Path, case: dict[str, Any]) -> dict[st
     scripts_dir = _plugin_root(root) / "scripts"
     if str(scripts_dir) not in sys.path:
         sys.path.insert(0, str(scripts_dir))
+    from data_modules.chapter_content_binding import build_chapter_binding
     from data_modules.chapter_commit_service import ChapterCommitService
 
     with tempfile.TemporaryDirectory() as tmp:
         project_root = Path(tmp)
         (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
         (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+        chapter_file = project_root / "正文" / "第0001章.md"
+        chapter_file.parent.mkdir(parents=True, exist_ok=True)
+        chapter_file.write_text("第1章行为评估正文\n", encoding="utf-8")
+        binding = build_chapter_binding(project_root, 1)
         service = ChapterCommitService(project_root)
         payload = service.build_commit(
             chapter=1,
-            review_result={"blocking_count": 1},
-            fulfillment_result={"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
-            disambiguation_result={"pending": []},
-            extraction_result={"accepted_events": [], "state_deltas": [], "entity_deltas": []},
+            review_result={"blocking_count": 1, "chapter_binding": binding},
+            fulfillment_result={
+                "planned_nodes": [],
+                "covered_nodes": [],
+                "missed_nodes": [],
+                "extra_nodes": [],
+                "chapter_binding": binding,
+            },
+            disambiguation_result={"pending": [], "chapter_binding": binding},
+            extraction_result={
+                "accepted_events": [],
+                "state_deltas": [],
+                "entity_deltas": [],
+                "chapter_binding": binding,
+            },
         )
         projected = service.apply_projections(payload)
         state_path = project_root / ".webnovel" / "state.json"
@@ -257,7 +274,14 @@ def _make_report_project(project_root: Path) -> None:
     )
 
 
+def _report_binding(project_root: Path, chapter: int) -> dict[str, Any]:
+    from data_modules.chapter_content_binding import build_chapter_binding
+
+    return build_chapter_binding(project_root, chapter)
+
+
 def _write_report_artifacts(project_root: Path, *, chapter: int = 1, review_skipped: bool = False, blocking: bool = False) -> None:
+    binding = _report_binding(project_root, chapter)
     issues = []
     if blocking:
         issues.append(
@@ -277,6 +301,7 @@ def _write_report_artifacts(project_root: Path, *, chapter: int = 1, review_skip
         "blocking_count": 1 if blocking else 0,
         "has_blocking": bool(blocking),
         "summary": "minimal mode: reviewer skipped" if review_skipped else "ok",
+        "chapter_binding": binding,
     }
     if review_skipped:
         review["review_skipped"] = True
@@ -295,28 +320,65 @@ def _write_report_artifacts(project_root: Path, *, chapter: int = 1, review_skip
     (project_root / "审查报告" / f"第{chapter}章审查报告.md").write_text("# 审查报告\n", encoding="utf-8")
     _write_json(
         project_root / ".webnovel" / "tmp" / "fulfillment_result.json",
-        {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
+        {
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
     )
-    _write_json(project_root / ".webnovel" / "tmp" / "disambiguation_result.json", {"pending": []})
+    _write_json(
+        project_root / ".webnovel" / "tmp" / "disambiguation_result.json",
+        {"pending": [], "chapter_binding": binding},
+    )
     _write_json(
         project_root / ".webnovel" / "tmp" / "extraction_result.json",
-        {"accepted_events": [], "state_deltas": [], "entity_deltas": [], "summary_text": "摘要"},
+        {
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [],
+            "summary_text": "摘要",
+            "chapter_binding": binding,
+        },
     )
 
 
 def _commit_payload(
     *,
+    project_root: Path,
     chapter: int = 1,
     status: str = "accepted",
     projection_status: dict[str, str] | None = None,
     review_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    binding = _report_binding(project_root, chapter)
+    review = dict(review_result or {"blocking_count": 0})
+    review["chapter_binding"] = binding
     return {
-        "meta": {"chapter": chapter, "status": status},
-        "review_result": review_result or {"blocking_count": 0},
-        "fulfillment_result": {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
-        "disambiguation_result": {"pending": []},
-        "extraction_result": {"accepted_events": [], "state_deltas": [], "entity_deltas": [], "summary_text": "摘要"},
+        "meta": {
+            "schema_version": "story-system/v1",
+            "chapter": chapter,
+            "status": status,
+        },
+        "chapter_binding": binding,
+        "provenance": {"chapter_binding": binding},
+        "review_result": review,
+        "fulfillment_result": {
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        "disambiguation_result": {"pending": [], "chapter_binding": binding},
+        "extraction_result": {
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [],
+            "summary_text": "摘要",
+            "chapter_binding": binding,
+        },
         "projection_status": projection_status
         or {"state": "done", "index": "skipped", "summary": "skipped", "memory": "skipped", "vector": "skipped"},
     }
@@ -343,6 +405,7 @@ def _eval_user_report_probe(root: Path, case: dict[str, Any]) -> dict[str, Any]:
             _write_json(
                 commit_path,
                 _commit_payload(
+                    project_root=project_root,
                     review_result={
                         "blocking_count": 0,
                         "review_skipped": True,
@@ -365,7 +428,10 @@ def _eval_user_report_probe(root: Path, case: dict[str, Any]) -> dict[str, Any]:
             ok = report["overall_status"] != "completed" and bool(report["issues"]["must_handle"])
             evidence = [report["overall_status"], json.dumps(report["issues"], ensure_ascii=False)]
         elif scenario == "projection_retry_auto_handled":
-            failed_payload = _commit_payload(projection_status={"state": "done", "index": "failed:locked", "summary": "skipped", "memory": "skipped", "vector": "skipped"})
+            failed_payload = _commit_payload(
+                project_root=project_root,
+                projection_status={"state": "done", "index": "failed:locked", "summary": "skipped", "memory": "skipped", "vector": "skipped"},
+            )
             _write_json(commit_path, failed_payload)
             append_projection_run(project_root, failed_payload, {"index": {"status": "failed:locked"}}, commit_path=commit_path)
             append_projection_run(

@@ -21,7 +21,7 @@ description: 按上下文→起草→事实审查→提交→备份产出章节�
 
 - 禁止并步、跳步、伪造审查
 - 必须使用 `Task` 工具调用指定 subagent；不得用主流程口头代替 subagent 输出
-- 审查只跑一轮；blocking 事实问题定点修复或经用户裁决后才进 Step 4/5
+- 每个正文字节版本只审查一轮；blocking 事实问题定点修复后，因正文哈希已变更，必须对最终版本重新调用 reviewer 并覆盖旧审查 artifact；经用户裁决的未修改版本可沿用当前 binding
 - 失败只补跑失败步骤，不回退
 - 默认不加载写法教程、爽点库、Anti-AI / 润色材料；不把书面语/口语、句式、修辞当问题来改正文
 - 参考资料按步骤按需加载，只取一致性事实
@@ -149,11 +149,21 @@ Task:
 
 必须使用 `Task` 工具调用 `reviewer`，不得由主流程伪造审查 JSON。
 
+调用 reviewer 前先固化待审正文的内容绑定：
+
+```bash
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" chapter-binding \
+  --chapter {chapter_num} \
+  --out "${PROJECT_ROOT}/.webnovel/tmp/chapter_binding.json" \
+  --format json
+```
+
 Use the Task tool to run the plugin agent `reviewer`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/reviewer.md`, then execute that spec. Pass Task `model` only when `subagent-models` says `agents["reviewer"].pass_to_task` is true.
 
 Task:
 - chapter={chapter_num}
 - chapter_file=${CHAPTER_FILE}
+- chapter_binding_file=${PROJECT_ROOT}/.webnovel/tmp/chapter_binding.json（读取后将完整对象原样写入输出 JSON 顶层 `chapter_binding`）
 - project_root=${PROJECT_ROOT}
 - scripts_dir=${SCRIPTS_DIR}
 - 只返回严格的 reviewer schema JSON，不写任何文件。
@@ -182,17 +192,18 @@ reviewer 跳过、失败、输出不完整、`--minimal` 写 no-review artifact�
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" review-pipeline \
   --chapter {chapter_num} \
   --review-results "${PROJECT_ROOT}/.webnovel/tmp/review_results.json" \
+  --chapter-binding "${PROJECT_ROOT}/.webnovel/tmp/chapter_binding.json" \
   --metrics-out "${PROJECT_ROOT}/.webnovel/tmp/review_metrics.json" \
   --report-file "审查报告/第{chapter_num}章审查报告.md" \
   --save-metrics
 ```
 
-审查只跑一轮，reviewer 只调用一次。只处理可验证的事实问题。`blocking=true` 的事实问题在不改剧情、不破设定、**不改文风**的前提下定点修复后直接进 Step 4，不重新调用 reviewer；确实无法修复的 blocking 问题用 `AskQuestion` 让用户裁决（接受当前版本 / 手动修复 / 放弃）；若 AskQuestion 不可用，在聊天里给出同样的 2–3 个有限选项。非 blocking 的事实问题交给 Step 4。口吻、句式、修辞类意见一律忽略。`--fast` 只检查 setting/timeline/continuity。
+每个正文字节版本只跑一轮审查。只处理可验证的事实问题。`blocking=true` 的事实问题在不改剧情、不破设定、**不改文风**的前提下定点修复；任何字节变更都会使旧 `chapter_binding`、review artifact 和 metrics 失效，因此必须先重新生成 binding，再对最终正文重新调用 reviewer + review-pipeline，然后才能进 Step 5。确实无法修复的 blocking 问题用 `AskQuestion` 让用户裁决（接受当前版本 / 手动修复 / 放弃）；若 AskQuestion 不可用，在聊天里给出同样的 2–3 个有限选项。非 blocking 的事实问题交给 Step 4；只要 Step 4 改了正文，同样必须重新审查最终版。口吻、句式、修辞类意见一律忽略。`--fast` 只检查 setting/timeline/continuity。
 
 `--minimal` 不调用 reviewer 与 `review-pipeline`，但必须**覆盖写入**本章新的 no-review `review_results.json`（禁止复用旧 artifact），使 Step 5 提交链有有效 `--review-result`（成功标准“审查已落库”对 `--minimal` 的豁免仍成立）：
 
 ```bash
-python -X utf8 -c "import json,os; from pathlib import Path; root=Path(os.environ['PROJECT_ROOT']); ch=int('{chapter_num}'); p=root/'.webnovel'/'tmp'/'review_results.json'; p.parent.mkdir(parents=True,exist_ok=True); p.write_text(json.dumps({'chapter':ch,'issues':[],'issues_count':0,'blocking_count':0,'has_blocking':False,'summary':'minimal mode: reviewer skipped by user-selected --minimal flow','review_skipped':True,'review_mode':'minimal'},ensure_ascii=False,indent=2),encoding='utf-8')"
+python -X utf8 -c "import json,os; from pathlib import Path; root=Path(os.environ['PROJECT_ROOT']); ch=int('{chapter_num}'); b=json.loads((root/'.webnovel'/'tmp'/'chapter_binding.json').read_text(encoding='utf-8')); p=root/'.webnovel'/'tmp'/'review_results.json'; p.parent.mkdir(parents=True,exist_ok=True); p.write_text(json.dumps({'chapter':ch,'chapter_binding':b,'issues':[],'issues_count':0,'blocking_count':0,'has_blocking':False,'summary':'minimal mode: reviewer skipped by user-selected --minimal flow','review_skipped':True,'review_mode':'minimal'},ensure_ascii=False,indent=2),encoding='utf-8')"
 ```
 
 ### Step 4：事实修补
@@ -212,6 +223,7 @@ Use the Task tool to run the plugin agent `data-agent`. If Task cannot target a 
 Task:
 - chapter={chapter_num}
 - chapter_file=${CHAPTER_FILE}
+- chapter_binding_file=${PROJECT_ROOT}/.webnovel/tmp/chapter_binding.json（必须原样复制到三份 artifact 顶层）
 - project_root=${PROJECT_ROOT}
 - scripts_dir=${SCRIPTS_DIR}
 - output_dir=${PROJECT_ROOT}/.webnovel/tmp
@@ -295,7 +307,8 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
 ```bash
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" backup \
   --chapter {chapter_num} \
-  --chapter-title "{title}"
+  --chapter-title "{title}" \
+  --require-accepted-binding
 ```
 
 备份必须以解析后的 `PROJECT_ROOT` 为准，禁止从工作区父目录执行裸全量 Git add，避免把书项目仓库作为父仓库的嵌入仓库/submodule 加入。

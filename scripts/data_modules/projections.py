@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .chapter_commit_service import ChapterCommitService
+from .chapter_content_binding import verify_commit_content_binding
 from .config import DataModulesConfig
 from .projection_log import commit_hash, latest_projection_run
 from .vector_projection_writer import VectorProjectionWriter
@@ -148,6 +149,24 @@ def retry_projection(project_root: str | Path, *, chapter: int) -> dict[str, Any
             "commit_path": str(path),
             "projection_status": {},
             "latest_projection_run": None,
+        }
+
+    binding_ok, binding_error = verify_commit_content_binding(
+        root,
+        chapter,
+        payload,
+    )
+    if not binding_ok:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "action": "retry",
+            "ok": False,
+            "project_root": str(root),
+            "chapter": chapter,
+            "error": binding_error,
+            "commit_path": str(path),
+            "projection_status": dict(payload.get("projection_status") or {}),
+            "latest_projection_run": latest_projection_run(root, chapter=chapter),
         }
 
     projection_status = payload.get("projection_status") or {}
