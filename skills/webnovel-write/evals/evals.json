@@ -44,19 +44,17 @@
     },
     {
       "id": 3,
-      "prompt": "使用 /webnovel-write 写第4章。项目在 agents/evals/files/test-project/。特别注意 anti-AI：正文不应有密集的'缓缓''淡淡'副词、不应有'首先其次最后'三段式、不应有情绪标签化描写。",
-      "expected_output": "生成的正文 AI 味低，通过 anti-AI 检查",
+      "prompt": "使用 /webnovel-write 写第4章。项目在 agents/evals/files/test-project/。本分支不得做风格适配或 Anti-AI 终检。",
+      "expected_output": "完成事实/剧情主链；不输出 anti_ai_force_check；不加载 style-adapter/polish-guide",
       "files": [
         "agents/evals/files/test-project/.webnovel/state.json",
         "agents/evals/files/test-project/大纲/第1卷-详细大纲.md"
       ],
       "expectations": [
-        "正文中'缓缓'出现次数不超过 2 次",
-        "正文中'淡淡'出现次数不超过 1 次",
-        "正文中不存在'首先……其次……最后'三段式",
-        "正文中不存在'他感到X'形式的情绪标签（应改为行为暗示）",
-        "正文中不存在'总而言之''由此可见'等总结词",
-        "Step 4 输出 anti_ai_force_check=pass"
+        "没有加载 style-adapter.md 或 polish-guide.md",
+        "没有要求 anti_ai_force_check=pass",
+        "Step 4 只修补可验证的事实问题，不改口吻",
+        "若存在 设定集/文风提示词.md 则按其作者提示词起草，否则按模型默认写"
       ]
     }
   ]

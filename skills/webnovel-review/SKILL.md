@@ -1,6 +1,6 @@
 ---
 name: webnovel-review
-description: 审查章节质量并生成报告，覆盖一致性、节奏、OOC 与追读力。用户说审查章节、质检、/webnovel-review 时使用。
+description: 审查章节事实：设定、时间线、连贯、角色动机与知识边界、逻辑。不评价文风。用户说审查章节、质检、/webnovel-review 时使用。
 ---
 
 # Quality Review Skill
@@ -69,11 +69,12 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
 
 | Trigger | Reference |
 |---------|-----------|
-| always | `../../references/shared/core-constraints.md` |
 | always | `../../references/review-schema.md` |
-| 审查涉及爽点或钩子 | `../../references/shared/cool-points-guide.md` |
+| 审查涉及伏笔或钩子是否被回应 | `../../references/shared/cool-points-guide.md`（只核事实，不核文笔） |
 | 审查涉及多线交织 | `../../references/shared/strand-weave-pattern.md` |
 | blocking issue 需用户裁决 (Step 8) | `../../references/review/blocking-override-guidelines.md` |
+
+不要加载 `core-constraints.md` 的 Style / Anti-AI 段。审查只对设定、时间线、连贯、角色动机/知识、逻辑。
 
 ### Step 4：加载投影状态与待审正文
 

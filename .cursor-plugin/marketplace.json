@@ -11,7 +11,7 @@
     {
       "name": "webnovel-writer",
       "source": ".",
-      "description": "长篇网文创作系统的 Cursor 移植版（skills + agents + Story System + RAG + Dashboard）",
+      "description": "长篇网文事实/剧情主链的 Cursor 移植。写章不改文风，口吻由设定集/文风提示词.md 控制。",
       "version": "6.2.1",
       "author": {
         "name": "lingfengQAQ"

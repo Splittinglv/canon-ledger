@@ -45,6 +45,17 @@ def test_cursor_marketplace_manifest_lists_root_plugin():
     assert (PLUGIN_ROOT / ".cursor-plugin" / "plugin.json").is_file()
 
 
+def test_style_prompt_template_exists_and_is_author_owned():
+    path = PLUGIN_ROOT / "templates" / "output" / "设定集-文风提示词.md"
+    text = path.read_text(encoding="utf-8")
+    assert "## 作者提示词" in text
+    assert "不会" in text or "不覆盖" in text
+    write_skill = (PLUGIN_ROOT / "skills" / "webnovel-write" / "SKILL.md").read_text(encoding="utf-8")
+    assert "polish-guide.md" in write_skill
+    assert "禁止" in write_skill
+    assert "anti_ai_force_check=pass" not in write_skill
+
+
 def test_resolve_plugin_root_from_this_file():
     cursor_paths = _load_cursor_paths()
     root = cursor_paths.resolve_plugin_root()

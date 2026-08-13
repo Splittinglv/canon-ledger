@@ -489,11 +489,20 @@ def test_context_agent_prefers_contract_and_latest_commit_mainline():
 
 def test_context_agent_loads_fixed_guides_and_outputs_writer_brief():
     text = (AGENTS_DIR / "context-agent.md").read_text(encoding="utf-8")
-    # core-constraints 和 anti-ai-guide 已内化为"写作铁律"段落
-    assert "写作铁律" in text or "Anti-AI" in text
+    assert "写作铁律" in text
+    assert "文风提示词" in text
     assert "写作任务书" in text
     assert "Step 2 直写提示词" not in text
     assert "Context Contract" not in text
+    assert "怎么写更顺" not in text
+
+
+def test_webnovel_write_skill_skips_style_pipeline():
+    text = (SKILLS_DIR / "webnovel-write" / "SKILL.md").read_text(encoding="utf-8")
+    assert "设定集/文风提示词.md" in text
+    assert "anti_ai_force_check=pass" not in text
+    assert "事实修补" in text
+    assert "将正文改写为网文风格" not in text
 
 
 def test_agents_do_not_name_nonexistent_writing_dna_files():

@@ -55,9 +55,9 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 - 情绪弧是否连续（上章愤怒本章突然平静无过渡）
 
 ### 4. 角色一致性（category: character）
-- 对话风格是否符合角色特征
 - 行为是否与已建立的性格/动机一致
 - 角色知识边界——角色是否使用了不应知道的信息
+- 禁止把书面语/口语、句长、网文腔、修辞习惯当成 issue；那是文风，不是事实
 
 ### 5. 逻辑（category: logic）
 - 因果关系是否成立
@@ -75,8 +75,9 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 ## 5. 边界与禁区
 
 - **不评分**——不输出 overall_score、不输出 pass/fail
-- **不评价文笔质量**——"写得不够好"不是 issue，"与角色性格矛盾"才是
+- **不评价文笔质量**——"写得不够好 / 不够网文 / 太书面 / AI 味"不是 issue，"与角色性格或已知信息矛盾"才是
 - **不建议情节改动**——"这里应该加个反转"不是 issue
+- **不改文风**——不要求口语化、短句、生理反应三连、said tag 比例
 - **不重复大纲内容**——不在 issue 中暴露未发生的剧情
 - **只报可验证的问题**——必须有 evidence（原文引用 or 数据对比）
 

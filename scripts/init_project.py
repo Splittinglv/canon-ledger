@@ -395,6 +395,7 @@ def init_project(
     output_team = _read_text_if_exists(output_templates_dir / "设定集-主角组.md")
     output_outline = _read_text_if_exists(output_templates_dir / "大纲-总纲.md")
     output_antagonist = _read_text_if_exists(output_templates_dir / "设定集-反派设计.md")
+    output_style_prompt = _read_text_if_exists(output_templates_dir / "设定集-文风提示词.md")
 
     # 基础文件（只在缺失时生成，避免覆盖已有内容）
     now = datetime.now().strftime("%Y-%m-%d")
@@ -597,6 +598,22 @@ def init_project(
             antagonist_content = "\n".join(out_lines)
     _write_text_if_missing(project_path / "设定集" / "反派设计.md", antagonist_content)
 
+    style_prompt = output_style_prompt.strip() if output_style_prompt else ""
+    if not style_prompt:
+        style_prompt = "\n".join(
+            [
+                "# 文风提示词",
+                "",
+                "> 本文件由作者手改。插件不覆盖文风。",
+                "",
+                "## 作者提示词",
+                "",
+                "（在此填写，可留空。）",
+                "",
+            ]
+        )
+    _write_text_if_missing(project_path / "设定集" / "文风提示词.md", style_prompt.rstrip() + "\n")
+
     outline_content = output_outline.strip() if output_outline else ""
     if outline_content:
         outline_content = _inject_volume_rows(outline_content, int(target_chapters)).rstrip() + "\n"
@@ -696,6 +713,7 @@ __pycache__/
     print(" - 设定集/世界观.md")
     print(" - 设定集/力量体系.md")
     print(" - 设定集/主角卡.md")
+    print(" - 设定集/文风提示词.md")
     print(" - 大纲/总纲.md")
 
 
