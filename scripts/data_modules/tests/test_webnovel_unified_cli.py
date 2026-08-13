@@ -1092,17 +1092,35 @@ def test_webnovel_skill_flow_runs_story_contract_context_and_review_pipeline_wit
     monkeypatch.setenv("EMBED_API_KEY", "fake-embed-key")
     monkeypatch.setattr(rag_module, "get_client", lambda config: _StubVectorClient())
 
-    adapter = rag_module.RAGAdapter(cfg)
-    asyncio.run(
-        adapter.store_chunks(
-            [
+    from data_modules.vector_projection_writer import VectorProjectionWriter
+
+    prior_payload = {
+        "meta": {"chapter": 2, "status": "accepted"},
+        "projection_status": {"vector": "done"},
+        "extraction_result": {
+            "accepted_events": [
                 {
+                    "event_id": "evt-ch2-relationship",
                     "chapter": 2,
-                    "scene_index": 1,
-                    "content": "萧炎与药老关系紧张，线索逐步浮现，冲突升级。",
+                    "event_type": "relationship_changed",
+                    "subject": "萧炎",
+                    "payload": {"to_entity": "药老", "relationship_type": "紧张"},
                 }
-            ]
-        )
+            ],
+            "state_deltas": [],
+            "entity_deltas": [],
+            "scenes": [],
+            "summary_text": "",
+        },
+    }
+    prior_chunks = VectorProjectionWriter(project_root)._collect_chunks(prior_payload)
+    adapter = rag_module.RAGAdapter(cfg)
+    asyncio.run(adapter.store_chunks(prior_chunks))
+    prior_commit = project_root / ".story-system" / "commits" / "chapter_002.commit.json"
+    prior_commit.parent.mkdir(parents=True, exist_ok=True)
+    prior_commit.write_text(
+        json.dumps(prior_payload, ensure_ascii=False),
+        encoding="utf-8",
     )
 
     script_to_module = {

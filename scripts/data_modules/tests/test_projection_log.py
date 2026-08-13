@@ -14,6 +14,7 @@ def _ensure_scripts_on_path() -> None:
 _ensure_scripts_on_path()
 
 from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
+from data_modules.rag_adapter import StoreOutcome  # noqa: E402
 from data_modules.projection_log import (  # noqa: E402
     append_projection_run,
     latest_projection_run,
@@ -128,10 +129,12 @@ def test_chapter_commit_service_marks_vector_store_zero_as_failed(monkeypatch, t
             "missed_nodes": [],
             "extra_nodes": [],
         },
-        disambiguation_result={"pending": []},
-        extraction_result={
-            "state_deltas": [],
-            "entity_deltas": [],
+            disambiguation_result={"pending": []},
+            extraction_result={
+                "state_deltas": [
+                    {"entity_id": "hero", "field": "location", "new": "market"}
+                ],
+                "entity_deltas": [],
             "accepted_events": [
                 {
                     "event_id": "evt-breakthrough",
@@ -151,3 +154,43 @@ def test_chapter_commit_service_marks_vector_store_zero_as_failed(monkeypatch, t
     assert latest is not None
     assert projection_run_failed(latest) is True
     assert latest["writers"]["vector"]["status"] == "failed:store_failed"
+
+
+def test_chapter_commit_service_records_bm25_only_vector_as_skipped(monkeypatch, tmp_path):
+    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        "data_modules.vector_projection_writer.VectorProjectionWriter._store_chunks",
+        lambda self, chunks: StoreOutcome(1, requested=1, embedded=0),
+    )
+
+    service = ChapterCommitService(tmp_path)
+    payload = service.build_commit(
+        chapter=9,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": ["发现线索"],
+            "covered_nodes": ["发现线索"],
+            "missed_nodes": [],
+            "extra_nodes": [],
+        },
+        disambiguation_result={"pending": []},
+        extraction_result={
+            "state_deltas": [
+                {"entity_id": "hero", "field": "location", "new": "market"}
+            ],
+            "entity_deltas": [],
+            "accepted_events": [],
+            "summary_text": "主角在坊市发现关键线索。",
+        },
+    )
+
+    projected = service.apply_projections(payload)
+
+    assert projected["projection_status"]["vector"] == "skipped"
+    latest = latest_projection_run(tmp_path, chapter=9)
+    assert latest is not None
+    assert projection_run_failed(latest) is False
+    assert latest["writers"]["vector"]["status"] == "skipped"
+    assert latest["writers"]["vector"]["result"]["reason"] == "bm25_only"
+    assert latest["writers"]["vector"]["result"]["bm25_indexed"] == 1

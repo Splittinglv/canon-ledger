@@ -148,7 +148,9 @@ workspace/
 
 ### 4. 配置 RAG（可选）
 
-进入书项目根目录，把 `.env.example` 复制为 `.env` 并填写 API Key。没填 Embedding Key 也能用，系统会退回 BM25。
+RAG 只用于从已提交章节补查人物状态、地点、关系、规则/伏笔/承诺状态等结构化事实，不索引章节摘要或场景原文，也不生成文风、桥段或节奏建议。默认写章上下文会自动查询检索库；结果为空不会阻断写作。
+
+进入书项目根目录，把 `.env.example` 复制为 `.env` 并填写 API Key。Embedding Key 是可选增强：未填写时，章节事实仍会建立 BM25 关键词索引并可被默认写作链召回；填写后才增加语义向量召回。Rerank Key 也可留空。
 
 也可以把全局 Key 放在 `~/.cursor/webnovel-writer/.env`。
 

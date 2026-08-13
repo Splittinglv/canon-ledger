@@ -102,7 +102,9 @@ def test_extract_chapter_outline_falls_back_when_state_has_no_match(tmp_path):
     assert "V2大纲" in outline
 
 
-def test_build_chapter_context_payload_includes_contract_sections(tmp_path):
+def test_build_chapter_context_payload_includes_contract_sections(tmp_path, monkeypatch):
+    monkeypatch.delenv("EMBED_API_KEY", raising=False)
+    monkeypatch.delenv("RERANK_API_KEY", raising=False)
     scripts_dir = Path(__file__).resolve().parents[2]
     if str(scripts_dir) not in sys.path:
         sys.path.insert(0, str(scripts_dir))
@@ -218,7 +220,13 @@ def test_build_chapter_context_payload_includes_contract_sections(tmp_path):
     assert payload["genre_profile"].get("genre") == "xuanhuan"
     assert "rag_assist" in payload
     assert isinstance(payload["rag_assist"], dict)
+    # An empty retrieval store is a benign, explicit state; once accepted
+    # chapters are projected, the same default path queries local BM25.
     assert payload["rag_assist"].get("invoked") is False
+    assert payload["rag_assist"].get("mode") == "bm25"
+    assert payload["rag_assist"].get("degraded") is False
+    assert payload["rag_assist"].get("reason") == "index_empty"
+    assert payload["rag_assist"].get("chapter_limit") == 2
     assert "long_term_memory" in payload
     assert payload["runtime_status"]["primary_write_source"] == "chapter_commit"
     assert payload["latest_commit"]["meta"]["status"] == "accepted"

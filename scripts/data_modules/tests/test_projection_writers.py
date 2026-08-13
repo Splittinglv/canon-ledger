@@ -582,9 +582,10 @@ def test_vector_projection_writer_is_idempotent_for_replay(tmp_path, monkeypatch
         bm25_chunk_count = conn.execute("SELECT COUNT(DISTINCT chunk_id) FROM bm25_index").fetchone()[0]
         doc_count = conn.execute("SELECT COUNT(*) FROM doc_stats").fetchone()[0]
 
-    assert vector_count == 4
-    assert bm25_chunk_count == 4
-    assert doc_count == 4
+    # Only structured facts are indexed. Summary and scene prose are excluded.
+    assert vector_count == 2
+    assert bm25_chunk_count == 2
+    assert doc_count == 2
 
 
 def test_memory_projection_writer_maps_open_loop_event_into_scratchpad(tmp_path):

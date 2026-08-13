@@ -55,6 +55,10 @@ class EmbeddingAPIClient:
         self.last_error_status: Optional[int] = None
         self.last_error_message: str = ""
 
+    @property
+    def available(self) -> bool:
+        return bool(getattr(self.config, "embedding_enabled", False))
+
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
             connector = aiohttp.TCPConnector(limit=200, limit_per_host=100)
@@ -120,6 +124,13 @@ class EmbeddingAPIClient:
         """调用 Embedding 服务（带重试机制）"""
         if not texts:
             return []
+
+        # Missing credentials are a supported BM25-only mode, not a remote
+        # failure.  Return before creating a ClientSession or entering retries.
+        if not self.available:
+            self.last_error_status = None
+            self.last_error_message = "embedding_not_configured"
+            return None
 
         # 某些 embedding 端点（如 Gemini）拒绝空字符串，用单空格占位保持索引对齐
         texts = [t if t else " " for t in texts]
@@ -213,6 +224,11 @@ class EmbeddingAPIClient:
         if not texts:
             return []
 
+        if not self.available:
+            self.last_error_status = None
+            self.last_error_message = "embedding_not_configured"
+            return [None] * len(texts)
+
         all_embeddings: List[Optional[List[float]]] = []
         batch_size = self.config.embed_batch_size
 
@@ -235,6 +251,8 @@ class EmbeddingAPIClient:
 
     async def warmup(self):
         """预热服务"""
+        if not self.available:
+            return
         await self.embed(["test"])
         self._warmed_up = True
 
@@ -252,6 +270,10 @@ class RerankAPIClient:
         self.stats = APIStats()
         self._warmed_up = False
         self._session: Optional[aiohttp.ClientSession] = None
+
+    @property
+    def available(self) -> bool:
+        return bool(getattr(self.config, "rerank_enabled", False))
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -397,6 +419,11 @@ class RerankAPIClient:
         if not documents:
             return []
 
+        # Reranking is optional.  Do not create a session or retry when the
+        # capability was not configured.
+        if not self.available:
+            return None
+
         timeout = self.config.cold_start_timeout if not self._warmed_up else self.config.normal_timeout
         max_retries = getattr(self.config, 'api_max_retries', 3)
         base_delay = getattr(self.config, 'api_retry_delay', 1.0)
@@ -462,6 +489,8 @@ class RerankAPIClient:
 
     async def warmup(self):
         """预热服务"""
+        if not self.available:
+            return
         await self.rerank("test", ["doc1", "doc2"])
         self._warmed_up = True
 
@@ -491,6 +520,14 @@ class ModalAPIClient:
             "embed": self._embed_client.stats,
             "rerank": self._rerank_client.stats
         }
+
+    @property
+    def embedding_available(self) -> bool:
+        return self._embed_client.available
+
+    @property
+    def rerank_available(self) -> bool:
+        return self._rerank_client.available
 
     async def _get_session(self) -> aiohttp.ClientSession:
         # 复用 embed client 的 session

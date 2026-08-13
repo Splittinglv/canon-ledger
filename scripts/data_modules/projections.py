@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
 from .chapter_commit_service import ChapterCommitService
-from .projection_log import latest_projection_run
+from .config import DataModulesConfig
+from .projection_log import commit_hash, latest_projection_run
+from .vector_projection_writer import VectorProjectionWriter
 
 
 SCHEMA_VERSION = "webnovel-projections/v1"
@@ -25,7 +28,7 @@ def _commit_path(project_root: Path, chapter: int) -> Path:
     return project_root / ".story-system" / "commits" / f"chapter_{chapter:03d}.commit.json"
 
 
-def _read_commit(path: Path) -> tuple[dict[str, Any], str]:
+def _read_commit(path: Path, *, expected_chapter: int | None = None) -> tuple[dict[str, Any], str]:
     if not path.is_file():
         return {}, "missing_commit"
     try:
@@ -36,6 +39,14 @@ def _read_commit(path: Path) -> tuple[dict[str, Any], str]:
         return {}, f"read_error:{exc}"
     if not isinstance(payload, dict):
         return {}, "commit_not_object"
+    if expected_chapter is not None:
+        meta = payload.get("meta")
+        try:
+            payload_chapter = int((meta or {}).get("chapter") or 0)
+        except (AttributeError, TypeError, ValueError):
+            payload_chapter = 0
+        if payload_chapter != int(expected_chapter):
+            return {}, "commit_chapter_mismatch"
     payload.setdefault("projection_status", dict(DEFAULT_PROJECTION_STATUS))
     for key, value in DEFAULT_PROJECTION_STATUS.items():
         payload["projection_status"].setdefault(key, value)
@@ -52,10 +63,80 @@ def _projection_failed(payload: dict[str, Any]) -> bool:
     )
 
 
+def _vector_backfill_ready(
+    project_root: Path,
+    payload: dict[str, Any],
+    latest_run: dict[str, Any] | None,
+) -> bool:
+    """Allow an explicit retry to enrich a prior BM25-only projection.
+
+    The original chapter remains accepted and usable while credentials are
+    absent.  Once an embedding key is configured, ``projections retry`` can
+    safely select only the retrieval writer and backfill vectors without
+    replaying state, index, or memory writers from an old chapter.
+    """
+    projection_status = payload.get("projection_status") or {}
+    if str(projection_status.get("vector") or "") != "skipped":
+        return False
+    if not DataModulesConfig.from_project_root(project_root).embedding_enabled:
+        return False
+    if not isinstance(latest_run, dict):
+        return False
+    if str(latest_run.get("commit_hash") or "") != commit_hash(payload):
+        return False
+    writers = latest_run.get("writers") or {}
+    vector = writers.get("vector") if isinstance(writers, dict) else None
+    result = vector.get("result") if isinstance(vector, dict) else None
+    reason = str((result or {}).get("reason") or "") if isinstance(result, dict) else ""
+    return reason in {"bm25_only", "embedding_partial"}
+
+
+def _vector_snapshot_stale(project_root: Path, payload: dict[str, Any]) -> bool:
+    """Detect missing, legacy, or extra rows for an explicit retry/replay."""
+    meta = payload.get("meta") if isinstance(payload, dict) else {}
+    chapter = int((meta or {}).get("chapter") or 0) if isinstance(meta, dict) else 0
+    if chapter <= 0:
+        return False
+    status = str((meta or {}).get("status") or "")
+    expected_chunks = (
+        VectorProjectionWriter(project_root)._collect_chunks(payload)
+        if status == "accepted"
+        else []
+    )
+    expected = {
+        (str(chunk.get("chunk_id") or ""), str(chunk.get("source_file") or ""))
+        for chunk in expected_chunks
+    }
+    db_path = DataModulesConfig.from_project_root(project_root).vector_db
+    if not db_path.is_file():
+        return bool(expected)
+    try:
+        uri = f"{db_path.resolve().as_uri()}?mode=ro"
+        with sqlite3.connect(uri, uri=True) as conn:
+            tables = {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            if "vectors" not in tables:
+                return bool(expected)
+            actual = {
+                (str(row[0] or ""), str(row[1] or ""))
+                for row in conn.execute(
+                    "SELECT chunk_id, source_file FROM vectors WHERE chapter = ?",
+                    (chapter,),
+                ).fetchall()
+            }
+    except (OSError, sqlite3.Error):
+        return True
+    return actual != expected
+
+
 def retry_projection(project_root: str | Path, *, chapter: int) -> dict[str, Any]:
     root = Path(project_root)
     path = _commit_path(root, chapter)
-    payload, error = _read_commit(path)
+    payload, error = _read_commit(path, expected_chapter=chapter)
     if error:
         return {
             "schema_version": SCHEMA_VERSION,
@@ -70,6 +151,7 @@ def retry_projection(project_root: str | Path, *, chapter: int) -> dict[str, Any
         }
 
     projection_status = payload.get("projection_status") or {}
+    previous_run = latest_projection_run(root, chapter=chapter)
     retry_writers = {
         name
         for name in DEFAULT_PROJECTION_STATUS
@@ -77,6 +159,10 @@ def retry_projection(project_root: str | Path, *, chapter: int) -> dict[str, Any
         or str(projection_status.get(name) or "") == "failed"
         or str(projection_status.get(name) or "").startswith("failed:")
     }
+    if _vector_backfill_ready(root, payload, previous_run):
+        retry_writers.add("vector")
+    if _vector_snapshot_stale(root, payload):
+        retry_writers.add("vector")
     if retry_writers:
         projected = ChapterCommitService(root).apply_projection_writers(
             payload,

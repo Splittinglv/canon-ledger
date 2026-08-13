@@ -65,6 +65,50 @@ class SearchResult:
     source_file: str | None = None
 
 
+class StoreOutcome(int):
+    """Backward-compatible result for chunk persistence.
+
+    The integer value is the number of chunks whose content row and BM25 index
+    were stored.  Extra attributes let projection callers distinguish a valid
+    BM25-only degradation from an actual SQLite/storage failure without
+    breaking legacy callers that compare or cast the result as an ``int``.
+    """
+
+    def __new__(
+        cls,
+        stored: int,
+        *,
+        requested: int = 0,
+        embedded: int = 0,
+        degraded_reason: str = "",
+        errors: Optional[List[str]] = None,
+    ):
+        value = max(0, int(stored or 0))
+        obj = int.__new__(cls, value)
+        obj.stored = value
+        obj.requested = max(0, int(requested or 0))
+        obj.embedded = max(0, int(embedded or 0))
+        obj.bm25_indexed = value
+        obj.bm25_only_count = max(0, value - obj.embedded)
+        obj.embedding_complete = bool(value > 0 and obj.embedded == value)
+        obj.degraded_reason = str(degraded_reason or "").strip()
+        obj.errors = tuple(str(error) for error in (errors or []))
+        obj.storage_error = bool(obj.errors)
+        obj.error_message = "; ".join(obj.errors)
+        obj.bm25_only = bool(value > 0 and obj.embedded == 0 and not obj.storage_error)
+        if obj.storage_error:
+            obj.mode = "storage_error"
+        elif value == 0:
+            obj.mode = "empty"
+        elif obj.bm25_only:
+            obj.mode = "bm25_only"
+        elif obj.embedded < value:
+            obj.mode = "hybrid"
+        else:
+            obj.mode = "vector"
+        return obj
+
+
 class RAGAdapter:
     """RAG 检索适配器"""
 
@@ -80,12 +124,30 @@ class RAGAdapter:
     def degraded_mode_reason(self) -> Optional[str]:
         return self._degraded_mode_reason
 
-    def _update_degraded_mode(self) -> None:
+    def _embedding_available(self) -> bool:
+        """Return the API client's declared capability.
+
+        Third-party/test clients predating the capability flag are treated as
+        capable; the built-in client always declares it explicitly.
+        """
+        available = getattr(self.api_client, "embedding_available", None)
+        return True if available is None else bool(available)
+
+    def _update_degraded_mode(self, fallback_reason: str = "") -> None:
         self._degraded_mode_reason = None
         embed_client = getattr(self.api_client, "_embed_client", None)
+        if embed_client is None:
+            embed_client = self.api_client
         status = getattr(embed_client, "last_error_status", None)
+        message = str(getattr(embed_client, "last_error_message", "") or "").strip()
         if status == 401:
             self._degraded_mode_reason = "embedding_auth_failed"
+        elif not self._embedding_available():
+            self._degraded_mode_reason = "embedding_not_configured"
+        elif status or message:
+            self._degraded_mode_reason = "embedding_request_failed"
+        elif fallback_reason:
+            self._degraded_mode_reason = str(fallback_reason)
 
     def _init_db(self):
         """初始化向量数据库"""
@@ -376,7 +438,12 @@ class RAGAdapter:
 
     # ==================== 向量存储 ====================
 
-    async def store_chunks(self, chunks: List[Dict]) -> int:
+    async def store_chunks(
+        self,
+        chunks: List[Dict],
+        *,
+        replace_chapter: int | None = None,
+    ) -> StoreOutcome:
         """
         存储场景切片的向量
 
@@ -392,101 +459,196 @@ class RAGAdapter:
             }
         ]
 
-        返回存储数量
+        返回兼容 int 的 StoreOutcome。整数值表示内容行与 BM25 均已落库的数量；
+        ``mode == 'bm25_only'`` 是可用降级，只有 ``storage_error`` 才是存储失败。
         """
         if not chunks:
-            return 0
+            return StoreOutcome(0, requested=0)
 
         # 提取内容用于嵌入
-        contents = [c.get("content", "") for c in chunks]
+        contents = [str(c.get("content", "") or "") for c in chunks]
 
-        # 调用 API 获取嵌入向量（可能包含 None 表示失败）
-        embeddings = await self.api_client.embed_batch(contents)
+        # Embedding is optional.  Any API failure degrades the affected rows to
+        # NULL embeddings while content + BM25 remain usable.
+        embedding_failure_reason = ""
+        try:
+            raw_embeddings = await self.api_client.embed_batch(contents)
+        except Exception as exc:
+            logger.warning("Embedding batch failed; storing BM25-only rows: %s", exc)
+            raw_embeddings = []
+            embedding_failure_reason = "embedding_request_failed"
 
-        if not embeddings:
-            return 0
+        embeddings: List[Optional[List[float]]] = list(raw_embeddings or [])[:len(chunks)]
+        if len(embeddings) < len(chunks):
+            embeddings.extend([None] * (len(chunks) - len(embeddings)))
 
-        # 存储到数据库（跳过嵌入失败的 chunk）
         stored = 0
-        skipped = 0
-        errors = []
+        embedded = 0
+        expected_dimension: Optional[int] = None
+        invalid_embedding_seen = False
+        stored_ids: set[str] = set()
+        try:
+            with self._get_conn() as conn:
+                cursor = conn.cursor()
+                try:
+                    for chunk, content, embedding in zip(chunks, contents, embeddings):
+                        chunk_type = str(chunk.get("chunk_type") or "scene")
+                        chapter = int(chunk["chapter"])
+                        chunk_id = str(chunk.get("chunk_id") or "").strip()
+                        if not chunk_id:
+                            if chunk_type == "summary":
+                                chunk_id = f"ch{chapter:04d}_summary"
+                            else:
+                                chunk_id = f"ch{chapter:04d}_s{int(chunk['scene_index'])}"
+
+                        # Assigning NULL is deliberate: a failed re-embedding
+                        # must not leave a stale vector attached to new content.
+                        embedding_bytes = None
+                        if embedding is not None:
+                            try:
+                                if expected_dimension is not None and len(embedding) != expected_dimension:
+                                    raise ValueError(
+                                        f"embedding dimension {len(embedding)} != {expected_dimension}"
+                                    )
+                                embedding_bytes = self._serialize_embedding(embedding)
+                                expected_dimension = len(embedding)
+                            except (TypeError, ValueError, OverflowError) as exc:
+                                invalid_embedding_seen = True
+                                logger.warning(
+                                    "Invalid embedding for %s; storing BM25-only row: %s",
+                                    chunk_id,
+                                    exc,
+                                )
+                        cursor.execute(
+                            """
+                            INSERT INTO vectors
+                            (chunk_id, chapter, scene_index, content, embedding,
+                             parent_chunk_id, chunk_type, source_file)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(chunk_id) DO UPDATE SET
+                                chapter = excluded.chapter,
+                                scene_index = excluded.scene_index,
+                                content = excluded.content,
+                                embedding = excluded.embedding,
+                                parent_chunk_id = excluded.parent_chunk_id,
+                                chunk_type = excluded.chunk_type,
+                                source_file = excluded.source_file,
+                                created_at = CURRENT_TIMESTAMP
+                            """,
+                            (
+                                chunk_id,
+                                chapter,
+                                int(chunk.get("scene_index", 0) or 0) if chunk_type == "scene" else 0,
+                                content,
+                                embedding_bytes,
+                                chunk.get("parent_chunk_id"),
+                                chunk_type,
+                                chunk.get("source_file"),
+                            ),
+                        )
+                        self._update_bm25_index(cursor, chunk_id, content)
+                        stored_ids.add(chunk_id)
+                        stored += 1
+                        if embedding_bytes is not None:
+                            embedded += 1
+                    if replace_chapter is not None:
+                        self._delete_stale_chapter_rows(
+                            cursor,
+                            int(replace_chapter),
+                            stored_ids,
+                        )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+        except Exception as exc:
+            message = f"SQLite storage failed: {exc}"
+            logger.error("%s", message)
+            return StoreOutcome(
+                0,
+                requested=len(chunks),
+                embedded=0,
+                errors=[message],
+            )
+
+        if embedded < stored:
+            if invalid_embedding_seen and not embedding_failure_reason:
+                embedding_failure_reason = "invalid_embedding"
+            if not embedding_failure_reason:
+                embedding_failure_reason = "embedding_incomplete"
+            self._update_degraded_mode(embedding_failure_reason)
+            logger.warning(
+                "RAG storage: %s content/BM25 rows stored, %s embeddings available",
+                stored, embedded,
+            )
+        else:
+            self._degraded_mode_reason = None
+
+        return StoreOutcome(
+            stored,
+            requested=len(chunks),
+            embedded=embedded,
+            degraded_reason=self._degraded_mode_reason or "",
+        )
+
+    def replace_chapter_chunks(self, chapter: int, chunks: List[Dict]) -> None:
+        """Delete retrieval rows no longer present in an accepted chapter.
+
+        A chapter commit is a complete retrieval snapshot.  Without this
+        replacement step, removing a mistaken event from a revised commit
+        leaves its old vector/BM25 row searchable forever.
+        """
+        source_chapter = int(chapter or 0)
+        if source_chapter <= 0:
+            raise ValueError("chapter must be positive")
+        keep_ids = {
+            str(chunk.get("chunk_id") or "").strip()
+            for chunk in chunks
+            if isinstance(chunk, dict) and str(chunk.get("chunk_id") or "").strip()
+        }
         with self._get_conn() as conn:
             cursor = conn.cursor()
-
-            for chunk, embedding in zip(chunks, embeddings):
-                if embedding is None:
-                    # 嵌入失败，跳过该 chunk（仅存储 BM25 索引供关键词检索）
-                    skipped += 1
-                    chunk_id = chunk.get("chunk_id")
-                    if not chunk_id:
-                        if chunk.get("chunk_type") == "summary":
-                            chunk_id = f"ch{int(chunk['chapter']):04d}_summary"
-                        else:
-                            chunk_id = f"ch{int(chunk['chapter']):04d}_s{int(chunk['scene_index'])}"
-                    try:
-                        self._update_bm25_index(cursor, chunk_id, chunk.get("content", ""))
-                    except Exception as e:
-                        errors.append(f"BM25 index failed for {chunk_id}: {e}")
-                    continue
-
-                chunk_type = chunk.get("chunk_type") or "scene"
-                chunk_id = chunk.get("chunk_id")
-                if not chunk_id:
-                    if chunk_type == "summary":
-                        chunk_id = f"ch{int(chunk['chapter']):04d}_summary"
-                    else:
-                        chunk_id = f"ch{int(chunk['chapter']):04d}_s{int(chunk['scene_index'])}"
-
-                # 将向量序列化为 bytes
-                embedding_bytes = self._serialize_embedding(embedding)
-
-                cursor.execute("""
-                    INSERT OR REPLACE INTO vectors
-                    (chunk_id, chapter, scene_index, content, embedding, parent_chunk_id, chunk_type, source_file)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    chunk_id,
-                    chunk["chapter"],
-                    chunk.get("scene_index", 0) if chunk_type == "scene" else 0,
-                    chunk.get("content", ""),
-                    embedding_bytes,
-                    chunk.get("parent_chunk_id"),
-                    chunk_type,
-                    chunk.get("source_file"),
-                ))
-
-                # 同时更新 BM25 索引
-                try:
-                    self._update_bm25_index(cursor, chunk_id, chunk.get("content", ""))
-                except Exception as e:
-                    errors.append(f"BM25 index failed for {chunk_id}: {e}")
-
-                stored += 1
-
             try:
+                self._delete_stale_chapter_rows(cursor, source_chapter, keep_ids)
                 conn.commit()
-            except Exception as e:
-                logger.error("SQLite commit failed: %s", e)
-                errors.append(f"SQLite commit failed: {e}")
+            except Exception:
+                conn.rollback()
+                raise
 
-        # 输出警告日志
-        if skipped > 0:
-            logger.warning(
-                "Vector embedding: %s stored, %s skipped (embedding failed)",
-                stored,
-                skipped,
-            )
-        if errors:
-
-            for err in errors[:5]:  # 最多显示5条
-                logger.warning("%s", err)
-
-        return stored
+    @staticmethod
+    def _delete_stale_chapter_rows(
+        cursor: sqlite3.Cursor,
+        chapter: int,
+        keep_ids: set[str],
+    ) -> None:
+        cursor.execute(
+            "SELECT chunk_id FROM vectors WHERE chapter = ?",
+            (int(chapter),),
+        )
+        stale_ids = [
+            str(row[0])
+            for row in cursor.fetchall()
+            if str(row[0]) not in keep_ids
+        ]
+        for chunk_id in stale_ids:
+            cursor.execute("DELETE FROM bm25_index WHERE chunk_id = ?", (chunk_id,))
+            cursor.execute("DELETE FROM doc_stats WHERE chunk_id = ?", (chunk_id,))
+            cursor.execute("DELETE FROM vectors WHERE chunk_id = ?", (chunk_id,))
 
     def _serialize_embedding(self, embedding: List[float]) -> bytes:
         """序列化向量"""
         import struct
-        return struct.pack(f"{len(embedding)}f", *embedding)
+        if not isinstance(embedding, (list, tuple)) or not embedding:
+            raise ValueError("embedding must be a non-empty numeric sequence")
+        values: List[float] = []
+        for value in embedding:
+            if isinstance(value, bool):
+                raise ValueError("boolean is not a valid embedding value")
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                raise ValueError("embedding contains a non-finite value")
+            values.append(numeric)
+        return struct.pack(f"{len(values)}f", *values)
 
     def _deserialize_embedding(self, data: bytes) -> List[float]:
         """反序列化向量"""
@@ -569,11 +731,27 @@ class RAGAdapter:
         top_k = top_k or self.config.vector_top_k
         start_time = time.perf_counter()
 
+        if not self._embedding_available():
+            self._update_degraded_mode()
+            return self.bm25_search(
+                query,
+                top_k=top_k,
+                chunk_type=chunk_type,
+                log_query=log_query,
+                chapter=chapter,
+            )
+
         # 获取查询向量
         query_embeddings = await self.api_client.embed([query])
         if not query_embeddings:
             self._update_degraded_mode()
-            return []
+            return self.bm25_search(
+                query,
+                top_k=top_k,
+                chunk_type=chunk_type,
+                log_query=log_query,
+                chapter=chapter,
+            )
 
         self._degraded_mode_reason = None
 
@@ -982,6 +1160,16 @@ class RAGAdapter:
         """
         start_time = time.perf_counter()
 
+        if not self._embedding_available():
+            self._update_degraded_mode()
+            return self.bm25_search(
+                query,
+                top_k=top_k,
+                chunk_type=chunk_type,
+                log_query=log_query,
+                chapter=chapter,
+            )
+
         base_results = await self.hybrid_search(
             query=query,
             vector_top_k=max(top_k * 3, int(self.config.vector_top_k)),
@@ -1106,6 +1294,7 @@ class RAGAdapter:
         chapter: int | None = None,
         center_entities: Optional[List[str]] = None,
         filters: Optional[Dict[str, Any]] = None,
+        log_query: bool = True,
     ) -> List[SearchResult]:
         """统一检索入口。"""
         strategy = str(strategy or "auto").lower()
@@ -1114,6 +1303,16 @@ class RAGAdapter:
                 chapter = int((filters or {}).get("to_chapter") or 0) or None
             except (TypeError, ValueError):
                 chapter = None
+
+        if not self._embedding_available():
+            self._update_degraded_mode()
+            return self.bm25_search(
+                query,
+                top_k=top_k,
+                chunk_type=chunk_type,
+                chapter=chapter,
+                log_query=log_query,
+            )
 
         if strategy == "auto":
             intent_payload = self.query_router.route_intent(query)
@@ -1129,9 +1328,21 @@ class RAGAdapter:
             strategy = "hybrid"
 
         if strategy == "vector":
-            return await self.vector_search(query, top_k=top_k, chunk_type=chunk_type, chapter=chapter)
+            return await self.vector_search(
+                query,
+                top_k=top_k,
+                chunk_type=chunk_type,
+                chapter=chapter,
+                log_query=log_query,
+            )
         if strategy == "bm25":
-            return self.bm25_search(query, top_k=top_k, chunk_type=chunk_type, chapter=chapter)
+            return self.bm25_search(
+                query,
+                top_k=top_k,
+                chunk_type=chunk_type,
+                chapter=chapter,
+                log_query=log_query,
+            )
         if strategy == "backtrack":
             return await self.search_with_backtrack(query, top_k=top_k)
         if strategy == "graph_hybrid":
@@ -1141,6 +1352,7 @@ class RAGAdapter:
                 chunk_type=chunk_type,
                 chapter=chapter,
                 center_entities=center_entities,
+                log_query=log_query,
             )
         return await self.hybrid_search(
             query=query,
@@ -1149,6 +1361,7 @@ class RAGAdapter:
             rerank_top_n=top_k,
             chunk_type=chunk_type,
             chapter=chapter,
+            log_query=log_query,
         )
 
     # ==================== 混合检索 ====================
@@ -1176,6 +1389,16 @@ class RAGAdapter:
         bm25_top_k = bm25_top_k or self.config.bm25_top_k
         rerank_top_n = rerank_top_n or self.config.rerank_top_n
         start_time = time.perf_counter()
+
+        if not self._embedding_available():
+            self._update_degraded_mode()
+            return self.bm25_search(
+                query,
+                top_k=rerank_top_n,
+                chunk_type=chunk_type,
+                log_query=log_query,
+                chapter=chapter,
+            )
 
         # 小规模：全表向量扫描（召回更稳）；大规模：预筛选避免 O(n) 扫描拖慢
         vectors_count = await asyncio.to_thread(self._get_vectors_count)
@@ -1221,7 +1444,17 @@ class RAGAdapter:
 
             if not query_embeddings:
                 self._update_degraded_mode()
-                return []
+                final_results = list(bm25_candidates_results)[: int(rerank_top_n)]
+                if log_query:
+                    latency_ms = int((time.perf_counter() - start_time) * 1000)
+                    self._log_query(
+                        query,
+                        "hybrid_bm25_fallback",
+                        final_results,
+                        latency_ms,
+                        chapter=chapter,
+                    )
+                return final_results
             self._degraded_mode_reason = None
             query_embedding = query_embeddings[0]
 
@@ -1373,6 +1606,14 @@ class RAGAdapter:
             cursor.execute("SELECT COUNT(*) FROM vectors")
             vectors = cursor.fetchone()[0]
 
+            cursor.execute(
+                "SELECT COUNT(*) FROM vectors WHERE embedding IS NOT NULL AND length(embedding) > 0"
+            )
+            embedded_vectors = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM doc_stats")
+            bm25_documents = cursor.fetchone()[0]
+
             cursor.execute("SELECT COUNT(DISTINCT term) FROM bm25_index")
             terms = cursor.fetchone()[0]
 
@@ -1381,6 +1622,8 @@ class RAGAdapter:
 
             return {
                 "vectors": vectors,
+                "embedded_vectors": embedded_vectors,
+                "bm25_documents": bm25_documents,
                 "terms": terms,
                 "max_chapter": max_chapter
             }
@@ -1513,10 +1756,26 @@ def main():
                 }
             )
 
-        stored = asyncio.run(adapter.store_chunks(chunks))
+        outcome = asyncio.run(adapter.store_chunks(chunks))
+        stored = int(outcome)
         skipped = len(chunks) - stored
-        result = {"stored": stored, "skipped": skipped, "total": len(chunks)}
-        if skipped > 0:
+        result = {
+            "stored": stored,
+            "embedded": int(getattr(outcome, "embedded", stored)),
+            "bm25_only": int(getattr(outcome, "bm25_only_count", 0)),
+            "mode": str(getattr(outcome, "mode", "vector")),
+            "skipped": skipped,
+            "total": len(chunks),
+        }
+        if bool(getattr(outcome, "storage_error", False)):
+            emit_error(
+                "RAG_STORAGE_ERROR",
+                str(getattr(outcome, "error_message", "RAG storage failed")),
+                chapter=args.chapter,
+            )
+        elif str(getattr(outcome, "mode", "")) == "bm25_only":
+            emit_success(result, message="indexed_bm25_only", chapter=args.chapter)
+        elif skipped > 0:
             emit_success(result, message="indexed_with_warnings", chapter=args.chapter)
         else:
             emit_success(result, message="indexed", chapter=args.chapter)

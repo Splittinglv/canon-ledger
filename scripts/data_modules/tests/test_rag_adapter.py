@@ -15,6 +15,7 @@ import pytest
 
 import data_modules.rag_adapter as rag_module
 from data_modules.rag_adapter import RAGAdapter
+from data_modules.api_client import ModalAPIClient
 from data_modules.config import DataModulesConfig
 from data_modules.index_manager import EntityMeta, RelationshipMeta
 
@@ -36,6 +37,11 @@ class StubClientWithFailures(StubClient):
         if len(texts) == 1:
             return [None]
         return [None, [1.0, 0.0]]
+
+
+class StubClientWithEmptyEmbedding(StubClient):
+    async def embed_batch(self, texts, skip_failures=True):
+        return [[] for _ in texts]
 
 
 class StubEmbedClient401:
@@ -85,6 +91,8 @@ async def test_store_and_search(temp_project):
 
     stats = adapter.get_stats()
     assert stats["vectors"] == 2
+    assert stats["embedded_vectors"] == 2
+    assert stats["bm25_documents"] == 2
 
 
 @pytest.mark.asyncio
@@ -99,7 +107,135 @@ async def test_store_chunks_with_embedding_failure(tmp_path, monkeypatch):
         {"chapter": 1, "scene_index": 2, "content": "稍长内容用于索引"},
     ]
     stored = await adapter.store_chunks(chunks)
-    assert stored == 1
+    assert stored == 2
+    assert stored.mode == "hybrid"
+    assert stored.embedded == 1
+    assert stored.bm25_indexed == 2
+    assert stored.bm25_only_count == 1
+    assert stored.degraded_reason == "embedding_incomplete"
+    assert adapter.bm25_search("短内容", top_k=2)
+
+
+@pytest.mark.asyncio
+async def test_empty_embedding_is_bm25_only_not_false_vector_success(tmp_path, monkeypatch):
+    cfg = DataModulesConfig.from_project_root(tmp_path)
+    cfg.ensure_dirs()
+    monkeypatch.setattr(
+        rag_module,
+        "get_client",
+        lambda config: StubClientWithEmptyEmbedding(),
+    )
+    adapter = RAGAdapter(cfg)
+
+    outcome = await adapter.store_chunks(
+        [{"chapter": 1, "scene_index": 1, "content": "古井旧印"}]
+    )
+
+    assert outcome.mode == "bm25_only"
+    assert outcome.embedded == 0
+    assert outcome.bm25_indexed == 1
+    assert outcome.degraded_reason == "invalid_embedding"
+    with adapter._get_conn() as conn:
+        row = conn.execute("SELECT embedding FROM vectors").fetchone()
+    assert row == (None,)
+    assert adapter.bm25_search("古井", top_k=1)
+
+
+@pytest.mark.asyncio
+async def test_no_key_storage_updates_bm25_content_and_clears_stale_embedding(tmp_path, monkeypatch):
+    cfg = DataModulesConfig.from_project_root(tmp_path)
+    cfg.embed_api_key = ""
+    cfg.rerank_api_key = ""
+    cfg.ensure_dirs()
+    monkeypatch.setattr(rag_module, "get_client", lambda config: StubClient())
+    adapter = RAGAdapter(cfg)
+    chunk = {
+        "chunk_id": "stable-chunk",
+        "chapter": 1,
+        "scene_index": 1,
+        "content": "oldtoken",
+    }
+
+    initial = await adapter.store_chunks([chunk])
+    assert initial.mode == "vector"
+
+    # Switch to the real no-key client.  Its session methods are guarded so
+    # every retrieval path proves it degrades before any HTTP setup/retry.
+    adapter.api_client = ModalAPIClient(cfg)
+    session_calls = {"embed": 0, "rerank": 0}
+
+    async def forbidden_embed_session():
+        session_calls["embed"] += 1
+        raise AssertionError("unexpected embedding HTTP session")
+
+    async def forbidden_rerank_session():
+        session_calls["rerank"] += 1
+        raise AssertionError("unexpected rerank HTTP session")
+
+    monkeypatch.setattr(adapter.api_client._embed_client, "_get_session", forbidden_embed_session)
+    monkeypatch.setattr(adapter.api_client._rerank_client, "_get_session", forbidden_rerank_session)
+
+    updated = await adapter.store_chunks([{**chunk, "content": "newtoken"}])
+    assert updated == 1
+    assert updated.mode == "bm25_only"
+    assert updated.bm25_only is True
+    assert updated.storage_error is False
+
+    with adapter._get_conn() as conn:
+        row = conn.execute(
+            "SELECT content, embedding FROM vectors WHERE chunk_id = ?",
+            ("stable-chunk",),
+        ).fetchone()
+    assert row == ("newtoken", None)
+    assert adapter.bm25_search("oldtoken", top_k=5) == []
+    assert adapter.bm25_search("newtoken", top_k=5)[0].content == "newtoken"
+    stats = adapter.get_stats()
+    assert stats["vectors"] == 1
+    assert stats["embedded_vectors"] == 0
+    assert stats["bm25_documents"] == 1
+
+    vector_results = await adapter.vector_search("newtoken", top_k=2)
+    hybrid_results = await adapter.hybrid_search("newtoken", rerank_top_n=2)
+    graph_results = await adapter.graph_hybrid_search("newtoken", top_k=2)
+    unified_results = await adapter.search("newtoken", top_k=2, strategy="graph_hybrid")
+    for results in (vector_results, hybrid_results, graph_results, unified_results):
+        assert results
+        assert all(result.source == "bm25" for result in results)
+    assert adapter.degraded_mode_reason == "embedding_not_configured"
+    assert session_calls == {"embed": 0, "rerank": 0}
+
+
+@pytest.mark.asyncio
+async def test_store_chunks_rolls_back_and_reports_real_storage_error(tmp_path, monkeypatch):
+    cfg = DataModulesConfig.from_project_root(tmp_path)
+    cfg.ensure_dirs()
+    monkeypatch.setattr(rag_module, "get_client", lambda config: StubClient())
+    adapter = RAGAdapter(cfg)
+    original = {
+        "chunk_id": "stable-chunk",
+        "chapter": 1,
+        "scene_index": 1,
+        "content": "original",
+    }
+    assert await adapter.store_chunks([original]) == 1
+
+    def fail_bm25(*args, **kwargs):
+        raise sqlite3.OperationalError("bm25 unavailable")
+
+    monkeypatch.setattr(adapter, "_update_bm25_index", fail_bm25)
+    outcome = await adapter.store_chunks([{**original, "content": "must-not-commit"}])
+
+    assert outcome == 0
+    assert outcome.mode == "storage_error"
+    assert outcome.storage_error is True
+    assert outcome.errors
+    with adapter._get_conn() as conn:
+        row = conn.execute(
+            "SELECT content, embedding FROM vectors WHERE chunk_id = ?",
+            ("stable-chunk",),
+        ).fetchone()
+    assert row[0] == "original"
+    assert row[1] is not None
 
 
 @pytest.mark.asyncio

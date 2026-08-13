@@ -112,3 +112,19 @@ def test_accepted_event_model_rejects_blank_subject_and_unknown_type():
                 }
             ],
         )
+
+
+def test_accepted_event_model_rejects_chapter_spoofing():
+    with pytest.raises(ValueError, match="does not match commit chapter 10"):
+        normalize_accepted_events(
+            10,
+            [
+                {
+                    "event_id": "evt-future-secret",
+                    "chapter": 1,
+                    "event_type": "world_rule_revealed",
+                    "subject": "掌柜身份",
+                    "payload": {"description": "掌柜是第十章才揭示的暗线首领"},
+                }
+            ],
+        )

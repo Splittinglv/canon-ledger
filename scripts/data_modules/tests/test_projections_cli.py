@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -15,8 +16,9 @@ def _ensure_scripts_on_path() -> None:
 _ensure_scripts_on_path()
 
 from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
-from data_modules.projection_log import read_projection_runs  # noqa: E402
+from data_modules.projection_log import append_projection_run, read_projection_runs  # noqa: E402
 from data_modules.projections import replay_projections, retry_projection  # noqa: E402
+from data_modules.vector_projection_writer import VectorProjectionWriter  # noqa: E402
 
 
 def _make_rejected_commit(project_root: Path, chapter: int) -> None:
@@ -43,7 +45,9 @@ def _make_accepted_commit_with_event(project_root: Path, chapter: int) -> None:
         fulfillment_result={"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
         disambiguation_result={"pending": []},
         extraction_result={
-            "state_deltas": [],
+            "state_deltas": [
+                {"entity_id": "medicine_box", "field": "owner", "new": "shopkeeper"}
+            ],
             "entity_deltas": [],
             "accepted_events": [
                 {
@@ -89,6 +93,142 @@ def test_retry_projection_reports_missing_commit(tmp_path):
 
     assert report["ok"] is False
     assert report["error"] == "missing_commit"
+
+
+def test_retry_projection_rejects_filename_meta_chapter_mismatch(tmp_path):
+    _make_rejected_commit(tmp_path, chapter=10)
+    source = tmp_path / ".story-system" / "commits" / "chapter_010.commit.json"
+    target = tmp_path / ".story-system" / "commits" / "chapter_003.commit.json"
+    target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+    report = retry_projection(tmp_path, chapter=3)
+
+    assert report["ok"] is False
+    assert report["error"] == "commit_chapter_mismatch"
+
+
+def test_retry_projection_backfills_only_vector_after_key_is_configured(
+    tmp_path,
+    monkeypatch,
+):
+    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    service = ChapterCommitService(tmp_path)
+    payload = service.build_commit(
+        chapter=4,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+        },
+        disambiguation_result={"pending": []},
+        extraction_result={
+            "state_deltas": [],
+            "entity_deltas": [],
+            "accepted_events": [],
+            "summary_text": "主角在古井旁找到一枚旧印。",
+        },
+    )
+    payload["projection_status"] = {
+        "state": "done",
+        "index": "done",
+        "summary": "done",
+        "memory": "skipped",
+        "vector": "skipped",
+    }
+    commit_path = service.persist_commit(payload)
+    append_projection_run(
+        tmp_path,
+        payload,
+        {
+            "vector": {
+                "status": "skipped",
+                "result": {"reason": "bm25_only", "bm25_indexed": 1},
+            }
+        },
+        commit_path=commit_path,
+    )
+    monkeypatch.setenv("EMBED_API_KEY", "configured-later")
+    selected = []
+
+    def _apply_only_vector(self, commit_payload, *, only_writers=None):
+        selected.append(set(only_writers or set()))
+        commit_payload["projection_status"]["vector"] = "done"
+        return commit_payload
+
+    monkeypatch.setattr(
+        ChapterCommitService,
+        "apply_projection_writers",
+        _apply_only_vector,
+    )
+
+    report = retry_projection(tmp_path, chapter=4)
+
+    assert selected == [{"vector"}]
+    assert report["ok"] is True
+    assert report["projection_status"]["vector"] == "done"
+
+
+def test_retry_projection_refreshes_legacy_fact_filter_marker(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMBED_API_KEY", "")
+    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    service = ChapterCommitService(tmp_path)
+    payload = service.build_commit(
+        chapter=4,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+        },
+        disambiguation_result={"pending": []},
+        extraction_result={
+            "state_deltas": [
+                {"entity_id": "medicine_box", "field": "owner", "new": "shopkeeper"}
+            ],
+            "entity_deltas": [],
+            "accepted_events": [],
+            "summary_text": "药箱仍由掌柜保管。",
+        },
+    )
+    payload["projection_status"] = {
+        "state": "done",
+        "index": "done",
+        "summary": "done",
+        "memory": "skipped",
+        "vector": "done",
+    }
+    service.persist_commit(payload)
+    assert VectorProjectionWriter(tmp_path).apply(payload)["reason"] == "bm25_only"
+
+    vector_db = tmp_path / ".webnovel" / "vectors.db"
+    with sqlite3.connect(vector_db) as conn:
+        conn.execute(
+            "UPDATE vectors SET source_file = ? WHERE chapter = 4",
+            ("commit:chapter_004:legacy-fact-only-v1",),
+        )
+
+    selected = []
+
+    def _apply_only_vector(self, commit_payload, *, only_writers=None):
+        selected.append(set(only_writers or set()))
+        commit_payload["projection_status"]["vector"] = "done"
+        return commit_payload
+
+    monkeypatch.setattr(
+        ChapterCommitService,
+        "apply_projection_writers",
+        _apply_only_vector,
+    )
+
+    report = retry_projection(tmp_path, chapter=4)
+
+    assert selected == [{"vector"}]
+    assert report["ok"] is True
 
 
 def test_replay_projections_runs_range(tmp_path):

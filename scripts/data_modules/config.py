@@ -153,6 +153,18 @@ class DataModulesConfig:
     def embed_url(self) -> str:
         return self.embed_base_url
 
+    @property
+    def embedding_enabled(self) -> bool:
+        """Whether remote embedding is explicitly configured.
+
+        Embedding is an optional consistency aid.  Treating the default URL as
+        usable without credentials caused fresh projects to make doomed HTTP
+        requests and retry before falling back.  A key is therefore the
+        capability switch; callers can immediately use the local BM25 index
+        when it is absent.
+        """
+        return bool(str(self.embed_api_key or "").strip())
+
     # ================= Rerank API 配置 =================
     rerank_api_type: str = "openai"
     rerank_base_url: str = field(default_factory=lambda: os.getenv("RERANK_BASE_URL", "https://api.jina.ai/v1"))
@@ -162,6 +174,11 @@ class DataModulesConfig:
     @property
     def rerank_url(self) -> str:
         return self.rerank_base_url
+
+    @property
+    def rerank_enabled(self) -> bool:
+        """Whether remote reranking is explicitly configured."""
+        return bool(str(self.rerank_api_key or "").strip())
 
     # ================= 并发配置 =================
     embed_concurrency: int = 64

@@ -14,10 +14,10 @@ class EventProjectionRouter:
         "relationship_changed": ["index", "vector"],
         "world_rule_revealed": ["memory", "vector"],
         "world_rule_broken": ["memory", "vector"],
-        "open_loop_created": ["memory"],
-        "open_loop_closed": ["memory"],
-        "promise_created": ["memory"],
-        "promise_paid_off": ["memory"],
+        "open_loop_created": ["memory", "vector"],
+        "open_loop_closed": ["memory", "vector"],
+        "promise_created": ["memory", "vector"],
+        "promise_paid_off": ["memory", "vector"],
         "artifact_obtained": ["index", "vector"],
     }
 
@@ -29,10 +29,16 @@ class EventProjectionRouter:
         status = str((commit_payload.get("meta") or {}).get("status") or "")
         if status == "rejected":
             writers.add("state")
+            # A rejection can replace a previously accepted chapter.  The
+            # retrieval writer must clear that chapter's old facts.
+            writers.add("vector")
             return sorted(writers)
         if status == "accepted":
             writers.add("state")
             writers.add("index")
+            # Even an empty accepted snapshot must run retrieval replacement
+            # so removed events from an earlier revision cannot linger.
+            writers.add("vector")
         if extraction_list(commit_payload, "entity_deltas"):
             writers.add("index")
         if extraction_text(commit_payload, "summary_text"):

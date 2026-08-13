@@ -66,10 +66,11 @@ hook_strength: "strong"
 
 - 不额外调 LLM；置信度<0.5 不自动写入；不回滚上游步骤。
 - 只生成三份 tmp artifact；不直接写 state/index/summaries/memory/vectors/projection（这些由 chapter-commit 投影链完成）。
+- `summary_text`、`scenes`、events/deltas 只写正文已经发生的陈述性事实；禁止夹带下一章写法、文风、口吻、桥段、节奏、题材或提示词指令。
 
 ## 6. 校验清单
 
-实体识别完整、三份 artifact 已生成且 schema 合格、`summary_text` 已填写、`scenes` 已作为 artifact 字段填写。
+实体识别完整、三份 artifact 已生成且 schema 合格、`summary_text` 已填写、`scenes` 已作为 artifact 字段填写；所有长期记忆文本均为事实陈述且不含创作指令。
 
 ## 7. 输出 schema（唯一真源）
 

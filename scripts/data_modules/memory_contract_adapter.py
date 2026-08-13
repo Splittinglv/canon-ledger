@@ -24,6 +24,7 @@ from .memory_contract import (
     TimelineEvent,
 )
 from .consistency_context import sanitize_story_contracts
+from .rag_context import chapter_goal_from_contract, empty_rag_assist, load_rag_assist
 from .story_runtime_sources import load_runtime_sources
 from .urgency_utils import coerce_urgency
 
@@ -181,6 +182,26 @@ class MemoryContractAdapter:
                 sections["outline"] = outline
         except Exception as e:
             logger.warning("load_context: outline failed: %s", e)
+
+        # 2.5. RAG is a default, best-effort fact lookup.  It never becomes a
+        # creative instruction: callers receive only prior-story evidence and
+        # can continue safely when the index is empty or unavailable.
+        try:
+            chapter_goal = chapter_goal_from_contract(runtime_sources.contracts.get("chapter"))
+            sections["rag_assist"] = load_rag_assist(
+                self.config.project_root,
+                chapter=chapter,
+                outline=str(sections.get("outline") or ""),
+                chapter_goal=chapter_goal,
+                config=self.config,
+            )
+        except Exception as e:
+            logger.warning("load_context: rag assist failed: %s", e)
+            sections["rag_assist"] = empty_rag_assist(
+                enabled=bool(getattr(self.config, "context_rag_assist_enabled", True)),
+                reason=f"rag_error:{e.__class__.__name__}",
+            )
+            sections["rag_assist"]["degraded"] = True
 
         # 3. 最近摘要
         try:

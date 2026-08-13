@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import pytest
+
 from data_modules.event_projection_router import EventProjectionRouter
 
 
@@ -98,6 +100,32 @@ def test_required_writers_includes_index_for_accepted_commit():
         }
     )
     assert "index" in writers
+    assert "vector" in writers
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("summary_text", "本章摘要"),
+        ("scenes", [{"summary": "主角进入秘境"}]),
+        ("accepted_events", [{"event_type": "unknown", "subject": "主角"}]),
+        ("entity_deltas", [{"entity_id": "protagonist", "canonical_name": "主角"}]),
+    ],
+)
+def test_accepted_retrieval_artifacts_always_require_vector(field, value):
+    """Known event routing must not be the only way retrieval is triggered."""
+    payload = {
+        "meta": {"status": "accepted", "chapter": 5},
+        "accepted_events": [],
+        "entity_deltas": [],
+        "scenes": [],
+        "summary_text": "",
+    }
+    payload[field] = value
+
+    writers = EventProjectionRouter().required_writers(payload)
+
+    assert "vector" in writers
 
 
 def test_router_ignores_unknown_and_non_dict_events():
@@ -111,4 +139,4 @@ def test_router_ignores_unknown_and_non_dict_events():
             "summary_text": "   ",
         }
     )
-    assert writers == ["state"]
+    assert writers == ["state", "vector"]

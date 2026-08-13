@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import sys
+import sqlite3
 from pathlib import Path
 
 from .test_project_phase import _make_contracts, _make_init_ready
@@ -67,6 +68,60 @@ def test_doctor_no_project_reports_repair(monkeypatch):
     assert report["ok"] is False
     assert report["phase"] == "no_project"
     assert report["recommended_actions"]
+
+
+def test_doctor_treats_missing_rag_keys_as_optional_bm25_mode(tmp_path, monkeypatch):
+    monkeypatch.delenv("EMBED_API_KEY", raising=False)
+    monkeypatch.delenv("RERANK_API_KEY", raising=False)
+
+    checks = doctor_module._rag_checks(tmp_path)
+
+    by_id = {item["id"]: item for item in checks}
+    assert by_id["rag.embed.api_key"]["status"] == "ok"
+    assert by_id["rag.embed.api_key"]["severity"] == "info"
+    assert "BM25" in by_id["rag.embed.api_key"]["impact"]
+    assert by_id["rag.rerank.api_key"]["status"] == "ok"
+    assert by_id["rag.rerank.api_key"]["severity"] == "info"
+
+
+def test_doctor_warns_about_legacy_unbound_retrieval_rows(tmp_path):
+    vector_db = tmp_path / ".webnovel" / "vectors.db"
+    vector_db.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(vector_db) as conn:
+        conn.execute(
+            """
+            CREATE TABLE vectors (
+                chunk_id TEXT PRIMARY KEY,
+                source_file TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO vectors(chunk_id, source_file) VALUES (?, ?)",
+            ("legacy", "commit:chapter_001"),
+        )
+
+    checks = doctor_module._rag_checks(tmp_path)
+
+    provenance = next(item for item in checks if item["id"] == "rag.retrieval_provenance")
+    assert provenance["status"] == "warning"
+    assert "projections replay" in provenance["repair"]
+
+
+def test_doctor_warns_when_legacy_retrieval_schema_lacks_provenance_column(tmp_path):
+    vector_db = tmp_path / ".webnovel" / "vectors.db"
+    vector_db.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(vector_db) as conn:
+        conn.execute(
+            "CREATE TABLE vectors (chunk_id TEXT PRIMARY KEY, chapter INTEGER, content TEXT)"
+        )
+
+    checks = doctor_module._rag_checks(tmp_path)
+
+    provenance = next(item for item in checks if item["id"] == "rag.retrieval_provenance")
+    assert provenance["status"] == "warning"
+    assert "legacy_schema_missing_source_file" in provenance["actual"]
+    assert "projections replay" in provenance["repair"]
 
 
 def test_doctor_warns_when_old_project_has_commit_without_projection_log(tmp_path, monkeypatch):

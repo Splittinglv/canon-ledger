@@ -17,6 +17,13 @@ from data_modules.api_client import (
 )
 
 
+@pytest.fixture(autouse=True)
+def configured_test_api_credentials(monkeypatch):
+    """Legacy transport tests exercise configured remote capabilities."""
+    monkeypatch.setenv("EMBED_API_KEY", "embed-test-key")
+    monkeypatch.setenv("RERANK_API_KEY", "rerank-test-key")
+
+
 class FakeResponse:
     def __init__(self, status, json_data=None, text_data=""):
         self.status = status
@@ -236,6 +243,44 @@ def test_get_client_singleton(tmp_path):
     assert client1 is client2
     client3 = get_client(cfg)
     assert client3 is not client1
+
+
+@pytest.mark.asyncio
+async def test_missing_keys_skip_sessions_and_retries(tmp_path, monkeypatch):
+    config = DataModulesConfig.from_project_root(tmp_path)
+    config.embed_api_key = ""
+    config.rerank_api_key = ""
+    config.api_max_retries = 9
+
+    embed_client = EmbeddingAPIClient(config)
+    rerank_client = RerankAPIClient(config)
+    session_calls = {"embed": 0, "rerank": 0}
+
+    async def forbidden_embed_session():
+        session_calls["embed"] += 1
+        raise AssertionError("embedding session must not be created without a key")
+
+    async def forbidden_rerank_session():
+        session_calls["rerank"] += 1
+        raise AssertionError("rerank session must not be created without a key")
+
+    monkeypatch.setattr(embed_client, "_get_session", forbidden_embed_session)
+    monkeypatch.setattr(rerank_client, "_get_session", forbidden_rerank_session)
+
+    assert config.embedding_enabled is False
+    assert config.rerank_enabled is False
+    assert embed_client.available is False
+    assert rerank_client.available is False
+    assert await embed_client.embed(["text"]) is None
+    assert await embed_client.embed_batch(["a", "b"]) == [None, None]
+    assert await rerank_client.rerank("query", ["document"]) is None
+    assert session_calls == {"embed": 0, "rerank": 0}
+    assert embed_client.stats.errors == 0
+    assert rerank_client.stats.errors == 0
+
+    modal = ModalAPIClient(config)
+    assert modal.embedding_available is False
+    assert modal.rerank_available is False
 
 
 @pytest.mark.asyncio

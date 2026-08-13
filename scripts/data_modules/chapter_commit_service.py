@@ -138,7 +138,16 @@ class ChapterCommitService:
         if result.get("applied"):
             return "done"
         reason = str(result.get("reason") or "").strip()
-        if reason in {"not_required", "commit_rejected"}:
+        if reason in {
+            "not_required",
+            "commit_rejected",
+            "no_chunks",
+            "bm25_only",
+            "embedding_partial",
+        }:
+            # BM25-only is a successful lexical-retrieval fallback, not a
+            # semantic-vector write.  Preserve the result in the projection
+            # log while keeping the vector writer visibly non-done.
             return "skipped"
         if reason.startswith("error:"):
             return f"failed:{reason[6:] or 'writer_error'}"

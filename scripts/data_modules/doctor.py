@@ -254,7 +254,7 @@ def _sqlite_checks(project_root: Path) -> list[dict[str, Any]]:
     cfg = DataModulesConfig.from_project_root(project_root)
     for db_path, table, check_id, impact in (
         (cfg.index_db, "chapters", "sqlite.index_db.chapters", "查询、关系图谱和 dashboard 章节统计会降级。"),
-        (cfg.vector_db, "vectors", "sqlite.vector_db.vectors", "RAG 向量召回不可用，会退化为关键词或空召回。"),
+        (cfg.vector_db, "vectors", "sqlite.vector_db.vectors", "RAG 事实索引不可用，写作仍可继续，但无法补查已提交章节。"),
     ):
         exists = db_path.is_file()
         table_ok, count, error = _sqlite_table_count(db_path, table)
@@ -292,20 +292,94 @@ def _sqlite_checks(project_root: Path) -> list[dict[str, Any]]:
 def _rag_checks(project_root: Path) -> list[dict[str, Any]]:
     cfg = DataModulesConfig.from_project_root(project_root)
     checks: list[dict[str, Any]] = []
-    for key, present, base_url, model in (
-        ("embed", bool(str(cfg.embed_api_key or "").strip()), cfg.embed_base_url, cfg.embed_model),
-        ("rerank", bool(str(cfg.rerank_api_key or "").strip()), cfg.rerank_base_url, cfg.rerank_model),
+    for key, present, base_url, model, fallback in (
+        (
+            "embed",
+            bool(str(cfg.embed_api_key or "").strip()),
+            cfg.embed_base_url,
+            cfg.embed_model,
+            "BM25 关键词召回仍可用；仅语义向量召回未启用。",
+        ),
+        (
+            "rerank",
+            bool(str(cfg.rerank_api_key or "").strip()),
+            cfg.rerank_base_url,
+            cfg.rerank_model,
+            "召回结果仍可用；仅远程精排未启用。",
+        ),
     ):
         checks.append(
             _check(
                 f"rag.{key}.api_key",
-                status=CHECK_OK if present else CHECK_WARNING,
-                severity="info" if present else "warning",
-                message=f"{key} api key configured",
+                status=CHECK_OK,
+                severity="info",
+                message=(
+                    f"{key} api key configured"
+                    if present
+                    else f"{key} api key not configured (optional)"
+                ),
                 expected="api key present in env or .env",
                 actual=f"present; model={model}; base_url={base_url}" if present else f"missing; model={model}; base_url={base_url}",
-                impact="" if present else "RAG 相关调用会不可用或降级。",
-                repair="" if present else "复制 .env.example 为 .env，并填写对应 API key；不要把真实 key 提交到仓库。",
+                impact="" if present else fallback,
+                repair="" if present else "如需可选增强，复制 .env.example 为 .env 并填写对应 API key；不要提交真实 key。",
+            )
+        )
+    if cfg.vector_db.is_file():
+        legacy_rows = 0
+        provenance_error = ""
+        try:
+            uri = f"{cfg.vector_db.resolve().as_uri()}?mode=ro"
+            with sqlite3.connect(uri, uri=True) as conn:
+                tables = {
+                    str(row[0])
+                    for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+                if "vectors" in tables:
+                    columns = {
+                        str(row[1])
+                        for row in conn.execute("PRAGMA table_info(vectors)").fetchall()
+                    }
+                    if "source_file" not in columns:
+                        provenance_error = "legacy_schema_missing_source_file"
+                    else:
+                        row = conn.execute(
+                            """
+                            SELECT COUNT(*) FROM vectors
+                            WHERE source_file IS NULL
+                               OR source_file = ''
+                               OR source_file NOT LIKE 'commit:chapter_%:%'
+                            """
+                        ).fetchone()
+                        legacy_rows = int(row[0] or 0) if row else 0
+                else:
+                    provenance_error = "vectors_table_missing"
+        except sqlite3.Error as exc:
+            provenance_error = f"sqlite_error:{exc.__class__.__name__}"
+        needs_rebuild = bool(legacy_rows or provenance_error)
+        checks.append(
+            _check(
+                "rag.retrieval_provenance",
+                status=CHECK_WARNING if needs_rebuild else CHECK_OK,
+                severity="warning" if needs_rebuild else "info",
+                message="retrieval rows bound to accepted commit snapshots",
+                expected="all default-context rows carry a commit snapshot marker",
+                actual=(
+                    f"legacy_or_unbound_rows={legacy_rows}; schema={provenance_error}"
+                    if provenance_error
+                    else f"legacy_or_unbound_rows={legacy_rows}"
+                ),
+                impact=(
+                    "未绑定的旧向量行会被默认写作上下文忽略，避免召回已拒绝或过期事实。"
+                    if needs_rebuild
+                    else ""
+                ),
+                repair=(
+                    "对已提交章节运行 projections replay，重建带来源绑定的 BM25/向量索引。"
+                    if needs_rebuild
+                    else ""
+                ),
             )
         )
     return checks

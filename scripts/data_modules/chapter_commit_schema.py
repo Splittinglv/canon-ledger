@@ -192,7 +192,22 @@ class AcceptedEventInput(BaseModel):
 
         payload = dict(value)
         context = info.context or {}
-        chapter = int(payload.get("chapter") or context.get("chapter") or 0)
+        index = _event_context_index(info)
+        expected_chapter = int(context.get("chapter") or 0)
+        raw_chapter = payload.get("chapter")
+        if raw_chapter not in (None, ""):
+            try:
+                declared_chapter = int(raw_chapter)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"accepted_events[{index}].chapter must be an integer"
+                ) from exc
+            if expected_chapter > 0 and declared_chapter != expected_chapter:
+                raise ValueError(
+                    f"accepted_events[{index}].chapter {declared_chapter} "
+                    f"does not match commit chapter {expected_chapter}"
+                )
+        chapter = expected_chapter or int(raw_chapter or 0)
         payload["chapter"] = chapter
 
         event_type = str(payload.get("event_type") or payload.get("type") or "").strip()
@@ -202,14 +217,12 @@ class AcceptedEventInput(BaseModel):
 
         subject = _event_subject(payload)
         if not subject:
-            index = _event_context_index(info)
             raise ValueError(
                 f"accepted_events[{index}].subject must be a non-empty string"
             )
         payload["subject"] = subject
 
         if not str(payload.get("event_id") or "").strip():
-            index = _event_context_index(info)
             payload["event_id"] = _generated_event_id(chapter, index + 1, payload)
 
         return payload
