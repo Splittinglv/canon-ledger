@@ -88,13 +88,25 @@ def extract_chapter_summary(project_root: Path, chapter_num: int) -> str:
     return f"[自动截取前500字]\n{text}..."
 
 
-def extract_state_summary(project_root: Path) -> str:
+def extract_state_summary(project_root: Path, chapter_num: int | None = None) -> str:
     """Extract key fields from `.webnovel/state.json`."""
     state_file = project_root / ".webnovel" / "state.json"
     if not state_file.exists():
         return "⚠️ state.json 不存在"
 
-    state = json.loads(state_file.read_text(encoding="utf-8"))
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except Exception:
+        return "⚠️ state.json 读取失败，已阻止状态快照注入"
+    if not isinstance(state, dict):
+        return "⚠️ state.json 根结构无效，已阻止状态快照注入"
+    if chapter_num is not None:
+        _ensure_scripts_path()
+        from data_modules.state_snapshot import validate_state_snapshot
+
+        _as_of, safe, _reason = validate_state_snapshot(state, chapter_num)
+        if not safe:
+            return "⚠️ state.json 不是目标章之前的可信快照，已阻止状态快照注入"
     summary_parts: List[str] = []
 
     if "progress" in state:
@@ -197,6 +209,8 @@ def _load_contract_context(project_root: Path, chapter_num: int) -> Dict[str, An
         "runtime_status": payload.get("runtime_status", {}),
         "latest_commit": payload.get("latest_commit", {}),
         "prewrite_validation": payload.get("prewrite_validation", {}),
+        "context_completeness": payload.get("context_completeness", {}),
+        "hard_constraints": payload.get("hard_constraints", []),
         "reader_signal": payload.get("reader_signal", {}),
         "genre_profile": payload.get("genre_profile", {}),
         "writing_guidance": payload.get("writing_guidance", {}),
@@ -211,12 +225,10 @@ def build_chapter_context_payload(project_root: Path, chapter_num: int) -> Dict[
     """Assemble full chapter context payload for text/json output."""
     outline = extract_chapter_outline(project_root, chapter_num)
 
-    prev_summaries = []
-    for prev_ch in range(max(1, chapter_num - 2), chapter_num):
-        summary = extract_chapter_summary(project_root, prev_ch)
-        prev_summaries.append(f"### 第{prev_ch}章摘要\n{summary}")
+    # Untyped summary prose is excluded; structured facts/RAG provide history.
+    prev_summaries: List[str] = []
 
-    state_summary = extract_state_summary(project_root)
+    state_summary = extract_state_summary(project_root, chapter_num=chapter_num)
     contract_context = _load_contract_context(project_root, chapter_num)
     plot_structure = contract_context.get("plot_structure") or load_chapter_plot_structure(project_root, chapter_num)
     rag_assist = _load_rag_assist(
@@ -237,6 +249,8 @@ def build_chapter_context_payload(project_root: Path, chapter_num: int) -> Dict[
         "runtime_status": contract_context.get("runtime_status", {}),
         "latest_commit": contract_context.get("latest_commit", {}),
         "prewrite_validation": contract_context.get("prewrite_validation", {}),
+        "context_completeness": contract_context.get("context_completeness", {}),
+        "hard_constraints": contract_context.get("hard_constraints", []),
         "reader_signal": contract_context.get("reader_signal", {}),
         "genre_profile": contract_context.get("genre_profile", {}),
         "writing_guidance": contract_context.get("writing_guidance", {}),

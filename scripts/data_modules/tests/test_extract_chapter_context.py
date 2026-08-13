@@ -37,6 +37,55 @@ def test_extract_state_summary_accepts_dominant_key(tmp_path):
     assert "Ch11:fire" in text
 
 
+def test_extract_state_summary_blocks_snapshot_from_target_or_future_chapter(tmp_path):
+    scripts_dir = Path(__file__).resolve().parents[2]
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+
+    from extract_chapter_context import extract_state_summary
+
+    webnovel_dir = tmp_path / ".webnovel"
+    webnovel_dir.mkdir(parents=True, exist_ok=True)
+    (webnovel_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "progress": {"current_chapter": 10},
+                "protagonist_state": {
+                    "power": {"realm": "FUTURE_REALM"},
+                    "location": "FUTURE_CITY",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    text = extract_state_summary(tmp_path, chapter_num=2)
+
+    assert "已阻止状态快照注入" in text
+    assert "FUTURE_REALM" not in text
+    assert "FUTURE_CITY" not in text
+
+
+def test_extract_state_summary_blocks_projected_progress_without_watermark(tmp_path):
+    scripts_dir = Path(__file__).resolve().parents[2]
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from extract_chapter_context import extract_state_summary
+
+    webnovel_dir = tmp_path / ".webnovel"
+    webnovel_dir.mkdir(parents=True, exist_ok=True)
+    (webnovel_dir / "state.json").write_text(
+        json.dumps({"progress": {"total_words": 9000}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    text = extract_state_summary(tmp_path, chapter_num=2)
+
+    assert "已阻止状态快照注入" in text
+    assert "9000" not in text
+
+
 def test_extract_chapter_outline_supports_hyphen_filename(tmp_path):
     scripts_dir = Path(__file__).resolve().parents[2]
     if str(scripts_dir) not in sys.path:
@@ -209,7 +258,9 @@ def test_build_chapter_context_payload_includes_contract_sections(tmp_path, monk
     )
 
     payload = build_chapter_context_payload(tmp_path, 3)
-    assert payload["context_contract_version"] == "v3"
+    assert payload["context_contract_version"] == "v4"
+    assert "context_completeness" in payload
+    assert "hard_constraints" in payload
     assert payload.get("context_weight_stage") in {"early", "mid", "late"}
     assert "writing_guidance" in payload
     assert payload["writing_guidance"].get("enabled") is False

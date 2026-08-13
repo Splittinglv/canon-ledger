@@ -111,8 +111,6 @@ def test_extract_context_forwards_with_resolved_project_root(monkeypatch, tmp_pa
             "extract-context",
             "--chapter",
             "12",
-            "--format",
-            "json",
         ],
     )
 
@@ -128,6 +126,51 @@ def test_extract_context_forwards_with_resolved_project_root(monkeypatch, tmp_pa
         "12",
         "--format",
         "json",
+    ]
+
+
+def test_memory_contract_forwards_context_budget(monkeypatch, tmp_path):
+    module = _load_webnovel_module()
+    book_root = (tmp_path / "book").resolve()
+    called = {}
+
+    monkeypatch.setattr(module, "_resolve_root", lambda _explicit=None: book_root)
+
+    def _fake_run_script(script_name, argv):
+        called["script_name"] = script_name
+        called["argv"] = list(argv)
+        return 0
+
+    monkeypatch.setattr(module, "_run_script", _fake_run_script)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "webnovel",
+            "--project-root",
+            str(book_root),
+            "memory-contract",
+            "load-context",
+            "--chapter",
+            "7",
+            "--budget-tokens",
+            "2048",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+
+    assert int(exc.value.code or 0) == 0
+    assert called["script_name"] == "memory_cli.py"
+    assert called["argv"] == [
+        "--project-root",
+        str(book_root),
+        "load-context",
+        "--chapter",
+        "7",
+        "--budget-tokens",
+        "2048",
     ]
 
 
@@ -1107,7 +1150,7 @@ def test_webnovel_skill_flow_runs_story_contract_context_and_review_pipeline_wit
             {
                 "project": {"genre": "xuanhuan"},
                 "progress": {
-                    "current_chapter": 3,
+                    "current_chapter": 2,
                     "total_words": 9000,
                     "volumes_planned": [{"volume": 1, "chapters_range": "1-20"}],
                 },

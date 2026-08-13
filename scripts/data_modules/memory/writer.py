@@ -35,6 +35,30 @@ class MemoryWriter:
         stats["items_updated"] += int(result.get("updated", 0))
         stats["items_outdated"] += int(result.get("outdated", 0))
 
+    def _upsert_current_relationship(
+        self,
+        item: MemoryItem,
+        stats: Dict[str, Any],
+    ) -> None:
+        """Upsert a relationship without letting an old retry roll it back.
+
+        Relationship identity is the same ``(from_entity, to_entity)`` key
+        used by the scratchpad schema.  A newer active row therefore wins over
+        a delayed projection of an earlier chapter; same-chapter replays remain
+        idempotent through the normal ``upsert_item`` path.
+        """
+        for current in self.store.query(
+            category="relationship",
+            subject=item.subject,
+            status="active",
+        ):
+            if current.field != item.field:
+                continue
+            if int(current.source_chapter or 0) > int(item.source_chapter or 0):
+                stats["items_preserved"] = int(stats.get("items_preserved", 0)) + 1
+                return
+        self._upsert(item, stats)
+
     @staticmethod
     def _coerce_loop_content(payload: Dict[str, Any], event: Dict[str, Any]) -> str:
         """从 open_loop 事件 payload 多个候选字段里取出有意义的悬念内容。
@@ -61,12 +85,36 @@ class MemoryWriter:
         subject = str(event.get("subject") or "").strip()
         return subject
 
+    @staticmethod
+    def _relationship_from_event(event: Dict[str, Any]) -> Dict[str, Any] | None:
+        """Normalize an accepted relationship event like IndexProjectionWriter."""
+        payload = dict(event.get("payload") or {})
+        from_entity = str(
+            payload.get("from_entity") or event.get("subject") or ""
+        ).strip()
+        to_entity = str(payload.get("to_entity") or payload.get("to") or "").strip()
+        rel_type = str(
+            payload.get("relationship_type")
+            or payload.get("relation_type")
+            or payload.get("type")
+            or ""
+        ).strip()
+        if not from_entity or not to_entity or not rel_type:
+            return None
+        return {
+            "from": from_entity,
+            "to": to_entity,
+            "type": rel_type,
+            "description": str(payload.get("description") or "").strip(),
+        }
+
     def update_from_chapter_result(self, chapter: int, result: Dict[str, Any]) -> Dict[str, Any]:
         stats: Dict[str, Any] = {
             "chapter": int(chapter),
             "items_added": 0,
             "items_updated": 0,
             "items_outdated": 0,
+            "items_preserved": 0,
             "warnings": [],
         }
 
@@ -128,7 +176,7 @@ class MemoryWriter:
             from_entity = str(rel.get("from") or rel.get("from_entity") or "").strip()
             to_entity = str(rel.get("to") or rel.get("to_entity") or "").strip()
             rel_type = str(rel.get("type", "") or "").strip()
-            if not from_entity or not to_entity:
+            if not from_entity or not to_entity or not rel_type:
                 continue
             item = MemoryItem(
                 id=self._item_id("relationship", from_entity, to_entity, chapter),
@@ -141,7 +189,7 @@ class MemoryWriter:
                 source_chapter=int(chapter),
                 evidence=[f"relationship:{from_entity}:{to_entity}:{chapter}"],
             )
-            self._upsert(item, stats)
+            self._upsert_current_relationship(item, stats)
 
         chapter_meta = result.get("chapter_meta") or {}
         hook = chapter_meta.get("hook")
@@ -494,7 +542,11 @@ class MemoryWriter:
                 continue
             event_type = str(event.get("event_type") or "").strip()
             payload = dict(event.get("payload") or {})
-            if event_type in {"world_rule_revealed", "world_rule_broken"}:
+            # A broken-rule event reports a contradiction or a proposed
+            # amendment.  It must not turn its proposed value into an active
+            # world rule until an explicit ``world_rule_revealed`` commit
+            # establishes that rule as canonical.
+            if event_type == "world_rule_revealed":
                 rule_text = str(
                     payload.get("rule_content")
                     or payload.get("proposed_value")
@@ -518,6 +570,27 @@ class MemoryWriter:
                         }
                     )
 
+        relationship_rows = [
+            {
+                "from": row.get("from_entity") or row.get("from"),
+                "to": row.get("to_entity") or row.get("to"),
+                "type": row.get("relation_type") or row.get("relationship_type") or row.get("type"),
+                "description": row.get("description") or "",
+            }
+            for row in entity_deltas
+            if isinstance(row, dict)
+            and str(row.get("from_entity") or row.get("from") or "").strip()
+            and str(row.get("to_entity") or row.get("to") or "").strip()
+        ]
+        relationship_rows.extend(
+            derived
+            for event in accepted_events
+            if isinstance(event, dict)
+            and str(event.get("event_type") or "").strip() == "relationship_changed"
+            for derived in [self._relationship_from_event(event)]
+            if derived is not None
+        )
+
         result = {
             "entities_new": [
                 {
@@ -536,23 +609,12 @@ class MemoryWriter:
                 and not (row.get("from_entity") or row.get("from"))
             ],
             "state_changes": list(extraction_list(commit_payload, "state_deltas")),
-            "relationships_new": [
-                {
-                    "from": row.get("from_entity") or row.get("from"),
-                    "to": row.get("to_entity") or row.get("to"),
-                    "type": row.get("relation_type") or row.get("relationship_type") or row.get("type"),
-                    "description": row.get("description") or "",
-                }
-                for row in entity_deltas
-                if isinstance(row, dict)
-                and str(row.get("from_entity") or row.get("from") or "").strip()
-                and str(row.get("to_entity") or row.get("to") or "").strip()
-            ],
+            "relationships_new": relationship_rows,
             "memory_facts": memory_facts,
         }
         stats = self.update_from_chapter_result(chapter, result)
         stats["items_resolved"] = 0
-        stats["items_preserved"] = 0
+        stats.setdefault("items_preserved", 0)
 
         # Apply all creations before closures so a deliberately same-chapter
         # create/resolve pair is deterministic.  Existing items are preserved,

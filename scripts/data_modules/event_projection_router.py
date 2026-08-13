@@ -11,7 +11,7 @@ class EventProjectionRouter:
     TABLE = {
         "character_state_changed": ["state", "memory", "vector"],
         "power_breakthrough": ["state", "memory", "vector"],
-        "relationship_changed": ["index", "vector"],
+        "relationship_changed": ["index", "memory", "vector"],
         "world_rule_revealed": ["memory", "vector"],
         "world_rule_broken": ["memory", "vector"],
         "open_loop_created": ["memory", "vector"],

@@ -488,6 +488,25 @@ def test_context_agent_prefers_contract_and_latest_commit_mainline():
     assert "load-context" in text
 
 
+def test_context_agent_consumes_all_hard_constraints_before_budgeted_evidence():
+    text = (AGENTS_DIR / "context-agent.md").read_text(encoding="utf-8")
+
+    assert "hard_constraints" in text
+    assert "active_constraints" in text
+    for category in (
+        "world_rule",
+        "open_loop",
+        "reader_promise",
+        "relationship",
+    ):
+        assert category in text
+    assert "不得按“前 N 条”" in text
+    assert "数量限制只适用于这些软证据" in text
+    assert "文风唯一来源" in text
+    assert "设定集/文风提示词.md" in text
+    assert "不要降级到会混入" in text
+
+
 def test_context_agent_loads_fixed_guides_and_outputs_writer_brief():
     text = (AGENTS_DIR / "context-agent.md").read_text(encoding="utf-8")
     assert "写作铁律" in text

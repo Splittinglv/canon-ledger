@@ -19,9 +19,16 @@ class PrewriteValidator:
         review_contract: Dict[str, Any],
         plot_structure: Dict[str, Any],
         story_contract: Dict[str, Any] | None = None,
+        state_snapshot: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-        state = json.loads(
-            (self.project_root / ".webnovel" / "state.json").read_text(encoding="utf-8")
+        state = (
+            dict(state_snapshot)
+            if state_snapshot is not None
+            else json.loads(
+                (self.project_root / ".webnovel" / "state.json").read_text(
+                    encoding="utf-8"
+                )
+            )
         )
         pending = state.get("disambiguation_pending") or []
         warnings = state.get("disambiguation_warnings") or []

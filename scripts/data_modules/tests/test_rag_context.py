@@ -623,7 +623,9 @@ def test_load_context_exposes_rag_assist_and_uses_runtime_directive_goal(monkeyp
 
     assert pack.sections["rag_assist"]["reason"] == "no_hit"
     assert captured["chapter"] == 7
-    assert captured["chapter_goal"] == "确认掌柜是否遵守旧约"
+    # Raw chapter goals are untyped prose and are not copied into the default
+    # consistency/RAG context. The authoritative outline remains the query.
+    assert captured["chapter_goal"] == ""
 
 
 def test_extract_context_delegates_to_the_same_helper_and_goal_key(monkeypatch, tmp_path):

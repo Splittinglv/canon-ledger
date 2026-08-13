@@ -27,6 +27,27 @@ CATEGORY_TO_BUCKET: Dict[str, str] = {
 }
 BUCKET_TO_CATEGORY: Dict[str, str] = {v: k for k, v in CATEGORY_TO_BUCKET.items()}
 
+# These facts constrain the next chapter even when they are old or unrelated
+# to the immediate outline.  They are therefore not soft cache entries: a
+# compactor or relevance filter must not silently discard them just to meet a
+# capacity target.
+HARD_CONSTRAINT_CATEGORIES = frozenset(
+    {
+        "world_rule",
+        "open_loop",
+        "reader_promise",
+        "relationship",
+    }
+)
+
+# Character state is also a current, durable fact.  It is kept separately so
+# callers that need only explicit story constraints can use
+# ``HARD_CONSTRAINT_CATEGORIES``, while storage compaction protects every
+# active state snapshot as well.
+PERSISTENT_ACTIVE_CATEGORIES = frozenset(
+    {*HARD_CONSTRAINT_CATEGORIES, "character_state"}
+)
+
 CATEGORY_KEY_RULES: Dict[str, tuple[str, ...]] = {
     "character_state": ("subject", "field"),
     "relationship": ("subject", "field"),

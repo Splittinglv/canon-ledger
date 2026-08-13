@@ -244,6 +244,29 @@ class ScratchpadManager:
                     and row.id == legacy_item_id
                     and not str((row.payload or {}).get("lifecycle_id") or "").strip()
                 ):
+                    legacy_state = str(
+                        (row.payload or {}).get("lifecycle_status")
+                        or (row.payload or {}).get("status")
+                        or ""
+                    ).strip().lower()
+                    if row.status == "resolved" or legacy_state in {
+                        "resolved", "closed", "done", "paid_off", "payoff"
+                    }:
+                        self._remember_resolved_lifecycle(
+                            data, normalized.category, lifecycle_id
+                        )
+                        self._remember_resolved_lifecycle(
+                            data, normalized.category, legacy_item_id
+                        )
+                        rows.pop(index)
+                        setattr(data, bucket, rows)
+                        self.save(data, _use_lock=False)
+                        return {
+                            "added": 0,
+                            "updated": 0,
+                            "outdated": 0,
+                            "preserved": 1,
+                        }
                     # Deterministic migration from the exact ID produced by
                     # the pre-lifecycle writer.  This is identity based; prose
                     # is never searched or compared to choose a target.

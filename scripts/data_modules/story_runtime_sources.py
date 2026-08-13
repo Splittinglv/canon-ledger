@@ -32,26 +32,66 @@ class RuntimeSourceSnapshot:
         }
 
 
+def commit_status_view(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return workflow metadata without exposing review/extraction prose.
+
+    Commits contain model-authored artifacts.  Context consumers only need
+    the commit's trust and projection state; copying the full envelope would
+    create a second path around the consistency-context sanitizer.
+    """
+    if not isinstance(payload, dict) or not payload:
+        return None
+
+    raw_meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    meta: dict[str, Any] = {}
+    chapter = raw_meta.get("chapter")
+    if type(chapter) is int and chapter > 0:
+        meta["chapter"] = chapter
+    schema_version = str(raw_meta.get("schema_version") or "")
+    if schema_version == "story-system/v1":
+        meta["schema_version"] = schema_version
+    status = str(raw_meta.get("status") or "").strip().lower()
+    meta["status"] = status if status in {"accepted", "rejected"} else "unknown"
+
+    raw_projection = (
+        payload.get("projection_status")
+        if isinstance(payload.get("projection_status"), dict)
+        else {}
+    )
+    projection_status: dict[str, str] = {}
+    for key in ("summary", "index", "state", "memory", "vector"):
+        value = str(raw_projection.get(key) or "").strip().lower()
+        if value.startswith("failed"):
+            projection_status[key] = "failed"
+        elif value in {"pending", "done", "skipped"}:
+            projection_status[key] = value
+
+    result: dict[str, Any] = {
+        "meta": meta,
+        "projection_status": projection_status,
+    }
+    raw_trust = payload.get("trust") if isinstance(payload.get("trust"), dict) else {}
+    if raw_trust:
+        trust: dict[str, Any] = {}
+        if type(raw_trust.get("content_binding")) is bool:
+            trust["content_binding"] = raw_trust["content_binding"]
+        if trust:
+            result["trust"] = trust
+    return result
+
+
 def _volume_for_chapter(project_root: Path, chapter: int) -> int:
     return volume_num_for_chapter_from_state(project_root, chapter) or 1
 
 
 def _status_only_commit(payload: dict[str, Any], *, binding_error: str) -> dict[str, Any]:
     """Expose workflow status without leaking untrusted artifact facts."""
-    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
-    projection = (
-        payload.get("projection_status")
-        if isinstance(payload.get("projection_status"), dict)
-        else {}
-    )
-    return {
-        "meta": dict(meta),
-        "projection_status": dict(projection),
-        "trust": {
-            "content_binding": False,
-            "reason": binding_error,
-        },
+    result = commit_status_view(payload) or {"meta": {}, "projection_status": {}}
+    result["trust"] = {
+        "content_binding": False,
+        "reason": str(binding_error or "commit_untrusted")[:160],
     }
+    return result
 
 
 def _load_latest_commit(

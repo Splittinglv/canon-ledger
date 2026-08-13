@@ -40,6 +40,7 @@ def _enable_craft_context(manager):
 
 def test_context_manager_build_and_filter(temp_project):
     state = {
+        "progress": {"current_chapter": 1},
         "protagonist_state": {"name": "萧炎", "location": {"current": "天云宗"}},
         "chapter_meta": {"0001": {"hook": "测试"}},
     }
@@ -47,7 +48,10 @@ def test_context_manager_build_and_filter(temp_project):
 
     # preferences and memory
     (temp_project.webnovel_dir / "preferences.json").write_text(json.dumps({"tone": "热血"}, ensure_ascii=False), encoding="utf-8")
-    (temp_project.webnovel_dir / "project_memory.json").write_text(json.dumps({"patterns": []}, ensure_ascii=False), encoding="utf-8")
+    marker = "AUDIT_UNTYPED_SOFT_MEMORY_MARKER"
+    (temp_project.webnovel_dir / "project_memory.json").write_text(
+        json.dumps({"notes": marker}, ensure_ascii=False), encoding="utf-8"
+    )
 
     idx = IndexManager(temp_project)
     idx.upsert_entity(
@@ -76,16 +80,23 @@ def test_context_manager_build_and_filter(temp_project):
     idx.resolve_invalid_fact(invalid_id, "confirm")
 
     manager = ContextManager(temp_project)
-    payload = manager.build_context(1)
+    payload = manager.build_context(2)
     characters = payload["scene"]["appearing_characters"]
     assert any(c.get("entity_id") == "xiaoyan" for c in characters)
     assert not any(c.get("entity_id") == "bad" for c in characters)
+    assert payload["core"]["protagonist_snapshot"]["name"] == "萧炎"
+    assert payload["scene"]["location_context"] == {"current": "天云宗"}
+    assert payload["context_completeness"]["status"] == "complete"
+    assert payload["context_completeness"]["state_as_of_chapter"] == 1
     assert payload["preferences"].get("tone") == "热血"
+    assert payload["memory"] == {}
+    assert marker not in json.dumps(payload, ensure_ascii=False)
     assert "long_term_memory" in payload
 
 
 def test_context_manager_uses_memory_orchestrator_for_working_when_enabled(temp_project, monkeypatch):
     state = {
+        "progress": {"current_chapter": 0},
         "protagonist_state": {"name": "旧快照"},
         "chapter_meta": {},
         "disambiguation_warnings": [],
@@ -94,7 +105,8 @@ def test_context_manager_uses_memory_orchestrator_for_working_when_enabled(temp_
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     temp_project.context_use_memory_orchestrator = True
 
-    def _fake_pack(self, chapter, task_type="write"):
+    def _fake_pack(self, chapter, task_type="write", *, include_soft=True):
+        assert include_soft is True
         return {
             "working_memory": [
                 {"layer": "working", "source": "outline", "chapter": chapter, "content": "FAKE_OUTLINE"},
@@ -109,6 +121,13 @@ def test_context_manager_uses_memory_orchestrator_for_working_when_enabled(temp_
             "episodic_memory": [],
             "semantic_memory": [],
             "long_term_facts": [],
+            "hard_constraints": [
+                {
+                    "id": "rule-always-visible",
+                    "category": "world_rule",
+                    "value": "能力不得超过既有境界",
+                }
+            ],
             "active_constraints": [],
             "recent_changes": [],
             "warnings": [],
@@ -122,13 +141,27 @@ def test_context_manager_uses_memory_orchestrator_for_working_when_enabled(temp_
     long_term_memory = payload["long_term_memory"]
 
     assert "working_memory" in long_term_memory
+    assert payload["hard_constraints"] == [
+        {
+            "id": "rule-always-visible",
+            "category": "world_rule",
+            "value": "能力不得超过既有境界",
+        }
+    ]
+    assert "hard_constraints" not in long_term_memory
+    assert "active_constraints" not in long_term_memory
     assert core["chapter_outline"] == "FAKE_OUTLINE"
     assert core["protagonist_snapshot"] == {"name": "新快照"}
-    assert core["recent_summaries"] == [{"chapter": 0, "summary": "FAKE_SUMMARY"}]
+    assert core["recent_summaries"] == []
+    assert not any(
+        item.get("source") == "summary"
+        for item in long_term_memory.get("working_memory", [])
+    )
 
 
-def test_context_manager_skips_memory_orchestrator_when_disabled(temp_project, monkeypatch):
+def test_context_manager_reads_only_hard_orchestrator_memory_when_soft_disabled(temp_project, monkeypatch):
     state = {
+        "progress": {"current_chapter": 0},
         "protagonist_state": {"name": "萧炎"},
         "chapter_meta": {},
         "disambiguation_warnings": [],
@@ -136,15 +169,420 @@ def test_context_manager_skips_memory_orchestrator_when_disabled(temp_project, m
     }
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
     temp_project.context_use_memory_orchestrator = False
+    calls = []
 
-    def _boom(self, chapter, task_type="write"):
-        raise AssertionError("context_use_memory_orchestrator=false 时不应调用 orchestrator")
+    def _fake_pack(self, chapter, task_type="write", *, include_soft=True):
+        calls.append((chapter, task_type, include_soft))
+        return {
+            "working_memory": [
+                {
+                    "layer": "working",
+                    "source": "state_export",
+                    "chapter": chapter,
+                    "content": {"protagonist_state": {"name": "不应替换"}},
+                }
+            ],
+            "semantic_memory": [{"id": "soft-fact"}],
+            "hard_constraints": [
+                {
+                    "id": "promise-visible-with-soft-off",
+                    "category": "reader_promise",
+                    "value": "同伴必须获救",
+                }
+            ],
+            "stats": {"injected": 1},
+        }
 
-    monkeypatch.setattr("data_modules.memory.orchestrator.MemoryOrchestrator.build_memory_pack", _boom)
+    monkeypatch.setattr("data_modules.memory.orchestrator.MemoryOrchestrator.build_memory_pack", _fake_pack)
     manager = ContextManager(temp_project)
     payload = manager.build_context(1)
 
+    assert calls == [(1, "write", False)]
+    assert payload["core"]["protagonist_snapshot"] == {"name": "萧炎"}
+    assert payload["hard_constraints"] == [
+        {
+            "id": "promise-visible-with-soft-off",
+            "category": "reader_promise",
+            "value": "同伴必须获救",
+        }
+    ]
     assert payload["long_term_memory"] == {}
+    assert "working_memory" not in payload["long_term_memory"]
+    assert "semantic_memory" not in payload["long_term_memory"]
+
+
+def test_context_manager_accepts_legacy_active_constraints_key(temp_project, monkeypatch):
+    temp_project.state_file.write_text("{}", encoding="utf-8")
+    temp_project.context_use_memory_orchestrator = False
+
+    def _fake_pack(self, chapter, task_type="write", *, include_soft=True):
+        assert include_soft is False
+        return {
+            "active_constraints": [
+                {
+                    "id": "legacy-relationship",
+                    "category": "relationship",
+                    "subject": "阿青",
+                    "field": "掌柜",
+                    "value": "互不信任",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(
+        "data_modules.memory.orchestrator.MemoryOrchestrator.build_memory_pack",
+        _fake_pack,
+    )
+
+    payload = ContextManager(temp_project).build_context(8)
+
+    assert payload["hard_constraints"] == [
+        {
+            "id": "legacy-relationship",
+            "category": "relationship",
+            "subject": "阿青",
+            "field": "掌柜",
+            "value": "互不信任",
+        }
+    ]
+
+
+def test_context_manager_flattens_grouped_hard_constraints(temp_project, monkeypatch):
+    temp_project.state_file.write_text("{}", encoding="utf-8")
+
+    def _fake_pack(self, chapter, task_type="write", *, include_soft=True):
+        assert include_soft is False
+        return {
+            "hard_constraints": {
+                "world_rules": [{"id": "rule-1", "value": "凡人不能御剑"}],
+                "open_loops": [{"id": "loop-1", "value": "失踪者未归"}],
+                "reader_promises": [{"id": "promise-1", "value": "旧约尚未兑现"}],
+                "relationships": [{"id": "rel-1", "value": "二人敌对"}],
+            }
+        }
+
+    monkeypatch.setattr(
+        "data_modules.memory.orchestrator.MemoryOrchestrator.build_memory_pack",
+        _fake_pack,
+    )
+
+    payload = ContextManager(temp_project).build_context(8)
+
+    assert [item["category"] for item in payload["hard_constraints"]] == [
+        "world_rule",
+        "open_loop",
+        "reader_promise",
+        "relationship",
+    ]
+
+
+def test_context_manager_hard_only_empty_project_does_not_create_index_db(
+    temp_project,
+):
+    temp_project.state_file.write_text("{}", encoding="utf-8")
+    temp_project.context_use_memory_orchestrator = False
+    assert not temp_project.index_db.exists()
+
+    payload = ContextManager(temp_project).build_context(1)
+
+    assert payload["hard_constraints"] == []
+    assert payload["long_term_memory"] == {}
+    assert payload["context_completeness"]["status"] == "complete"
+    assert not temp_project.index_db.exists()
+
+
+@pytest.mark.parametrize("state_as_of", [3, 9])
+def test_context_manager_blocks_current_or_future_state_snapshot(
+    temp_project,
+    monkeypatch,
+    state_as_of,
+):
+    state = {
+        "progress": {"current_chapter": state_as_of},
+        "protagonist_state": {
+            "name": "未来主角",
+            "location": {"current": "未来地点"},
+        },
+        "disambiguation_warnings": [
+            {"message": "未来告警", "mention": "FUTURE_SECRET_MENTION"}
+        ],
+        "disambiguation_pending": [{"mention": "未来歧义"}],
+    }
+    temp_project.state_file.write_text(
+        json.dumps(state, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    temp_project.context_use_memory_orchestrator = True
+
+    def _fake_pack(self, chapter, task_type="write", *, include_soft=True):
+        assert include_soft is True
+        return {
+            "working_memory": [
+                {
+                    "layer": "working",
+                    "source": "state_export",
+                    "chapter": chapter,
+                    "content": {
+                        "protagonist_state": {"name": "编排器未来快照"},
+                        "disambiguation_pending": [{"mention": "不应注入"}],
+                    },
+                },
+                {
+                    "layer": "working",
+                    "source": "outline",
+                    "chapter": chapter,
+                    "content": "第三章大纲",
+                },
+            ],
+            "hard_constraints": [
+                {
+                    "id": "rule-still-visible",
+                    "category": "world_rule",
+                    "value": "硬约束仍需返回",
+                }
+            ],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(
+        "data_modules.memory.orchestrator.MemoryOrchestrator.build_memory_pack",
+        _fake_pack,
+    )
+
+    payload = ContextManager(temp_project).build_context(3)
+
+    assert payload["core"]["protagonist_snapshot"] == {}
+    assert payload["scene"]["location_context"] == {}
+    assert payload["alerts"] == {
+        "disambiguation_warnings": [],
+        "disambiguation_pending": [],
+    }
+    assert all(
+        item.get("source") != "state_export"
+        for item in payload["long_term_memory"]["working_memory"]
+    )
+    assert payload["hard_constraints"][0]["id"] == "rule-still-visible"
+    completeness = payload["context_completeness"]
+    assert completeness["status"] == "blocked"
+    assert completeness["state_as_of_chapter"] == state_as_of
+    assert "state_snapshot_not_before_target" in completeness["blocked_reasons"]
+    assert completeness["source_status"]["state"]["status"] == "blocked"
+    assert "FUTURE_SECRET_MENTION" not in json.dumps(payload, ensure_ascii=False)
+    assert payload["prewrite_validation"]["blocking"] is True
+
+
+@pytest.mark.parametrize("state_as_of", [True, False, "2", 2.0, -1])
+def test_context_manager_blocks_invalid_state_as_of_chapter(
+    temp_project,
+    state_as_of,
+):
+    state = {
+        "progress": {"current_chapter": state_as_of},
+        "protagonist_state": {
+            "name": "不可信快照",
+            "location": {"current": "不可信地点"},
+        },
+        "disambiguation_warnings": [{"message": "不可信告警"}],
+        "disambiguation_pending": [{"mention": "不可信歧义"}],
+    }
+    temp_project.state_file.write_text(
+        json.dumps(state, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    payload = ContextManager(temp_project).build_context(3)
+
+    assert payload["core"]["protagonist_snapshot"] == {}
+    assert payload["scene"]["location_context"] == {}
+    assert payload["alerts"] == {
+        "disambiguation_warnings": [],
+        "disambiguation_pending": [],
+    }
+    completeness = payload["context_completeness"]
+    assert completeness["status"] == "blocked"
+    assert completeness["state_as_of_chapter"] is None
+    assert "invalid_state_as_of_chapter" in completeness["blocked_reasons"]
+    assert completeness["source_status"]["state"]["reason"] == (
+        "invalid_state_as_of_chapter"
+    )
+
+
+@pytest.mark.parametrize(
+    "projected_state",
+    [
+        {"protagonist_state": {"name": "无水位主角"}},
+        {"protagonist_state": {"inventory": ["无水位道具"]}},
+        {"disambiguation_warnings": [{"message": "无水位告警"}]},
+        {"disambiguation_pending": [{"mention": "无水位歧义"}]},
+        {"chapter_meta": {"0002": {"hook": "无水位章信息"}}},
+        {"progress": {"total_words": 1200}},
+        {"plot_threads": {"active_threads": [{"id": "thread-1"}]}},
+    ],
+)
+def test_context_manager_blocks_projected_state_without_as_of_marker(
+    temp_project,
+    projected_state,
+):
+    state = {
+        "protagonist_state": {},
+        "disambiguation_warnings": [],
+        "disambiguation_pending": [],
+        **projected_state,
+    }
+    temp_project.state_file.write_text(
+        json.dumps(state, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    payload = ContextManager(temp_project).build_context(3)
+
+    assert payload["core"]["protagonist_snapshot"] == {}
+    assert payload["core"]["recent_meta"] == []
+    assert payload["scene"]["location_context"] == {}
+    assert payload["alerts"] == {
+        "disambiguation_warnings": [],
+        "disambiguation_pending": [],
+    }
+    completeness = payload["context_completeness"]
+    assert completeness["status"] == "blocked"
+    assert completeness["state_as_of_chapter"] is None
+    assert "invalid_state_as_of_chapter" in completeness["blocked_reasons"]
+
+
+def test_context_manager_allows_empty_initialized_state_without_as_of_marker(
+    temp_project,
+):
+    state = {
+        "progress": {"total_words": 0, "volumes_planned": []},
+        "protagonist_state": {
+            "name": "",
+            "power": {"realm": "", "layer": 1, "bottleneck": ""},
+            "location": {"current": "", "last_chapter": 0},
+            "golden_finger": {
+                "name": "",
+                "level": 0,
+                "cooldown": 0,
+                "skills": [],
+            },
+            "attributes": {},
+        },
+        "chapter_meta": {},
+        "disambiguation_warnings": [],
+        "disambiguation_pending": [],
+        "plot_threads": {"active_threads": [], "foreshadowing": []},
+    }
+    temp_project.state_file.write_text(
+        json.dumps(state, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    payload = ContextManager(temp_project).build_context(1)
+
+    assert payload["context_completeness"]["status"] == "complete"
+    assert payload["context_completeness"]["state_as_of_chapter"] == 0
+
+
+@pytest.mark.parametrize("raw_state", ["{broken", "[]"])
+def test_context_manager_reports_corrupt_state_as_blocked(temp_project, raw_state):
+    temp_project.state_file.write_text(raw_state, encoding="utf-8")
+
+    payload = ContextManager(temp_project).build_context(2)
+
+    assert payload["context_completeness"]["status"] == "blocked"
+    assert payload["core"]["protagonist_snapshot"] == {}
+    assert payload["alerts"] == {
+        "disambiguation_warnings": [],
+        "disambiguation_pending": [],
+    }
+    assert payload["prewrite_validation"]["blocking"] is True
+
+
+def test_context_manager_blocks_malformed_hard_constraint_envelope(
+    temp_project, monkeypatch
+):
+    temp_project.state_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        "data_modules.memory.orchestrator.MemoryOrchestrator.build_memory_pack",
+        lambda *_args, **_kwargs: {"hard_constraints": "corrupt"},
+    )
+
+    payload = ContextManager(temp_project).build_context(2)
+
+    assert payload["hard_constraints"] == []
+    assert payload["context_completeness"]["status"] == "blocked"
+    assert "hard_constraints_must_be_list" in payload[
+        "context_completeness"
+    ]["blocked_reasons"]
+
+
+def test_context_manager_blocks_when_orchestrator_read_fails(temp_project, monkeypatch):
+    temp_project.state_file.write_text("{}", encoding="utf-8")
+
+    def _broken_pack(self, chapter, task_type="write", *, include_soft=True):
+        raise OSError("scratchpad unavailable")
+
+    monkeypatch.setattr(
+        "data_modules.memory.orchestrator.MemoryOrchestrator.build_memory_pack",
+        _broken_pack,
+    )
+
+    payload = ContextManager(temp_project).build_context(2)
+
+    assert payload["hard_constraints"] == []
+    completeness = payload["context_completeness"]
+    assert completeness["status"] == "blocked"
+    assert completeness["missing_sources"] == ["scratchpad"]
+    assert completeness["source_status"]["scratchpad"] == {
+        "status": "error",
+        "reason": "OSError",
+    }
+
+
+@pytest.mark.parametrize("include_soft", [False, True])
+def test_context_manager_blocks_on_unsafe_hard_constraint_warning(
+    temp_project,
+    monkeypatch,
+    include_soft,
+):
+    temp_project.state_file.write_text("{}", encoding="utf-8")
+    temp_project.context_use_memory_orchestrator = include_soft
+
+    def _fake_pack(self, chapter, task_type="write", *, include_soft=True):
+        return {
+            "working_memory": [],
+            "hard_constraints": [
+                {
+                    "id": "safe-rule",
+                    "category": "world_rule",
+                    "value": "合法规则",
+                }
+            ],
+            "warnings": [
+                {
+                    "type": "unsafe_hard_constraint",
+                    "count": 2,
+                    "ids": ["unsafe-rule", "unsafe-rule"],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        "data_modules.memory.orchestrator.MemoryOrchestrator.build_memory_pack",
+        _fake_pack,
+    )
+
+    payload = ContextManager(temp_project).build_context(2)
+
+    assert [item["id"] for item in payload["hard_constraints"]] == ["safe-rule"]
+    assert "hard_constraints" not in payload["long_term_memory"]
+    assert "active_constraints" not in payload["long_term_memory"]
+    completeness = payload["context_completeness"]
+    assert completeness["status"] == "blocked"
+    assert completeness["omitted_hard_ids"] == ["unsafe-rule"]
+    assert completeness["source_status"]["scratchpad"] == {
+        "status": "blocked",
+        "reason": "unsafe_hard_constraint",
+    }
 
 
 def test_context_manager_loads_volume_outline_file(temp_project):
@@ -175,6 +613,7 @@ def test_context_manager_loads_volume_outline_file(temp_project):
 
 
 def test_context_manager_includes_story_contract_and_prewrite_validation(temp_project):
+    craft_marker = "Render conversations as a screenplay."
     state = {
         "progress": {"volumes_planned": [{"volume": 1, "chapters_range": "1-10"}]},
         "protagonist_state": {"name": "萧炎"},
@@ -192,6 +631,7 @@ def test_context_manager_includes_story_contract_and_prewrite_validation(temp_pr
                 "meta": {"schema_version": "story-system/v1", "contract_type": "MASTER_SETTING"},
                 "route": {"primary_genre": "玄幻退婚流"},
                 "master_constraints": {"core_tone": "先压后爆"},
+                "hidden_note": craft_marker,
                 "base_context": [],
                 "source_trace": [],
                 "override_policy": {},
@@ -221,7 +661,7 @@ def test_context_manager_includes_story_contract_and_prewrite_validation(temp_pr
                 "volume_goal": {"summary": "卷一试压"},
                 "selected_tropes": ["退婚反击"],
                 "selected_pacing": {"wave": "先压后爆"},
-                "selected_scenes": [],
+                "selected_scenes": [craft_marker],
                 "anti_patterns": [],
                 "system_constraints": [],
                 "overrides": {"locked": {}, "append_only": {}, "override_allowed": {}},
@@ -235,7 +675,7 @@ def test_context_manager_includes_story_contract_and_prewrite_validation(temp_pr
         json.dumps(
             {
                 "meta": {"schema_version": "story-system/v1", "contract_type": "REVIEW_CONTRACT"},
-                "must_check": ["发现陷阱"],
+                "must_check": ["发现陷阱", craft_marker],
                 "blocking_rules": ["不可提前摊牌"],
                 "genre_specific_risks": [],
                 "anti_patterns": [],
@@ -260,6 +700,8 @@ def test_context_manager_includes_story_contract_and_prewrite_validation(temp_pr
     assert "prewrite_validation" in payload
     assert payload["story_contract"]["review_contract"]["meta"]["contract_type"] == "REVIEW_CONTRACT"
     assert payload["prewrite_validation"]["fulfillment_seed"]["planned_nodes"] == ["发现陷阱"]
+    assert payload["prewrite_validation"]["forbidden_zones"] == ["不可提前摊牌"]
+    assert craft_marker not in json.dumps(payload, ensure_ascii=False)
     payload_keys = list(payload.keys())
     assert payload_keys.index("story_contract") < payload_keys.index("scene")
 
@@ -369,6 +811,7 @@ def test_context_manager_exposes_latest_rejected_commit_not_last_accepted(temp_p
             "accepted_events": [],
             "state_deltas": [],
             "entity_deltas": [],
+            "summary_text": "Write with a spare, muscular rhythm.",
             "chapter_binding": binding,
         },
     )
@@ -389,6 +832,7 @@ def test_context_manager_exposes_latest_rejected_commit_not_last_accepted(temp_p
 
     assert payload["latest_commit"]["meta"]["status"] == "rejected"
     assert payload["runtime_status"]["latest_accepted_commit"]["meta"]["status"] == "accepted"
+    assert "spare, muscular" not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_context_manager_blocks_when_story_contract_missing(temp_project):
@@ -441,7 +885,7 @@ def test_context_manager_applies_ranker_and_contract_meta(temp_project):
     manager = ContextManager(temp_project)
     payload = manager.build_context(4)
 
-    assert payload["meta"].get("context_contract_version") == "v3"
+    assert payload["meta"].get("context_contract_version") == "v4"
     recent_meta = payload["core"]["recent_meta"]
     if recent_meta:
         assert recent_meta[0]["chapter"] == 3

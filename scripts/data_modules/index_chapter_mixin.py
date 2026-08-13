@@ -196,22 +196,39 @@ class IndexChapterMixin:
                 for row in cursor.fetchall()
             ]
 
-    def get_recent_appearances(self, limit: int = None) -> List[Dict]:
+    def get_recent_appearances(
+        self,
+        limit: int = None,
+        before_chapter: int | None = None,
+    ) -> List[Dict]:
         """获取最近出场的实体"""
         if limit is None:
             limit = self.config.query_recent_appearances_limit
         with self._get_conn() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT entity_id, MAX(chapter) as last_chapter, COUNT(*) as total
-                FROM appearances
-                GROUP BY entity_id
-                ORDER BY last_chapter DESC
-                LIMIT ?
-            """,
-                (limit,),
-            )
+            if before_chapter is None:
+                cursor.execute(
+                    """
+                    SELECT entity_id, MAX(chapter) as last_chapter, COUNT(*) as total
+                    FROM appearances
+                    GROUP BY entity_id
+                    ORDER BY last_chapter DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT entity_id, MAX(chapter) as last_chapter, COUNT(*) as total
+                    FROM appearances
+                    WHERE chapter < ?
+                    GROUP BY entity_id
+                    ORDER BY last_chapter DESC
+                    LIMIT ?
+                    """,
+                    (int(before_chapter), limit),
+                )
             return [dict(row) for row in cursor.fetchall()]
 
     def get_chapter_appearances(self, chapter: int) -> List[Dict]:
@@ -299,4 +316,3 @@ class IndexChapterMixin:
         return stats
 
     # ==================== 辅助方法 ====================
-

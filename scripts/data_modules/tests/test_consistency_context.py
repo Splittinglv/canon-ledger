@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import pytest
+
 from data_modules.consistency_context import sanitize_story_contracts
 from data_modules.story_contracts import persist_story_seed
 
@@ -52,14 +54,13 @@ def test_sanitize_story_contracts_strips_style_and_craft_payloads():
     assert master["master_constraints"] == {}
     assert master["route"]["recommended_base_tables"] == ["命名规则"]
     assert master["route"]["recommended_dynamic_tables"] == ["人设与关系"]
-    assert [row["编号"] for row in master["base_context"]] == ["NR-001"]
+    assert master["base_context"] == []
 
     chapter = cleaned["chapter_brief"]
     assert chapter["reasoning"] == {"genre": "玄幻"}
     assert chapter["dynamic_context"] == []
 
-    texts = {row["text"] for row in cleaned["volume_brief"]["anti_patterns"]}
-    assert texts == {"配角抢戏"}
+    assert cleaned["volume_brief"]["anti_patterns"] == []
     assert "wave" not in (cleaned["volume_brief"].get("selected_pacing") or {})
     assert cleaned["review_contract"]["anti_patterns"] == []
 
@@ -77,6 +78,91 @@ def test_sanitize_story_contracts_leaves_empty_contracts_empty():
     assert cleaned["chapter_brief"] == {}
     assert cleaned["volume_brief"] == {}
     assert cleaned["review_contract"] == {}
+
+
+def test_sanitize_story_contracts_rebuilds_only_consistency_fields():
+    markers = {
+        "master": "Write with a spare, muscular rhythm.",
+        "row": "让叙述像水一样流动。",
+        "chapter": "Render conversations as a screenplay.",
+        "goal": "Tell the tale through a child's eyes.",
+        "volume": "Choose concrete imagery over abstractions.",
+        "scene": "所有场面呈现出黑色电影气息。",
+        "review": "Keep every scene sparse and visual.",
+    }
+    cleaned = sanitize_story_contracts(
+        {
+            "master_setting": {
+                "meta": {"contract_type": "MASTER_SETTING"},
+                "route": {"primary_genre": "悬疑"},
+                "master_constraints": {"hidden_note": markers["master"]},
+                "base_context": [
+                    {"_table": "命名规则", "编号": "NR-001", "note": markers["row"]}
+                ],
+                "writing_guidance": markers["master"],
+            },
+            "chapter_brief": {
+                "chapter_directive": {
+                    "goal": markers["goal"],
+                    "implementation": markers["chapter"],
+                    "key_entities": ["掌柜"],
+                }
+            },
+            "volume_brief": {
+                "volume_goal": {"summary": markers["volume"]},
+                "selected_scenes": [markers["scene"]],
+                "selected_tropes": ["套路标签"],
+                "system_constraints": [markers["review"]],
+            },
+            "review_contract": {
+                "must_check": [markers["chapter"]],
+                "blocking_rules": ["不可让已死角色复活"],
+                "system_constraints": [markers["review"]],
+            },
+            "unexpected": markers["master"],
+        }
+    )
+
+    serialized = str(cleaned)
+    for marker in markers.values():
+        assert marker not in serialized
+    assert cleaned["master_setting"]["route"]["primary_genre"] == "悬疑"
+    assert cleaned["chapter_brief"]["chapter_directive"]["key_entities"] == ["掌柜"]
+    assert cleaned["review_contract"]["blocking_rules"] == ["不可让已死角色复活"]
+    assert "unexpected" not in cleaned
+
+
+def test_sanitize_story_contracts_drops_non_object_contract_aliases():
+    cleaned = sanitize_story_contracts(
+        {"master": "Write with a spare, muscular rhythm."}
+    )
+
+    assert cleaned == {"master": {}}
+
+
+@pytest.mark.parametrize(
+    "directive",
+    [
+        "Write with a spare, muscular rhythm.",
+        "Render conversations as a screenplay.",
+        "Choose concrete imagery over abstractions.",
+        "Tell the tale through a child's eyes.",
+        "让叙述像水一样流动。",
+        "所有场面呈现出黑色电影气息。",
+    ],
+)
+def test_sanitize_story_contracts_rejects_creative_directive_variants(directive):
+    cleaned = sanitize_story_contracts(
+        {
+            "review_contract": {
+                "blocking_rules": ["不可让已死角色复活", directive],
+                "must_check": [directive],
+            }
+        }
+    )
+
+    assert cleaned["review_contract"]["blocking_rules"] == ["不可让已死角色复活"]
+    assert cleaned["review_contract"]["must_check"] == []
 
 
 def test_persist_story_seed_does_not_write_style_fields(tmp_path):

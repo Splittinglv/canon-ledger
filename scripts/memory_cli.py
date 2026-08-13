@@ -39,7 +39,7 @@ def _json_out(data) -> None:
 
 def cmd_load_context(args: argparse.Namespace) -> None:
     adapter = _adapter(args.project_root)
-    pack = adapter.load_context(args.chapter)
+    pack = adapter.load_context(args.chapter, budget_tokens=args.budget_tokens)
     _json_out(pack.to_dict())
 
 
@@ -89,6 +89,12 @@ def main() -> None:
 
     p_load = sub.add_parser("load-context", help="加载章节上下文基础包")
     p_load.add_argument("--chapter", type=int, required=True)
+    p_load.add_argument(
+        "--budget-tokens",
+        type=int,
+        default=4000,
+        help="上下文目标 token 预算；硬约束绝不静默裁剪",
+    )
 
     p_entity = sub.add_parser("query-entity", help="查询实体快照")
     p_entity.add_argument("--id", required=True, help="实体 ID")

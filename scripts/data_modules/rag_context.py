@@ -59,9 +59,10 @@ def chapter_goal_from_contract(chapter_contract: Mapping[str, Any] | None) -> st
     override_allowed = contract.get("override_allowed")
     directive = directive if isinstance(directive, Mapping) else {}
     override_allowed = override_allowed if isinstance(override_allowed, Mapping) else {}
-    return _normalize_outline_text(
+    raw_goal = _normalize_outline_text(
         str(directive.get("goal") or override_allowed.get("chapter_focus") or "")
     )
+    return sanitize_fact_text(raw_goal, max_chars=600)
 
 
 def build_rag_query(

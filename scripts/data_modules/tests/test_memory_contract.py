@@ -67,12 +67,16 @@ class TestContractTypes:
         c = ContextPack(chapter=10)
         assert c.sections == {}
         assert c.budget_used_tokens == 0
+        assert c.schema_version == "webnovel-context-pack/v2"
+        assert c.budget == {}
+        assert c.completeness == {}
 
     def test_context_pack_with_sections(self):
         c = ContextPack(chapter=10, sections={"task_book": {"goal": "test"}}, budget_used_tokens=1500)
         d = c.to_dict()
         assert d["sections"]["task_book"]["goal"] == "test"
         assert d["budget_used_tokens"] == 1500
+        assert d["schema_version"] == "webnovel-context-pack/v2"
 
 
 # ---------------------------------------------------------------------------

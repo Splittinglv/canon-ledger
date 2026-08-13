@@ -66,13 +66,12 @@ def test_router_maps_power_breakthrough_to_state_memory_vector():
     assert "memory" in targets
 
 
-def test_router_maps_relationship_changed_to_index_and_vector():
+def test_router_maps_relationship_changed_to_all_current_fact_stores():
     router = EventProjectionRouter()
     targets = router.route(
         {"event_type": "relationship_changed", "subject": "xiaoyan", "payload": {}}
     )
-    assert "index" in targets
-    assert "vector" in targets
+    assert targets == ["index", "memory", "vector"]
 
 
 def test_required_writers_includes_vector_for_key_events():

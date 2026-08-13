@@ -8,20 +8,36 @@ from __future__ import annotations
 import hashlib
 from typing import Dict, List, Tuple
 
-from .schema import CATEGORY_KEY_RULES, CATEGORY_TO_BUCKET, MemoryItem, ScratchpadData, memory_item_key, now_iso
+from .schema import (
+    CATEGORY_KEY_RULES,
+    CATEGORY_TO_BUCKET,
+    PERSISTENT_ACTIVE_CATEGORIES,
+    MemoryItem,
+    ScratchpadData,
+    memory_item_key,
+    now_iso,
+)
 
 
 def _key_for(item: MemoryItem) -> Tuple:
     return memory_item_key(item)
 
 
-def _is_resolved_open_loop(item: MemoryItem) -> bool:
-    if item.category != "open_loop":
+def _is_resolved_lifecycle(item: MemoryItem) -> bool:
+    if item.category not in {"open_loop", "reader_promise"}:
         return False
     if item.status == "resolved":
         return True
-    state = str((item.payload or {}).get("status", "") or "").strip().lower()
+    payload = item.payload or {}
+    state = str(
+        payload.get("lifecycle_status") or payload.get("status") or ""
+    ).strip().lower()
     return state in {"resolved", "closed", "done", "paid_off", "payoff"}
+
+
+def _is_resolved_open_loop(item: MemoryItem) -> bool:
+    """Backward-compatible private helper retained for older test/plugins."""
+    return item.category == "open_loop" and _is_resolved_lifecycle(item)
 
 
 def compact_scratchpad(data: ScratchpadData, max_items: int = 500) -> ScratchpadData:
@@ -44,36 +60,54 @@ def compact_scratchpad(data: ScratchpadData, max_items: int = 500) -> Scratchpad
         keep.extend(latest_outdated.values())
         setattr(data, bucket, keep)
 
-    # 2) 清理已回收伏笔。旧 schema 可能仍标为 active、只在 payload
-    # 写 resolved；删除前必须留下精确 ID tombstone，避免旧创建重放重开。
-    resolved_loop_ids: List[str] = []
-    for row in data.open_loops:
-        if not _is_resolved_open_loop(row):
-            continue
-        payload = row.payload or {}
-        resolved_loop_ids.append(row.id)
-        resolved_loop_ids.append(str(payload.get("lifecycle_id") or ""))
-        # Reconstruct the exact deterministic legacy identity from the fields
-        # that old writers persisted.  This lets a delayed canonical creation
-        # prove it is the same pre-upgrade obligation without prose search.
-        raw = f"open_loop|{row.value or row.subject}|status|{row.source_chapter}"
-        resolved_loop_ids.append(
-            f"mem-open_loop-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:16]}"
-        )
-    if resolved_loop_ids:
+    # 2) 清理已回收伏笔与读者承诺。旧 schema 可能仍标为 active、只在
+    # payload 写 resolved；删除前必须留下 canonical/public/legacy 三种精确
+    # ID tombstone，避免延迟创建投影把义务重开。
+    resolved_ids: Dict[str, List[str]] = {
+        "open_loop": [],
+        "reader_promise": [],
+    }
+    for category, bucket, field in (
+        ("open_loop", "open_loops", "status"),
+        ("reader_promise", "reader_promises", "promise"),
+    ):
+        for row in list(getattr(data, bucket)):
+            if not _is_resolved_lifecycle(row):
+                continue
+            payload = row.payload or {}
+            resolved_ids[category].append(row.id)
+            resolved_ids[category].append(str(payload.get("lifecycle_id") or ""))
+            legacy_raw = (
+                f"{category}|{row.value or row.subject}|{field}|{row.source_chapter}"
+            )
+            resolved_ids[category].append(
+                f"mem-{category}-{hashlib.sha256(legacy_raw.encode('utf-8')).hexdigest()[:16]}"
+            )
+
+    if any(resolved_ids.values()):
         meta = data.meta if isinstance(data.meta, dict) else {}
         data.meta = meta
         ledger = meta.get("resolved_lifecycle_ids")
         if not isinstance(ledger, dict):
             ledger = {}
             meta["resolved_lifecycle_ids"] = ledger
-        known = ledger.get("open_loop")
-        if not isinstance(known, list):
-            known = []
-        ledger["open_loop"] = sorted(
-            {str(item).strip() for item in [*known, *resolved_loop_ids] if str(item).strip()}
-        )
-    data.open_loops = [row for row in data.open_loops if not _is_resolved_open_loop(row)]
+        for category, category_ids in resolved_ids.items():
+            known = ledger.get(category)
+            if not isinstance(known, list):
+                known = []
+            ledger[category] = sorted(
+                {
+                    str(item).strip()
+                    for item in [*known, *category_ids]
+                    if str(item).strip()
+                }
+            )
+    data.open_loops = [
+        row for row in data.open_loops if not _is_resolved_lifecycle(row)
+    ]
+    data.reader_promises = [
+        row for row in data.reader_promises if not _is_resolved_lifecycle(row)
+    ]
 
     # 3) 压缩过旧 timeline（与当前最新章节相距 50 章以上）。
     timeline = sorted(data.timeline, key=lambda x: x.source_chapter)
@@ -115,15 +149,18 @@ def compact_scratchpad(data: ScratchpadData, max_items: int = 500) -> Scratchpad
                 data.story_facts.append(summary_item)
         data.timeline = fresh
 
-    # 4) 若仍超限，按状态和新鲜度做全局截断。活跃伏笔和读者承诺
-    # 是硬生命周期约束，不能为了满足缓存容量而静默丢弃；当它们本身
-    # 超过 max_items 时，一致性优先于软容量上限。
+    # 4) 若仍超限，按状态和新鲜度做全局截断。所有 active 持久事实
+    # （规则、关系、角色状态及生命周期约束）不能为了满足缓存容量而
+    # 静默丢弃；当它们本身超过 max_items 时，一致性优先于软容量上限。
     if data.count_items() > max_items:
         mandatory: List[Tuple[str, MemoryItem]] = []
         ranked: List[Tuple[str, MemoryItem]] = []
         for bucket in CATEGORY_TO_BUCKET.values():
             for row in list(getattr(data, bucket)):
-                if row.status == "active" and row.category in {"open_loop", "reader_promise"}:
+                if (
+                    row.status == "active"
+                    and row.category in PERSISTENT_ACTIVE_CATEGORIES
+                ):
                     mandatory.append((bucket, row))
                 else:
                     ranked.append((bucket, row))

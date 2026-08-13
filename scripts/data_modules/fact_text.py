@@ -11,14 +11,16 @@ _CREATIVE_DIRECTIVE_PATTERNS = (
     # Explicit meta-writing vocabulary is not a story-world fact even when it
     # is phrased without an imperative verb.
     re.compile(
-        r"(?:文风|风格|文笔|写作|写法|改写|续写|润色|叙事|叙述|口吻|语气|"
+        r"(?:文风|写作风格|叙事风格|文笔|写作|写法|改写|续写|润色|口吻|"
         r"第一人称|第二人称|第三人称|人称|视角|POV|叙述者|叙事者|全知|限知|"
         r"时态|语态|本段|段落|句式|短句|长句|修辞|用词|措辞|旁白|内心独白|"
-        r"心理描写|环境描写|对话比例|对白比例|字数|篇幅|章节长度|"
-        r"倒叙|插叙|顺叙|开场|收尾|结尾|对白|台词|口语化|环境细节|"
+        r"心理描写|环境描写|对话比例|对白|对白比例|字数|篇幅|章节长度|"
+        r"倒叙|插叙|顺叙|口语化|对话比例|环境细节|"
+        r"笔调|叙述|场面|画面|镜头感|电影质感|电影气息|像诗一样写|写得像寓言|长篇大论|"
+        r"像诗一样写|写得像寓言|长篇大论|镜头感|"
+        r"海明威|莎士比亚|鲁迅|金庸|古龙|模仿作者|模仿作家|"
         r"桥段|套路|爽文|虐文|追妻火葬场|升级流|赛博朋克|题材|节奏|氛围|"
-        r"系统提示|提示词|大模型|语言模型|剧情走向|剧情安排|"
-        r"下一章|后续章节|接下来的章节)",
+        r"系统提示|提示词|大模型|语言模型|剧情走向|剧情安排)",
         re.IGNORECASE,
     ),
     re.compile(
@@ -26,7 +28,11 @@ _CREATIVE_DIRECTIVE_PATTERNS = (
         r"style|tone|pacing|trope|genre|point\s+of\s+view|POV|narrator|"
         r"first\s+person|second\s+person|third\s+person|past\s+tense|present\s+tense|"
         r"paragraph|sentence\s+structure|diction|word\s+count|dialogue\s+ratio|"
-        r"chapter\s+length|next\s+chapter|future\s+chapters?)\b",
+        r"lyrical|poetic|literary|terse|concise|simple\s+language|screenplay|"
+        r"rhythm|cadence|imagery|abstractions?|cinematic|muscular|spare|"
+        r"omniscient\s+voice|limited\s+voice|narrative\s+voice|"
+        r"Hemingway|Shakespeare|write\s+like|imitate\s+(?:an?\s+)?author|"
+        r"chapter\s+length)\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -57,7 +63,45 @@ _CREATIVE_DIRECTIVE_PATTERNS = (
     ),
     re.compile(
         r"(?:后续|下一章|接下来).{0,20}"
-        r"(?:改写|写成|采用|加入|添加|切换)",
+        r"(?:改写|写成|续写|润色|采用|使用|加入|添加|切换|安排|描述|讲述)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:next\s+chapter|future\s+chapters?)\b.{0,40}"
+        r"\b(?:write|rewrite|continue|polish|use|adopt|switch|change|add|insert|narrate|describe)\b",
+        re.IGNORECASE,
+    ),
+    # Meta-writing commands that avoid the usual words "style" and "prose".
+    # Match the command and its craft target together so ordinary story facts
+    # containing one of the nouns are not rejected on that noun alone.
+    re.compile(
+        r"\b(?:make|keep|tell|use|favor|favour|employ)\b.{0,48}"
+        r"\b(?:sentences?|narration|story|third[-\s]?person|cinematic|imagery)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:每(?:一)?句.{0,8}(?:都|要|应|保持).{0,8}(?:短|简短)|"
+        r"像诗一样写|故事写得像寓言)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:行文|文字|语言|字句).{0,16}"
+        r"(?:保持|要|应|需|得|有|使用|采用).{0,12}"
+        r"(?:克制|韵律|简洁|华丽|朴素|抒情|诗意|有力)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:用动作代替解释|避免长篇大论|"
+        r"场景.{0,8}(?:要|应|需|有|保持|具有).{0,8}电影质感)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:只|仅)?(?:使用|采用)(?:简单|简洁|朴素)(?:的)?(?:语言|文字|措辞)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:write\s+in\s+clipped\s+fragments?|"
+        r"favou?r\s+verbs?\s+over\s+adjectives?)\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -83,10 +127,11 @@ _CREATIVE_DIRECTIVE_PATTERNS = (
 )
 
 _IMPERATIVE_PREFIX = re.compile(
-    r"^(?:请|务必|应当|应该|不要|避免|把本|将本|让模型|让作者|"
+    r"^(?:请|务必|应当|应该|不要|避免|把本|将本|让|保持|"
     r"改为|改成|改用|采用|使用|加入|添加|插入|开头|开场|结尾|收尾|"
     r"每.{0,6}句|please\b|make\b|write\b|rewrite\b|use\b|adopt\b|"
     r"switch\b|change\b|insert\b|open\b|end\b|act\b|answer\b|follow\b|obey\b|"
+    r"keep\b|tell\b|favor\b|favour\b|employ\b|render\b|choose\b|narrate\b|describe\b|"
     r"遵循|服从|执行|按照|按|用|以|回答|扮演|假装)",
     re.IGNORECASE,
 )
@@ -109,6 +154,8 @@ def sanitize_fact_text(value: Any, *, max_chars: int = 1200) -> str:
     for fragment in fragments:
         normalized = re.sub(r"\s+", " ", fragment).strip()
         if not normalized:
+            continue
+        if _IMPERATIVE_PREFIX.search(normalized):
             continue
         if any(pattern.search(normalized) for pattern in _CREATIVE_DIRECTIVE_PATTERNS):
             continue

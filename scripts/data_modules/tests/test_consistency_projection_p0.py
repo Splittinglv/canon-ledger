@@ -14,6 +14,7 @@ from data_modules.config import DataModulesConfig
 from data_modules.index_manager import IndexManager
 from data_modules.index_projection_writer import IndexProjectionWriter
 from data_modules.memory.store import ScratchpadManager
+from data_modules.memory.writer import MemoryWriter
 from data_modules.memory_contract_adapter import MemoryContractAdapter
 from data_modules.memory_projection_writer import MemoryProjectionWriter
 from data_modules.projections import retry_projection
@@ -276,6 +277,119 @@ def test_compaction_tombstone_prevents_resolved_loop_from_reopening(tmp_path):
     assert "loop-jade" in store.lifecycle_ids("open_loop")
 
 
+def test_compaction_tombstone_prevents_resolved_promise_replay(tmp_path):
+    config = _prepare_project(tmp_path)
+    created = _commit(
+        tmp_path,
+        2,
+        {
+            "accepted_events": [
+                {
+                    "event_id": "evt-promise-created",
+                    "chapter": 2,
+                    "event_type": "promise_created",
+                    "subject": "companion",
+                    "payload": {
+                        "promise_id": "promise-rescue",
+                        "content": "同伴必须获救",
+                    },
+                }
+            ]
+        },
+    )
+    _commit(
+        tmp_path,
+        8,
+        {
+            "accepted_events": [
+                {
+                    "event_id": "evt-promise-paid",
+                    "chapter": 8,
+                    "event_type": "promise_paid_off",
+                    "subject": "companion",
+                    "payload": {
+                        "promise_id": "promise-rescue",
+                        "resolution": "同伴已获救",
+                    },
+                }
+            ]
+        },
+    )
+
+    store = ScratchpadManager(config)
+    data = store.load()
+    from data_modules.memory.compactor import compact_scratchpad
+    from data_modules.memory.schema import MemoryItem
+
+    data.story_facts.append(
+        MemoryItem(
+            id="soft-promise-filler",
+            layer="semantic",
+            category="story_fact",
+            subject="filler",
+            field="filler",
+            value="filler",
+            source_chapter=9,
+        )
+    )
+    store.save(compact_scratchpad(data, max_items=1))
+
+    assert not store.query(category="reader_promise", status=None)
+    ledger = store.dump()["meta"]["resolved_lifecycle_ids"]["reader_promise"]
+    assert "promise-rescue" in ledger
+
+    MemoryProjectionWriter(tmp_path).apply(created)
+
+    assert not store.query(category="reader_promise", status="active")
+    assert "promise-rescue" in store.lifecycle_ids("reader_promise")
+
+
+def test_legacy_payload_resolved_promise_is_not_migrated_back_to_active(tmp_path):
+    config = _prepare_project(tmp_path)
+    from data_modules.memory.schema import MemoryItem
+
+    writer = MemoryWriter(config)
+    content = "同伴必须获救"
+    legacy_id = writer._item_id("reader_promise", content, "promise", 2)
+    store = ScratchpadManager(config)
+    store.upsert_item(
+        MemoryItem(
+            id=legacy_id,
+            layer="semantic",
+            category="reader_promise",
+            subject=content,
+            field="promise",
+            value=content,
+            payload={"status": "resolved"},
+            status="active",
+            source_chapter=2,
+        )
+    )
+    created = _commit(
+        tmp_path,
+        2,
+        {
+            "accepted_events": [
+                {
+                    "event_id": "evt-promise-legacy-created",
+                    "chapter": 2,
+                    "event_type": "promise_created",
+                    "subject": "companion",
+                    "payload": {
+                        "promise_id": "promise-rescue",
+                        "content": content,
+                    },
+                }
+            ]
+        },
+    )
+
+    MemoryProjectionWriter(tmp_path).apply(created)
+
+    assert not store.query(category="reader_promise", status="active")
+    assert "promise-rescue" in store.lifecycle_ids("reader_promise")
+
+
 def test_compaction_never_drops_active_lifecycle_constraints(tmp_path):
     config = _prepare_project(tmp_path)
     store = ScratchpadManager(config)
@@ -302,6 +416,217 @@ def test_compaction_never_drops_active_lifecycle_constraints(tmp_path):
         "loop-1",
         "loop-2",
     }
+
+
+def test_compaction_never_drops_active_persistent_constraints(tmp_path):
+    config = _prepare_project(tmp_path)
+    from data_modules.memory.compactor import compact_scratchpad
+    from data_modules.memory.schema import MemoryItem
+
+    store = ScratchpadManager(config)
+    data = store.load()
+    data.world_rules.append(
+        MemoryItem(
+            id="rule-boundary",
+            layer="semantic",
+            category="world_rule",
+            subject="global",
+            field="boundary",
+            value="世界规则不可违背",
+            source_chapter=1,
+        )
+    )
+    data.relationships.append(
+        MemoryItem(
+            id="rel-mentor",
+            layer="semantic",
+            category="relationship",
+            subject="hero",
+            field="mentor",
+            value="师徒",
+            source_chapter=2,
+        )
+    )
+    data.character_state.append(
+        MemoryItem(
+            id="state-realm",
+            layer="semantic",
+            category="character_state",
+            subject="hero",
+            field="realm",
+            value="金丹",
+            source_chapter=3,
+        )
+    )
+    data.open_loops.append(
+        MemoryItem(
+            id="loop-active",
+            layer="semantic",
+            category="open_loop",
+            subject="谜题",
+            field="status",
+            value="谜题未解",
+            payload={"lifecycle_id": "loop-active"},
+            source_chapter=4,
+        )
+    )
+    data.reader_promises.append(
+        MemoryItem(
+            id="promise-active",
+            layer="semantic",
+            category="reader_promise",
+            subject="承诺",
+            field="promise",
+            value="必须兑现",
+            payload={"lifecycle_id": "promise-active"},
+            source_chapter=5,
+        )
+    )
+    data.story_facts.append(
+        MemoryItem(
+            id="soft-filler",
+            layer="semantic",
+            category="story_fact",
+            subject="filler",
+            field="filler",
+            value="soft",
+            source_chapter=99,
+        )
+    )
+
+    compacted = compact_scratchpad(data, max_items=1)
+
+    assert [item.id for item in compacted.world_rules] == ["rule-boundary"]
+    assert [item.id for item in compacted.relationships] == ["rel-mentor"]
+    assert [item.id for item in compacted.character_state] == ["state-realm"]
+    assert [item.id for item in compacted.open_loops] == ["loop-active"]
+    assert [item.id for item in compacted.reader_promises] == ["promise-active"]
+
+
+def test_world_rule_broken_does_not_promote_a_proposed_value_to_active_rule(tmp_path):
+    config = _prepare_project(tmp_path)
+    _commit(
+        tmp_path,
+        2,
+        {
+            "accepted_events": [
+                {
+                    "event_id": "evt-rule-revealed",
+                    "chapter": 2,
+                    "event_type": "world_rule_revealed",
+                    "subject": "修炼体系",
+                    "payload": {
+                        "domain": "修炼体系",
+                        "field": "突破条件",
+                        "rule_content": "突破必须先通过心境考验",
+                    },
+                }
+            ]
+        },
+    )
+    _commit(
+        tmp_path,
+        5,
+        {
+            "accepted_events": [
+                {
+                    "event_id": "evt-rule-broken",
+                    "chapter": 5,
+                    "event_type": "world_rule_broken",
+                    "subject": "修炼体系",
+                    "payload": {
+                        "domain": "修炼体系",
+                        "field": "突破条件",
+                        "proposed_value": "主角可以无条件绕过心境考验",
+                    },
+                }
+            ]
+        },
+    )
+
+    rules = ScratchpadManager(config).query(category="world_rule", status="active")
+
+    assert [(item.field, item.value) for item in rules] == [
+        ("突破条件", "突破必须先通过心境考验")
+    ]
+    assert all("无条件绕过" not in item.value for item in rules)
+
+
+def test_relationship_event_projects_to_memory_and_old_retry_cannot_roll_back(tmp_path):
+    config = _prepare_project(tmp_path)
+    older = _commit(
+        tmp_path,
+        2,
+        {
+            "accepted_events": [
+                {
+                    "event_id": "evt-relationship-old",
+                    "chapter": 2,
+                    "event_type": "relationship_changed",
+                    "subject": "hero",
+                    "payload": {
+                        "to_entity": "mentor",
+                        "relationship_type": "陌生人",
+                        "description": "初次相见",
+                    },
+                }
+            ]
+        },
+    )
+    _commit(
+        tmp_path,
+        8,
+        {
+            "accepted_events": [
+                {
+                    "event_id": "evt-relationship-new",
+                    "chapter": 8,
+                    "event_type": "relationship_changed",
+                    "subject": "hero",
+                    "payload": {
+                        "to_entity": "mentor",
+                        "relationship_type": "师徒",
+                        "description": "正式拜师",
+                    },
+                }
+            ]
+        },
+    )
+
+    store = ScratchpadManager(config)
+    current = store.query(category="relationship", subject="hero", status="active")
+    assert [(item.field, item.value, item.source_chapter) for item in current] == [
+        ("mentor", "师徒", 8)
+    ]
+    assert current[0].payload["description"] == "正式拜师"
+
+    replay = MemoryProjectionWriter(tmp_path).apply(older)
+
+    current = store.query(category="relationship", subject="hero", status="active")
+    assert replay["items_preserved"] == 1
+    assert [(item.field, item.value, item.source_chapter) for item in current] == [
+        ("mentor", "师徒", 8)
+    ]
+
+    from data_modules.memory_contract_adapter import MemoryContractAdapter
+
+    context = MemoryContractAdapter(config).load_context(9)
+    relationships = [
+        item for item in context.sections["hard_constraints"]
+        if item["category"] == "relationship"
+    ]
+    assert relationships == [
+        {
+            "id": current[0].id,
+            "category": "relationship",
+            "subject": "hero",
+            "field": "mentor",
+            "value": "师徒",
+            "payload": {},
+            "status": "active",
+            "source_chapter": 8,
+        }
+    ]
 
 
 def test_compaction_tombstones_legacy_payload_resolved_loop(tmp_path):

@@ -30,7 +30,11 @@ from .index_manager import IndexManager, WritingChecklistScoreMeta
 from .context_ranker import ContextRanker
 from .prewrite_validator import PrewriteValidator
 from .story_contracts import read_json_if_exists
-from .story_runtime_sources import RuntimeSourceSnapshot, load_runtime_sources
+from .story_runtime_sources import (
+    RuntimeSourceSnapshot,
+    commit_status_view,
+    load_runtime_sources,
+)
 from .context_weights import (
     DEFAULT_TEMPLATE as CONTEXT_DEFAULT_TEMPLATE,
     TEMPLATE_WEIGHTS as CONTEXT_TEMPLATE_WEIGHTS,
@@ -44,6 +48,9 @@ from .genre_profile_builder import (
     parse_genre_tokens,
 )
 from .consistency_context import sanitize_story_contracts
+from .memory.hard_constraints import normalize_hard_constraints
+from .fact_text import sanitize_fact_text
+from .state_snapshot import has_projected_state_content, state_as_of_chapter
 from .writing_guidance_builder import (
     build_methodology_guidance_items,
     build_methodology_strategy_card,
@@ -74,6 +81,8 @@ class ContextManager:
         "runtime_status",
         "latest_commit",
         "prewrite_validation",
+        "context_completeness",
+        "hard_constraints",
     }
     SECTION_ORDER = [
         "core",
@@ -81,6 +90,8 @@ class ContextManager:
         "runtime_status",
         "latest_commit",
         "prewrite_validation",
+        "context_completeness",
+        "hard_constraints",
         "scene",
         "global",
         "reader_signal",
@@ -97,8 +108,19 @@ class ContextManager:
 
     def __init__(self, config=None):
         self.config = config or get_config()
-        self.index_manager = IndexManager(self.config)
+        self._index_manager: IndexManager | None = None
         self.context_ranker = ContextRanker(self.config)
+        self._state_load_error = ""
+
+    @property
+    def index_manager(self) -> IndexManager:
+        """Initialize SQLite only when a caller actually needs indexed data."""
+        if self._index_manager is None:
+            self._index_manager = IndexManager(self.config)
+        return self._index_manager
+
+    def _index_exists(self) -> bool:
+        return Path(self.config.index_db).is_file()
 
     def build_context(
         self,
@@ -125,10 +147,9 @@ class ContextManager:
         payload: Dict[str, Any] = {
             "meta": {
                 **(pack.get("meta") or {}),
-                "context_contract_version": "v3",
+                "context_contract_version": "v4",
             },
         }
-
         for section_name in self.SECTION_ORDER:
             if section_name in pack and section_name != "global":
                 content = pack[section_name]
@@ -142,6 +163,8 @@ class ContextManager:
         return payload
 
     def filter_invalid_items(self, items: List[Dict[str, Any]], source_type: str, id_key: str) -> List[Dict[str, Any]]:
+        if not items or not self._index_exists():
+            return list(items)
         confirmed = self.index_manager.get_invalid_ids(source_type, status="confirmed")
         pending = self.index_manager.get_invalid_ids(source_type, status="pending")
         result = []
@@ -167,49 +190,135 @@ class ContextManager:
         state = self._load_state()
         runtime_sources = load_runtime_sources(self.config.project_root, chapter)
         use_orchestrator = bool(getattr(self.config, "context_use_memory_orchestrator", False))
+        state_as_of_chapter, state_as_of_valid = self._state_as_of_chapter(state)
+        if self._state_load_error:
+            state_as_of_chapter, state_as_of_valid = None, False
+        state_snapshot_safe = (
+            state_as_of_valid
+            and (
+                state_as_of_chapter == 0
+                or state_as_of_chapter < int(chapter)
+            )
+        )
 
         orchestrator_pack: Dict[str, Any] = {}
-        if use_orchestrator:
-            try:
-                from .memory.orchestrator import MemoryOrchestrator
+        orchestrator_error: Exception | None = None
+        try:
+            from .memory.orchestrator import MemoryOrchestrator
 
-                orchestrator = MemoryOrchestrator(self.config)
-                orchestrator_pack = orchestrator.build_memory_pack(chapter)
-            except Exception as exc:
-                logger.warning("memory_orchestrator_failed: %s", exc)
+            # Hard constraints are a read contract, not an optional context
+            # enhancement.  Always perform this single read; the feature flag
+            # below controls only whether budgeted soft memory is exposed or
+            # allowed to replace the legacy working-memory sections.
+            orchestrator = MemoryOrchestrator(self.config)
+            orchestrator_pack = orchestrator.build_memory_pack(
+                chapter,
+                include_soft=use_orchestrator,
+            )
+            if not isinstance(orchestrator_pack, dict):
+                raise TypeError("memory_pack_must_be_object")
+        except Exception as exc:
+            logger.warning("memory_orchestrator_failed: %s", exc)
+            orchestrator_error = exc
+
+        hard_constraints, hard_constraints_error = normalize_hard_constraints(
+            orchestrator_pack
+        )
+        omitted_hard_ids, unsafe_hard_warning = self._unsafe_hard_constraint_ids(
+            orchestrator_pack
+        )
+        missing_sources: List[str] = []
+        blocked_reasons: List[str] = []
+        source_status: Dict[str, Dict[str, Any]] = {}
+
+        if orchestrator_error is not None:
+            missing_sources.append("scratchpad")
+            blocked_reasons.append("memory_orchestrator_unavailable")
+            source_status["scratchpad"] = {
+                "status": "error",
+                "reason": orchestrator_error.__class__.__name__,
+            }
+        elif hard_constraints_error:
+            missing_sources.append("scratchpad")
+            blocked_reasons.append(hard_constraints_error)
+            source_status["scratchpad"] = {
+                "status": "error",
+                "reason": hard_constraints_error,
+            }
+        elif unsafe_hard_warning:
+            blocked_reasons.append("unsafe_hard_constraint")
+            source_status["scratchpad"] = {
+                "status": "blocked",
+                "reason": "unsafe_hard_constraint",
+            }
+        else:
+            source_status["scratchpad"] = {"status": "ok"}
+
+        source_status["state"] = {
+            "status": "ok" if state_snapshot_safe else "blocked",
+            "state_as_of_chapter": state_as_of_chapter,
+        }
+        if not state_snapshot_safe:
+            state_reason = (
+                "invalid_state_as_of_chapter"
+                if not state_as_of_valid
+                else "state_snapshot_not_before_target"
+            )
+            source_status["state"]["reason"] = state_reason
+            blocked_reasons.append(state_reason)
+
+        context_completeness = {
+            "status": "blocked" if blocked_reasons else "complete",
+            "state_as_of_chapter": state_as_of_chapter,
+            "missing_sources": missing_sources,
+            "omitted_hard_ids": omitted_hard_ids,
+            "blocked_reasons": blocked_reasons,
+            "source_status": source_status,
+        }
 
         core = {
             "chapter_outline": self._load_outline(chapter),
-            "protagonist_snapshot": state.get("protagonist_state", {}),
-            "recent_summaries": self._load_recent_summaries(
-                chapter,
-                window=self.config.context_recent_summaries_window,
+            "protagonist_snapshot": (
+                state.get("protagonist_state", {}) if state_snapshot_safe else {}
             ),
+            # Free-form model summaries are not a trusted control boundary.
+            # Structured events/state and fact-only RAG carry continuity.
+            "recent_summaries": [],
             "recent_meta": self._load_recent_meta(
                 state,
                 chapter,
                 window=self.config.context_recent_meta_window,
-            ),
+            ) if state_snapshot_safe else [],
         }
         if use_orchestrator and orchestrator_pack:
-            working_items = list(orchestrator_pack.get("working_memory") or [])
+            working_items = [
+                item
+                for item in (orchestrator_pack.get("working_memory") or [])
+                if isinstance(item, dict)
+                and (
+                    state_snapshot_safe
+                    or str(item.get("source") or "") != "state_export"
+                )
+            ]
             outline_item = next((x for x in working_items if x.get("source") == "outline"), None)
             state_item = next((x for x in working_items if x.get("source") == "state_export"), None)
-            summary_items = [
-                {"chapter": x.get("chapter"), "summary": x.get("content")}
-                for x in working_items
-                if x.get("source") == "summary"
-            ]
             core["chapter_outline"] = str(outline_item.get("content", "")) if outline_item else core["chapter_outline"]
-            if isinstance(state_item, dict) and isinstance(state_item.get("content"), dict):
+            if (
+                state_snapshot_safe
+                and isinstance(state_item, dict)
+                and isinstance(state_item.get("content"), dict)
+            ):
                 state_export = dict(state_item.get("content") or {})
                 core["protagonist_snapshot"] = state_export.get("protagonist_state", core["protagonist_snapshot"])
-            if summary_items:
-                core["recent_summaries"] = summary_items
 
         scene = {
-            "location_context": state.get("protagonist_state", {}).get("location", {}),
+            "location_context": (
+                state.get("protagonist_state", {}).get("location", {})
+                if state_snapshot_safe
+                else {}
+            ),
             "appearing_characters": self._load_recent_appearances(
+                chapter=chapter,
                 limit=self.config.context_max_appearing_characters,
             ),
         }
@@ -217,8 +326,16 @@ class ContextManager:
             scene["appearing_characters"], source_type="entity", id_key="entity_id"
         )
         story_contract = self._build_story_contract_from_runtime(runtime_sources)
-        runtime_status = runtime_sources.to_dict()
-        latest_commit = runtime_sources.latest_commit or {}
+        runtime_status = {
+            "chapter": int(runtime_sources.chapter),
+            "fallback_sources": list(runtime_sources.fallback_sources),
+            "primary_write_source": str(runtime_sources.primary_write_source),
+            "latest_commit": commit_status_view(runtime_sources.latest_commit),
+            "latest_accepted_commit": commit_status_view(
+                runtime_sources.latest_accepted_commit
+            ),
+        }
+        latest_commit = commit_status_view(runtime_sources.latest_commit) or {}
 
         global_ctx = {
             "worldview_skeleton": self._load_setting("世界观"),
@@ -226,9 +343,15 @@ class ContextManager:
         }
 
         preferences = self._load_json_optional(self.config.webnovel_dir / "preferences.json")
-        memory = self._load_json_optional(self.config.webnovel_dir / "project_memory.json")
-        long_term_memory: Dict[str, Any] = orchestrator_pack if orchestrator_pack else {}
-        story_skeleton = self._load_story_skeleton(chapter)
+        # Legacy project_memory.json stores untyped model-authored prose.
+        # Structured memory/RAG replace it in the default writing context.
+        memory: Dict[str, Any] = {}
+        long_term_memory = self._long_term_memory_from_orchestrator_pack(
+            orchestrator_pack,
+            include_soft=use_orchestrator,
+            include_state_snapshot=state_snapshot_safe,
+        )
+        story_skeleton: List[Dict[str, Any]] = []
         alert_slice = max(0, int(self.config.context_alerts_slice))
         reader_signal = self._load_reader_signal(chapter)
         genre_profile = self._build_runtime_genre_profile(state, story_contract)
@@ -239,7 +362,15 @@ class ContextManager:
             review_contract=story_contract.get("review_contract") or {},
             plot_structure=plot_structure,
             story_contract=story_contract,
+            state_snapshot=state if state_snapshot_safe else {},
         )
+        if not state_snapshot_safe:
+            reason = "state snapshot is not trusted for the requested chapter"
+            reasons = list(prewrite_validation.get("blocking_reasons") or [])
+            if reason not in reasons:
+                reasons.append(reason)
+            prewrite_validation["blocking"] = True
+            prewrite_validation["blocking_reasons"] = reasons
 
         return {
             "meta": {"chapter": chapter},
@@ -248,6 +379,8 @@ class ContextManager:
             "runtime_status": runtime_status,
             "latest_commit": latest_commit,
             "prewrite_validation": prewrite_validation,
+            "context_completeness": context_completeness,
+            "hard_constraints": hard_constraints,
             "scene": scene,
             "global": global_ctx,
             "reader_signal": reader_signal,
@@ -260,13 +393,117 @@ class ContextManager:
             "long_term_memory": long_term_memory,
             "alerts": {
                 "disambiguation_warnings": (
-                    state.get("disambiguation_warnings", [])[-alert_slice:] if alert_slice else []
+                    state.get("disambiguation_warnings", [])[-alert_slice:]
+                    if state_snapshot_safe and alert_slice
+                    else []
                 ),
                 "disambiguation_pending": (
-                    state.get("disambiguation_pending", [])[-alert_slice:] if alert_slice else []
+                    state.get("disambiguation_pending", [])[-alert_slice:]
+                    if state_snapshot_safe and alert_slice
+                    else []
                 ),
             },
         }
+
+    @staticmethod
+    def _state_as_of_chapter(state: Dict[str, Any]) -> tuple[Any, bool]:
+        return state_as_of_chapter(state)
+
+    @staticmethod
+    def _has_projected_state_content(state: Dict[str, Any]) -> bool:
+        return has_projected_state_content(state)
+
+    @staticmethod
+    def _unsafe_hard_constraint_ids(
+        memory_pack: Dict[str, Any],
+    ) -> tuple[List[str], bool]:
+        if not isinstance(memory_pack, dict):
+            return [], False
+        omitted: List[str] = []
+        unsafe_warning = False
+        for warning in memory_pack.get("warnings") or []:
+            if not isinstance(warning, dict):
+                continue
+            if str(warning.get("type") or "") != "unsafe_hard_constraint":
+                continue
+            unsafe_warning = True
+            for item_id in warning.get("ids") or []:
+                normalized = str(item_id or "").strip()
+                if normalized and normalized not in omitted:
+                    omitted.append(normalized)
+        return omitted, unsafe_warning
+
+    @staticmethod
+    def _hard_constraints_from_memory_pack(
+        memory_pack: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Read the canonical hard set with a legacy-key compatibility path."""
+        if not isinstance(memory_pack, dict):
+            return []
+        if "hard_constraints" in memory_pack:
+            raw = memory_pack.get("hard_constraints")
+        else:
+            raw = memory_pack.get("active_constraints")
+
+        if isinstance(raw, list):
+            return [dict(item) for item in raw if isinstance(item, dict)]
+
+        # Be tolerant while the producer migrates from category buckets to the
+        # canonical flat list.  The returned Context Contract stays flat.
+        if isinstance(raw, dict):
+            items = raw.get("items")
+            if isinstance(items, list):
+                return [dict(item) for item in items if isinstance(item, dict)]
+
+            category_aliases = {
+                "world_rules": "world_rule",
+                "open_loops": "open_loop",
+                "reader_promises": "reader_promise",
+                "relationships": "relationship",
+            }
+            flattened: List[Dict[str, Any]] = []
+            for key, category in category_aliases.items():
+                rows = raw.get(key)
+                if not isinstance(rows, list):
+                    continue
+                for item in rows:
+                    if not isinstance(item, dict):
+                        continue
+                    normalized = dict(item)
+                    normalized.setdefault("category", category)
+                    flattened.append(normalized)
+            return flattened
+        return []
+
+    @staticmethod
+    def _long_term_memory_from_orchestrator_pack(
+        memory_pack: Dict[str, Any],
+        *,
+        include_soft: bool,
+        include_state_snapshot: bool,
+    ) -> Dict[str, Any]:
+        """Expose only budgeted soft memory; hard facts have one canonical key."""
+        if not include_soft or not isinstance(memory_pack, dict):
+            return {}
+        payload: Dict[str, Any] = {
+            key: value
+            for key, value in memory_pack.items()
+            if key not in {"hard_constraints", "active_constraints"}
+        }
+        payload["working_memory"] = [
+            item
+            for item in (payload.get("working_memory") or [])
+            if isinstance(item, dict)
+            and str(item.get("source") or "") != "summary"
+        ]
+        if not include_state_snapshot:
+            payload["working_memory"] = [
+                item
+                for item in (payload.get("working_memory") or [])
+                if isinstance(item, dict)
+                and str(item.get("source") or "") != "state_export"
+            ]
+        return payload
 
     def _load_reader_signal(self, chapter: int) -> Dict[str, Any]:
         if not getattr(self.config, "context_reader_signal_enabled", False):
@@ -695,8 +932,18 @@ class ContextManager:
     def _load_state(self) -> Dict[str, Any]:
         path = self.config.state_file
         if not path.exists():
+            self._state_load_error = ""
             return {}
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("state_root_must_be_object")
+            self._state_load_error = ""
+            return payload
+        except Exception as exc:
+            self._state_load_error = exc.__class__.__name__
+            logger.warning("state_load_failed: %s", exc)
+            return {}
 
     def _load_outline(self, chapter: int) -> str:
         return load_chapter_outline(self.config.project_root, chapter, max_chars=1500)
@@ -734,8 +981,18 @@ class ContextManager:
                     break
         return results
 
-    def _load_recent_appearances(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        appearances = self.index_manager.get_recent_appearances(limit=limit)
+    def _load_recent_appearances(
+        self,
+        *,
+        chapter: int,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        if not self._index_exists():
+            return []
+        appearances = self.index_manager.get_recent_appearances(
+            limit=limit,
+            before_chapter=chapter,
+        )
         return appearances or []
 
     def _load_setting(self, keyword: str) -> str:
@@ -770,7 +1027,8 @@ class ContextManager:
             summary_text = self._extract_summary_excerpt(text, snippet_chars)
         else:
             summary_text = text
-        return {"chapter": chapter, "summary": summary_text}
+        summary_text = sanitize_fact_text(summary_text, max_chars=max(1, len(summary_text)))
+        return {"chapter": chapter, "summary": summary_text} if summary_text else None
 
     def _load_story_skeleton(self, chapter: int) -> List[Dict[str, Any]]:
         interval = max(1, int(self.config.context_story_skeleton_interval))

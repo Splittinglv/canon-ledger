@@ -45,6 +45,34 @@ def test_load_context_cli(tmp_path, capsys):
     assert "sections" in output
 
 
+def test_load_context_cli_passes_budget_tokens(tmp_path, capsys):
+    _ensure_scripts_on_path()
+    import memory_cli
+
+    project = _make_project(tmp_path)
+    old_argv = sys.argv
+    sys.argv = [
+        "memory_cli",
+        "--project-root",
+        str(project),
+        "load-context",
+        "--chapter",
+        "1",
+        "--budget-tokens",
+        "7",
+    ]
+    try:
+        memory_cli.main()
+    finally:
+        sys.argv = old_argv
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["budget"]["requested_tokens"] == 7
+    assert output["budget_used_tokens"] > 0
+    assert "context_budget" not in output["sections"]
+    assert output["schema_version"] == "webnovel-context-pack/v2"
+
+
 def test_query_entity_not_found(tmp_path, capsys):
     _ensure_scripts_on_path()
     import memory_cli
