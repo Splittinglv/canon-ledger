@@ -52,7 +52,7 @@ def main() -> int:
         f"WEBNOVEL_PLUGIN_ROOT={plugin_root}",
         f"WEBNOVEL_SCRIPTS_DIR={scripts_dir}",
         f"WORKSPACE_ROOT={workspace_root}",
-        "Run any /webnovel-* skill only after exporting these paths (or eval scripts/export_cursor_env.py).",
+        "Run any /webnovel-* skill only after parsing scripts/export_cursor_env.py JSON; never eval its output.",
     ]
 
     status = ""

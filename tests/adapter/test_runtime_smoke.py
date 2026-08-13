@@ -93,7 +93,7 @@ def test_session_start_emits_plugin_paths(monkeypatch):
 def test_guard_allows_chapter_commit_cli():
     proc = _run_guard(
         {
-            "command": 'python3 -X utf8 "/plugin/scripts/webnovel.py" --project-root "/book" chapter-commit --chapter 1',
+            "command": f'python3 -X utf8 "{WEBNOVEL}" --project-root "/book" chapter-commit --chapter 1',
         }
     )
     assert proc.returncode == 0

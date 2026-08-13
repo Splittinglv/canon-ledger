@@ -160,3 +160,40 @@ def test_validate_plugin_package_detects_missing_skill_frontmatter(tmp_path):
 
     assert report["ok"] is False
     assert any(item["code"] == "skill.frontmatter" for item in report["issues"])
+
+
+def test_validate_plugin_package_rejects_fail_open_runtime_hooks(tmp_path):
+    _write_minimal_package(tmp_path)
+    hooks = tmp_path / "webnovel-writer" / "hooks" / "hooks.json"
+    _write_json(
+        hooks,
+        {
+            "version": 1,
+            "description": "guard",
+            "hooks": {
+                "preToolUse": [{"command": "guard", "matcher": "Write|Edit"}],
+                "beforeShellExecution": [{"command": "guard"}],
+            },
+        },
+    )
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    codes = {item["code"] for item in report["issues"]}
+    assert "hooks.fail_closed" in codes
+    assert "hooks.delete_matcher" in codes
+
+
+def test_validate_plugin_package_rejects_executable_skill_exports(tmp_path):
+    _write_minimal_package(tmp_path)
+    skill = tmp_path / "webnovel-writer" / "skills" / "demo" / "SKILL.md"
+    skill.write_text(
+        "---\nname: demo\ndescription: demo\n---\n\n```bash\neval \"$_EXPORT\"\n```\n",
+        encoding="utf-8",
+    )
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(item["code"] == "security.skill_bootstrap_execution" for item in report["issues"])

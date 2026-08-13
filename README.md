@@ -210,7 +210,7 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/webnovel.py" --project-root "<PROJECT_ROO
 
 常用：`preflight`、`where`、`doctor`、`write-gate`、`chapter-commit`、`projections`、`subagent-models`。
 
-插件根定位：环境变量 `WEBNOVEL_PLUGIN_ROOT` / `CURSOR_PLUGIN_ROOT`，或 `~/.cursor/plugins/local/webnovel-writer`。Skill 会先 `eval` `scripts/export_cursor_env.py`。
+插件根定位：环境变量 `WEBNOVEL_PLUGIN_ROOT` / `CURSOR_PLUGIN_ROOT`，或 `~/.cursor/plugins/local/webnovel-writer`。Skill 把 `scripts/export_cursor_env.py` 的固定 JSON 当数据解析，不执行其输出，也不扫描缓存目录寻找脚本。
 
 ## 移植对照
 

@@ -11,14 +11,16 @@
     "preToolUse": [
       {
         "command": "python3 -X utf8 \"${CURSOR_PLUGIN_ROOT}/hooks/guard_runtime_write.py\"",
-        "matcher": "Write|StrReplace|Edit",
-        "timeout": 5
+        "matcher": "Write|StrReplace|Edit|Delete",
+        "timeout": 5,
+        "failClosed": true
       }
     ],
     "beforeShellExecution": [
       {
         "command": "python3 -X utf8 \"${CURSOR_PLUGIN_ROOT}/hooks/guard_runtime_write.py\"",
-        "timeout": 5
+        "timeout": 5,
+        "failClosed": true
       }
     ]
   }

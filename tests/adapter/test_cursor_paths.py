@@ -82,21 +82,80 @@ def test_resolve_plugin_root_from_env(monkeypatch, tmp_path):
     assert cursor_paths.resolve_plugin_root() == fake.resolve()
 
 
-def test_export_cursor_env_prints_shell_exports(monkeypatch):
+def test_export_cursor_env_prints_json_data(monkeypatch, tmp_path):
     import subprocess
     import sys
 
+    workspace = tmp_path / 'book "quoted" $(not-executed)'
     proc = subprocess.run(
-        [sys.executable, str(SCRIPTS_DIR / "export_cursor_env.py")],
+        [sys.executable, str(SCRIPTS_DIR / "export_cursor_env.py"), "--format", "json"],
         capture_output=True,
         text=True,
         encoding="utf-8",
-        env={k: v for k, v in os.environ.items() if k not in {
-            "WEBNOVEL_PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT",
-            "CURSOR_PROJECT_DIR", "CLAUDE_PROJECT_DIR",
-        }},
+        env={
+            **{
+                k: v
+                for k, v in os.environ.items()
+                if k
+                not in {
+                    "WEBNOVEL_PLUGIN_ROOT",
+                    "CURSOR_PLUGIN_ROOT",
+                    "CLAUDE_PLUGIN_ROOT",
+                    "CLAUDE_PROJECT_DIR",
+                }
+            },
+            "CURSOR_PROJECT_DIR": str(workspace),
+        },
     )
     assert proc.returncode == 0
-    assert f'WEBNOVEL_PLUGIN_ROOT="{PLUGIN_ROOT}"' in proc.stdout
-    assert "SCRIPTS_DIR=" in proc.stdout
-    assert "WORKSPACE_ROOT=" in proc.stdout
+    payload = json.loads(proc.stdout)
+    assert payload["schema_version"] == "webnovel-cursor-env/v1"
+    assert payload["environment"] == {
+        "WEBNOVEL_PLUGIN_ROOT": str(PLUGIN_ROOT),
+        "CURSOR_PLUGIN_ROOT": str(PLUGIN_ROOT),
+        "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
+        "SCRIPTS_DIR": str(SCRIPTS_DIR),
+        "WORKSPACE_ROOT": str(workspace.resolve()),
+        "CURSOR_PROJECT_DIR": str(workspace.resolve()),
+    }
+    assert "export " not in proc.stdout
+
+
+def test_all_skills_parse_cursor_environment_as_data_without_cache_discovery():
+    skill_files = sorted((PLUGIN_ROOT / "skills").glob("webnovel-*/SKILL.md"))
+
+    assert len(skill_files) == 8
+    for skill_file in skill_files:
+        text = skill_file.read_text(encoding="utf-8")
+        assert "webnovel-cursor-env/v1" in text, skill_file
+        assert 'eval "$_EXPORT"' not in text, skill_file
+        assert ".rglob(" not in text, skill_file
+        assert "Invoke-Expression" not in text, skill_file
+
+    cursor_paths_text = (SCRIPTS_DIR / "cursor_paths.py").read_text(encoding="utf-8")
+    assert "emit_shell_exports" not in cursor_paths_text
+    assert ".rglob(" not in cursor_paths_text
+
+
+def test_skill_bootstrap_preserves_workspace_metacharacters_as_plain_data(tmp_path):
+    import subprocess
+
+    skill_text = (PLUGIN_ROOT / "skills" / "webnovel-doctor" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    bootstrap = skill_text.split("```bash", 1)[1].split("```", 1)[0]
+    workspace = tmp_path / 'book "quoted" $(literal)'
+    proc = subprocess.run(
+        ["bash", "-c", bootstrap + '\nprintf "%s\\n" "$WORKSPACE_ROOT"'],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env={
+            **os.environ,
+            "WEBNOVEL_PLUGIN_ROOT": str(PLUGIN_ROOT),
+            "CURSOR_PROJECT_DIR": str(workspace),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines()[-1] == str(workspace.resolve())

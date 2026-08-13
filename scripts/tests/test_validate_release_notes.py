@@ -123,3 +123,25 @@ def test_validate_release_notes_requires_previous_tag_in_current_changelog_secti
 
     assert report["ok"] is False
     assert any(item["code"] == "changelog.range" for item in report["issues"])
+
+
+def test_validate_release_notes_reads_version_from_flat_cursor_manifest(tmp_path):
+    _write_release_files(tmp_path)
+    legacy_manifest = tmp_path / "webnovel-writer" / ".claude-plugin" / "plugin.json"
+    _write_json(
+        tmp_path / ".cursor-plugin" / "plugin.json",
+        {"name": "webnovel-writer", "version": "1.2.3", "description": "desc"},
+    )
+    legacy_manifest.unlink()
+
+    report = validate_release_notes(tmp_path, previous_tag="v1.2.2")
+
+    assert report["ok"] is True
+    assert report["version"] == "1.2.3"
+
+
+def test_validate_release_notes_reports_missing_manifest_without_traceback(tmp_path):
+    report = validate_release_notes(tmp_path, previous_tag="v1.2.2")
+
+    assert report["ok"] is False
+    assert any(item["code"] == "layout.plugin_manifest" for item in report["issues"])

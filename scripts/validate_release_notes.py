@@ -12,7 +12,7 @@ from typing import Any
 import sync_plugin_version
 
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+ROOT = Path(__file__).resolve().parent.parent
 VERSION_RE = sync_plugin_version.VERSION_PATTERN
 REQUIRED_RELEASE_HEADINGS = (
     "## 发版范围",
@@ -38,7 +38,7 @@ def _load_text(path: Path) -> tuple[str, str]:
 
 
 def _current_version(root: Path) -> str:
-    payload = sync_plugin_version.load_json(root / "webnovel-writer" / ".claude-plugin" / "plugin.json")
+    payload = sync_plugin_version.load_json(sync_plugin_version.resolve_plugin_manifest(root))
     return str(payload.get("version") or "")
 
 
@@ -93,10 +93,25 @@ def validate_release_notes(
     version: str | None = None,
     previous_tag: str | None = None,
 ) -> dict[str, Any]:
-    repo_root = Path(root) if root is not None else ROOT
-    target_version = version or _current_version(repo_root)
-    previous = previous_tag or _infer_previous_tag(repo_root, target_version)
+    repo_root = (Path(root) if root is not None else ROOT).resolve()
     issues: list[dict[str, str]] = []
+
+    if version:
+        target_version = version
+    else:
+        try:
+            target_version = _current_version(repo_root)
+        except (OSError, TypeError, ValueError) as exc:
+            target_version = ""
+            issues.append(
+                _issue(
+                    "layout.plugin_manifest",
+                    message=str(exc),
+                    path=str(repo_root),
+                    repair="恢复根级 .cursor-plugin/plugin.json，或使用受支持的 legacy 布局。",
+                )
+            )
+    previous = previous_tag or _infer_previous_tag(repo_root, target_version)
 
     if not VERSION_RE.fullmatch(target_version):
         issues.append(_issue("version.invalid", message=f"invalid version: {target_version}", repair="使用 X.Y.Z 版本号。"))

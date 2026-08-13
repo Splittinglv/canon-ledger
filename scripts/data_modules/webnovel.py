@@ -131,7 +131,7 @@ def _run_data_module(module: str, argv: list[str]) -> int:
 
 def _run_script(script_name: str, argv: list[str]) -> int:
     """
-    Run a script under `.claude/scripts/` via a subprocess.
+    Run a script under the plugin's `scripts/` directory via a subprocess.
 
     用途：兼容没有 main() 的脚本。
     """

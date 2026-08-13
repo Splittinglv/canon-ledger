@@ -251,6 +251,41 @@ def _check_optional_assets(root: Path, issues: list[dict[str, str]]) -> None:
             issues.append(_issue("hooks.schema", message=error, path=str(hooks_json), repair="修复 hooks/hooks.json。"))
         elif "description" not in payload or "hooks" not in payload:
             issues.append(_issue("hooks.wrapper", message="hooks.json should use plugin-dev wrapper format", path=str(hooks_json), repair="外层包含 description 与 hooks。"))
+        else:
+            hooks = payload.get("hooks")
+            if not isinstance(hooks, dict):
+                issues.append(_issue("hooks.schema", message="hooks must be an object", path=str(hooks_json), repair="修复 hooks/hooks.json 的 hooks 对象。"))
+            else:
+                for event in ("preToolUse", "beforeShellExecution"):
+                    entries = hooks.get(event)
+                    if not isinstance(entries, list) or not entries or any(
+                        not isinstance(entry, dict) or entry.get("failClosed") is not True
+                        for entry in entries
+                    ):
+                        issues.append(
+                            _issue(
+                                "hooks.fail_closed",
+                                message=f"{event} must fail closed",
+                                path=str(hooks_json),
+                                repair=f"为 {event} 的每个执行型 hook 设置 failClosed: true。",
+                            )
+                        )
+                pre_tool = hooks.get("preToolUse")
+                if isinstance(pre_tool, list) and pre_tool:
+                    matcher = "|".join(
+                        str(entry.get("matcher") or "")
+                        for entry in pre_tool
+                        if isinstance(entry, dict)
+                    )
+                    if "Delete" not in matcher.split("|"):
+                        issues.append(
+                            _issue(
+                                "hooks.delete_matcher",
+                                message="preToolUse does not match Delete",
+                                path=str(hooks_json),
+                                repair="将 Delete 加入 runtime guard 的 matcher。",
+                            )
+                        )
 
 
 def _check_portability(root: Path, issues: list[dict[str, str]]) -> None:
@@ -275,6 +310,19 @@ def _check_portability(root: Path, issues: list[dict[str, str]]) -> None:
                     severity="warning",
                     path=str(path),
                     repair="插件组件内使用 ${CLAUDE_PLUGIN_ROOT} 或相对路径。",
+                )
+            )
+        if path.name == "SKILL.md" and (
+            re.search(r"(?m)^\s*eval\s+", text)
+            or "Invoke-Expression" in text
+            or ("export_cursor_env.py" in text and ".rglob(" in text)
+        ):
+            issues.append(
+                _issue(
+                    "security.skill_bootstrap_execution",
+                    message="skill bootstrap executes generated output or scans cache for an exporter",
+                    path=str(path),
+                    repair="使用受信插件根与固定 JSON 数据协议；禁止 eval/source/Invoke-Expression 和缓存扫描。",
                 )
             )
 
