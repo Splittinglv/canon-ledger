@@ -521,6 +521,8 @@ def test_webnovel_write_skill_skips_style_pipeline():
     assert "anti_ai_force_check=pass" not in text
     assert "事实修补" in text
     assert "将正文改写为网文风格" not in text
+    for forbidden in ("polish-guide.md", "style-adapter.md", "anti-ai-guide.md", "网文腔"):
+        assert forbidden not in text, f"write skill 不应再点名 {forbidden}"
 
 
 def test_agents_do_not_name_nonexistent_writing_dna_files():
@@ -803,15 +805,16 @@ def test_write_skill_postcommit_verifies_five_projections_and_retry_only():
 def test_plan_skill_covers_outline_writeback_and_state_sync_contract():
     """红线 12：plan 的节拍表/时间线/章纲节点/总纲写回 JSON/master-outline-sync/update-state。"""
     text = _read_text(SKILLS_DIR / "webnovel-plan" / "SKILL.md")
-    # 节拍表 / 时间线 输出物
     assert "大纲/第{volume_id}卷-节拍表.md" in text
     assert "大纲/第{volume_id}卷-时间线.md" in text
-    # 结构化章纲节点
     for node in ("CBN", "CPNs", "CEN", "必须覆盖节点", "本章禁区"):
         assert node in text, f"plan 缺少结构化章纲节点标记 {node}"
-    # 结构化总纲写回文件（不可从自由文本推断伏笔）
+    required_line = next(
+        line for line in text.splitlines() if line.startswith("每章必须包含：")
+    )
+    assert "时间锚点" in required_line
+    assert "钩子" not in required_line
     assert "大纲/第{volume_id}卷-总纲写回.json" in text
-    # 设定写回 + 状态同步命令
     cmds = _extract_cli_subcommands(text)
     assert "master-outline-sync" in cmds, "plan 缺少 master-outline-sync 写回命令"
     assert "update-state" in cmds, "plan 缺少 update-state 状态更新命令"

@@ -43,6 +43,7 @@ from .genre_profile_builder import (
     extract_markdown_refs,
     parse_genre_tokens,
 )
+from .consistency_context import sanitize_story_contracts
 from .writing_guidance_builder import (
     build_methodology_guidance_items,
     build_methodology_strategy_card,
@@ -222,7 +223,6 @@ class ContextManager:
         global_ctx = {
             "worldview_skeleton": self._load_setting("世界观"),
             "power_system_skeleton": self._load_setting("力量体系"),
-            "style_contract_ref": self._load_setting("风格契约"),
         }
 
         preferences = self._load_json_optional(self.config.webnovel_dir / "preferences.json")
@@ -269,7 +269,7 @@ class ContextManager:
         }
 
     def _load_reader_signal(self, chapter: int) -> Dict[str, Any]:
-        if not getattr(self.config, "context_reader_signal_enabled", True):
+        if not getattr(self.config, "context_reader_signal_enabled", False):
             return {}
 
         recent_limit = max(1, int(getattr(self.config, "context_reader_signal_recent_limit", 5)))
@@ -313,10 +313,10 @@ class ContextManager:
         return signal
 
     def _load_genre_profile(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        if not getattr(self.config, "context_genre_profile_enabled", True):
+        if not getattr(self.config, "context_genre_profile_enabled", False):
             return {}
 
-        fallback = str(getattr(self.config, "context_genre_profile_fallback", "shuangwen") or "shuangwen")
+        fallback = str(getattr(self.config, "context_genre_profile_fallback", "") or "")
         project = state.get("project") or {}
         project_info = state.get("project_info") or {}
         genre_raw = str(
@@ -327,6 +327,8 @@ class ContextManager:
         )
         genres = self._parse_genre_tokens(genre_raw)
         if not genres:
+            if not fallback:
+                return {}
             genres = [fallback]
         max_genres = max(1, int(getattr(self.config, "context_genre_profile_max_genres", 2)))
         genres = genres[:max_genres]
@@ -375,17 +377,21 @@ class ContextManager:
         state: Dict[str, Any],
         story_contract: Dict[str, Any],
     ) -> Dict[str, Any]:
-        legacy_profile = self._load_genre_profile(state)
-        if legacy_profile:
-            legacy_profile = dict(legacy_profile)
-            legacy_profile["mode"] = "fallback_only"
-
         primary_genre = str(
             (
                 ((story_contract.get("master_setting") or {}).get("route") or {}).get("primary_genre")
                 or ""
             )
         ).strip()
+        if not getattr(self.config, "context_genre_profile_enabled", False):
+            if primary_genre:
+                return {"genre": primary_genre, "mode": "label_only"}
+            return {}
+
+        legacy_profile = self._load_genre_profile(state)
+        if legacy_profile:
+            legacy_profile = dict(legacy_profile)
+            legacy_profile["mode"] = "fallback_only"
         if not primary_genre:
             return legacy_profile or {}
 
@@ -413,8 +419,13 @@ class ContextManager:
         reader_signal: Dict[str, Any],
         genre_profile: Dict[str, Any],
     ) -> Dict[str, Any]:
-        if not getattr(self.config, "context_writing_guidance_enabled", True):
-            return {}
+        if not getattr(self.config, "context_writing_guidance_enabled", False):
+            return {
+                "enabled": False,
+                "guidance_items": [],
+                "checklist": [],
+                "checklist_score": {},
+            }
 
         limit = max(1, int(getattr(self.config, "context_writing_guidance_max_items", 6)))
         low_score_threshold = float(
@@ -695,13 +706,15 @@ class ContextManager:
 
     def _build_story_contract_from_runtime(self, runtime_sources: RuntimeSourceSnapshot) -> Dict[str, Any]:
         story_root = self.config.story_system_dir
-        return {
-            "master_setting": runtime_sources.contracts.get("master") or {},
-            "chapter_brief": runtime_sources.contracts.get("chapter") or {},
-            "volume_brief": runtime_sources.contracts.get("volume") or {},
-            "review_contract": runtime_sources.contracts.get("review") or {},
-            "anti_patterns": read_json_if_exists(story_root / "anti_patterns.json") or [],
-        }
+        return sanitize_story_contracts(
+            {
+                "master_setting": runtime_sources.contracts.get("master") or {},
+                "chapter_brief": runtime_sources.contracts.get("chapter") or {},
+                "volume_brief": runtime_sources.contracts.get("volume") or {},
+                "review_contract": runtime_sources.contracts.get("review") or {},
+                "anti_patterns": read_json_if_exists(story_root / "anti_patterns.json") or [],
+            }
+        )
 
     def _load_recent_summaries(self, chapter: int, window: int = 3) -> List[Dict[str, Any]]:
         summaries = []

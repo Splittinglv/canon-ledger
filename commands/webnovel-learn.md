@@ -1,6 +1,6 @@
 ---
 name: webnovel-learn
-description: 把有效写法写入项目长期记忆
+description: 把跨章事实处理经验写入项目长期记忆
 ---
 
 Follow the `webnovel-learn` skill. User argument: the writing pattern to remember.

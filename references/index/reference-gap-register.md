@@ -10,10 +10,10 @@
 
 | Skill              | Priority | Current problem               | Target role                       | Existing references                                                                                                                       | Missing references                      |
 | ------------------ | -------- | ----------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| webnovel-write     | P0       | 326 行，主链过重，references 平铺式列出   | 主链总控 skill：流程+闸门+交付物+恢复           | anti-ai-guide, polish-guide, style-adapter, style-variants, writing/* (6 files), reading-power-taxonomy, genre-profiles, core-constraints | 命名规则 CSV, 场景写法 CSV, 写作技法 CSV          |
-| webnovel-review    | P0       | 135 行，阻断裁决链不够清楚               | 独立审查入口：reviewer 调用→报告→blocking 处理 | review-schema, core-constraints                                                                                                           | blocking-override-guidelines            |
-| webnovel-plan      | P0       | 272 行，题材/冲突/节奏规则混在正文          | 规划流程入口：卷纲→时间线→章纲                  | (无独立 reference 文件)                                                                                                                        | plot-signal-vs-spoiler, 场景写法 CSV (卷级结构) |
-| webnovel-init      | P1       | 434 行，接近 mini-spec，采集/策略/约束混杂 | 初始化访谈与生成工作流                       | genre-profiles                                                                                                                            | 命名规则 CSV                                |
+| webnovel-write     | P0       | 默认产品已收缩为长期一致性 | 主链总控 skill：流程+闸门+交付物+恢复           | core-constraints；文风只读项目内 `设定集/文风提示词.md` | 命名规则 CSV（一致性） |
+| webnovel-review    | P0       | 135 行，阻断裁决链不够清楚               | 独立审查入口：reviewer 调用→报告+blocking 处理 | review-schema, core-constraints                                                                                                           | blocking-override-guidelines            |
+| webnovel-plan      | P0       | 默认不强制钩子/爽点/CBN                  | 规划流程入口：卷纲→时间线→章纲                  | plot-signal-vs-spoiler；CBN 仅为可选字段名                                                                                                                        | — |
+| webnovel-init      | P1       | 金手指/卖点/反套路改为可选               | 初始化访谈与生成工作流                       | system-data-flow；题材公式/卖点包改为可选                                                                                                                            | 命名规则 CSV                                |
 | webnovel-query     | P1       | 192 行，偏操作手册，低层命令暴露过多          | 查询/分析型 skill                      | (内联)                                                                                                                                      | 暂无刚需                                    |
 | webnovel-dashboard | P2       | 74 行，过轻，缺验证与恢复结构              | 工具启动型 skill                       | (无)                                                                                                                                       | 暂无刚需                                    |
 | webnovel-learn     | P2       | 45 行，过轻，缺边界与恢复                | 轻量记录型 skill                       | (无)                                                                                                                                       | 暂无刚需                                    |
@@ -73,7 +73,7 @@
 |------|------|------|
 | `references/review/blocking-override-guidelines.md` | 已完成 | review blocking 决策参考已落位 |
 | `references/outlining/plot-signal-vs-spoiler.md` | 已完成 | plan 章纲拆分参考已落位 |
-| `references/shared/naming-and-voice-gaps.md` | 已完成 | 命名与口吻缺陷补偿参考已落位 |
+| `references/shared/naming-and-voice-gaps.md` | 已从插件移除 | 命名一致性走 CSV `命名规则`；不再提供独立口吻教程 |
 | `references/README.md` | 已完成 | 顶层 references 索引已新增 |
 | `references/csv/genre-canonical.md` | 已完成 | 15 个 canonical genre + platform_tag 映射已落位 |
 | `reference_search.py` canonical 题材解析 | 已完成 | 支持 canonical、platform_tag、legacy 值归一 |
@@ -90,4 +90,9 @@
 | 女频命名规范扩展 | P1 | 继续补 `命名规则.csv` 中古言、现言、甜宠、娱乐圈命名差异 |
 | 言情核心场景扩展 | P1 | 继续补 `场景写法.csv` 中暧昧、误会、重逢、分手、追妻等场景 |
 | 悬疑推理技法扩展 | P1 | 继续补 `写作技法.csv` 与 `桥段套路.csv` 中线索、公平误导、真相揭露 |
-| shared md 可迁移审查 | P2 | `cool-points-guide.md`、`naming-and-voice-gaps.md` 的可条目化内容留待人工逐条录入 |
+| shared md 可迁移审查 | P2 | 原写法/口吻教程 md 已从插件删除，不再进入写章 |
+
+## 五、2026-08-13 默认产品收缩
+
+默认写章/规划/初始化只守长期一致性。原 `optional/webnovel-craft/` 技法 md 已从插件移除。CSV 技法表仍在 `references/csv/`，默认不注入写章合同。缺席优于禁止。
+

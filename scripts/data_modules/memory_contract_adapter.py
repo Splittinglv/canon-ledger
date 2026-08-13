@@ -22,6 +22,7 @@ from .memory_contract import (
     Rule,
     TimelineEvent,
 )
+from .consistency_context import sanitize_story_contracts
 from .story_runtime_sources import load_runtime_sources
 from .urgency_utils import coerce_urgency
 
@@ -159,7 +160,7 @@ class MemoryContractAdapter:
         sections: Dict[str, Any] = {}
         runtime_sources = load_runtime_sources(self.config.project_root, chapter)
 
-        sections["story_contracts"] = dict(runtime_sources.contracts)
+        sections["story_contracts"] = sanitize_story_contracts(dict(runtime_sources.contracts))
         sections["runtime_status"] = runtime_sources.to_dict()
         sections["latest_commit"] = runtime_sources.latest_commit or {}
 
@@ -220,36 +221,6 @@ class MemoryContractAdapter:
                 sections["urgent_loops"] = [l.to_dict() for l in loops[:3]]
         except Exception as e:
             logger.warning("load_context: loops failed: %s", e)
-
-        # 7. 题材画像摘要（只抽取当前题材的 profile，避免全量加载 genre-profiles.md）
-        try:
-            from .genre_profile_builder import extract_genre_section
-            genre = str(
-                (sections.get("story_contracts", {}).get("master", {})
-                 .get("route", {}).get("primary_genre", ""))
-                or sections.get("protagonist", {}).get("genre", "")
-                or ""
-            ).strip()
-            if not genre:
-                sm = self._state_manager()
-                sm._load_state()
-                project_info = sm._state.get("project_info", {}) or {}
-                legacy_project = sm._state.get("project", {}) or {}
-                genre = str(
-                    project_info.get("genre")
-                    or project_info.get("genre_label")
-                    or legacy_project.get("genre")
-                    or ""
-                ).strip()
-            if genre:
-                profile_path = self.config.project_root / ".claude" / "references" / "genre-profiles.md"
-                if profile_path.exists():
-                    profile_text = profile_path.read_text(encoding="utf-8")
-                    excerpt = extract_genre_section(profile_text, genre)
-                    if excerpt:
-                        sections["genre_profile_excerpt"] = excerpt
-        except Exception as e:
-            logger.warning("load_context: genre_profile_excerpt failed: %s", e)
 
         return ContextPack(
             chapter=chapter,

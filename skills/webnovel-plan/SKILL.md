@@ -10,7 +10,7 @@ description: 基于总纲规划卷纲、时间线和章纲，并把新增设定�
 ## 执行原则
 
 1. 只做增量补齐，不重写整份总纲或设定集。
-2. 先锁定卷级节奏，再批量拆章。
+2. 先锁定本卷冲突与时间跨度，再批量拆章。
 3. 时间线是硬约束，所有章纲必须带时间字段。
 4. 若发现总纲与设定冲突，先阻断，再等用户裁决。
 5. 优先级链：用户明确要求 > 总纲核心冲突与卷末高潮 > 时间线硬约束 > skill 默认流程 > reference 建议。
@@ -67,21 +67,13 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" pla
 |------|---------|------|
 | Step 4 | 全文 | `${SKILL_ROOT}/../../templates/output/大纲-卷节拍表.md` |
 | Step 5 | 全文 | `${SKILL_ROOT}/../../templates/output/大纲-卷时间线.md` |
-| Step 6 always | 区段 | `${SKILL_ROOT}/../../references/genre-profiles.md`（仅当前 genre 的 `### 2.x` 段） |
-| Step 6 always | 全文 | `${SKILL_ROOT}/../../references/shared/strand-weave-pattern.md` |
 | 章纲拆分 always | 区段 | `${SKILL_ROOT}/../../references/outlining/plot-signal-vs-spoiler.md` |
-| Step 6 用户明确要爽文/打脸节奏 | 区段 | `${SKILL_ROOT}/../../references/shared/cool-points-guide.md` |
 | Step 6/7 需要冲突 | 区段 | `${SKILL_ROOT}/references/outlining/conflict-design.md` |
-| Step 6/7 特定节奏 | 区段 | `${SKILL_ROOT}/references/outlining/genre-volume-pacing.md` |
-| Step 7 追读力分析 | 区段 | `${SKILL_ROOT}/../../references/reading-power-taxonomy.md` |
-| Step 7 章纲细化 + 节点规范 | 区段 | `${SKILL_ROOT}/references/outlining/chapter-planning.md` |
 
-CSV 创作参考用检索读，不 `cat` 整表。默认只检索桥段与命名；**不要**为了凑每章爽点去查 `爽点与节奏`。仅当用户明确要爽文/打脸节奏，或题材本身是高密度爽文时才加第三行：
+CSV 检索只用于命名区分，不 `cat` 整表。不要检索场景写法、写作技法、桥段套路或爽点与节奏。
 
 ```bash
-python -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill plan --table 桥段套路 --query "{卷级核心冲突}" --genre "${GENRE}"
 python -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill plan --table 命名规则 --query "角色命名" --genre "${GENRE}"
-# 可选：python -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill plan --table 爽点与节奏 --query "{卷级核心冲突}" --genre "${GENRE}"
 ```
 
 ## 执行流程
@@ -132,7 +124,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" mem
 
 加载模板 `${SKILL_ROOT}/../../templates/output/大纲-卷节拍表.md`。
 
-硬要求：必须填写中段反转，确无则写"无（理由：...）"；危机链至少 3 次递增；卷末新钩子必须能落到最后一章的章末未闭合问题。
+硬要求：无。中段反转、危机链、卷末钩子可写，不写不算失败。
 
 输出文件：`大纲/第{volume_id}卷-节拍表.md`
 
@@ -146,9 +138,9 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" mem
 
 ### Step 6：生成卷纲骨架
 
-必读 `${SKILL_ROOT}/../../references/genre-profiles.md` 与 `${SKILL_ROOT}/../../references/shared/strand-weave-pattern.md`；冲突 / 节奏 reference 按需读取。`cool-points-guide.md` 仅当用户明确要爽文/打脸节奏时读取。
+必读时间线与总纲。不加载网文章法、追读力或爽点教程。
 
-卷纲必须明确：卷摘要、关键人物与反派层级、Strand 分布、伏笔规划、约束触发规划。**爽点密度规划可选**：有则写，没有不补、不因此失败。
+卷纲必须明确：卷摘要、关键人物、伏笔规划。Strand 分布、反派层级、约束触发、爽点密度均可选：有则写，没有不补、不因此失败。
 
 跨卷一致性检查（非首卷必须执行）：
 
@@ -160,21 +152,23 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" mem
 
 批次规则：默认 `10章/批`；复杂题材或多线并进降到 `8章/批`；简单升级流放宽到 `12章/批`；不建议单批超过 `12章`。
 
-按需读取 `${SKILL_ROOT}/../../references/reading-power-taxonomy.md` 与 `${SKILL_ROOT}/references/outlining/chapter-planning.md`。
+按需读取冲突设计。不加载追读力分类或网文章法教程。
 
-每章必须包含：目标、阻力、代价、时间锚点、章内时间跨度、与上章时间差、倒计时状态、Strand、反派层级、视角/主角、关键实体、本章变化、章末未闭合问题、钩子，以及结构化节点 `CBN`、`CPNs`、`CEN`、`必须覆盖节点`、`本章禁区`。
+每章必须包含：目标、时间锚点、章内时间跨度、与上章时间差、倒计时状态（无则写无）、关键实体、本章变化、本章禁区。
+
+可选：阻力、代价、Strand、反派层级、视角、章末未闭合问题、钩子，以及结构化节点 `CBN`、`CPNs`、`CEN`、`必须覆盖节点`。
 
 **爽点不是必填。** 字段可写 `无`。禁止为了凑密度给每章编一个打脸/装逼点；禁止把「本章无爽点」当成规划失败。
 
 #### 结构化节点
 
-节点格式统一为 `主体 | 动作/变化 | 对象/结果`（写作执行骨架，不追求严格语法 SVO）。完整格式说明、字段细则与示例见 `${SKILL_ROOT}/references/outlining/chapter-planning.md` 的「结构化节点规范」，按需区段读，不在本文件内联。
+节点格式统一为 `主体 | 动作/变化 | 对象/结果`。用户若自行使用 `CBN` / `CPNs` / `CEN`，按此格式写即可；插件不提供章法教程。
 
 核心约束：
 
-- 每章固定 1 个 `CBN`、`2-4 个 CPN`、固定 1 个 `CEN`；`CPNs` 按时间顺序排列。
-- 相邻章节 `CEN -> 下一章 CBN` 必须逻辑承接（首章和末章除外）。
-- `必须覆盖节点`最多 4 个，建议 `CBN + CEN + 1~2 个核心 CPN`；可选节点只作建议，不作 fail 主依据。
+- 若使用节点：每章最多 1 个 `CBN`、若干 `CPN`、最多 1 个 `CEN`。不使用则跳过，不失败。
+- 相邻章节若都有 `CEN` / `CBN`，应逻辑承接。
+- `必须覆盖节点`最多 4 个；可选节点只作建议。
 - `本章禁区`不超过 5 条，只写本章绝对不能发生的硬禁区，不写风格类建议。
 - 向后兼容：旧项目章纲缺失上述字段时，下游流程正常执行，仅跳过结构化检查。
 
@@ -190,7 +184,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" mem
 
 ### Step 9：验证、保存并更新状态
 
-必须通过：节拍表 / 时间线表 / 详细大纲均存在且非空；每章时间字段齐全；时间线单调递增；倒计时推进正确；新设定已回写；`BLOCKER=0`；有节点时相邻章节 `CEN -> CBN` 无明显逻辑冲突且每章`必须覆盖节点`不超过 4 个。
+必须通过：节拍表 / 时间线表 / 详细大纲均存在且非空；每章时间字段齐全；时间线单调递增；倒计时推进正确；新设定已回写；`BLOCKER=0`。有节点时相邻章节 `CEN -> CBN` 无明显逻辑冲突且每章`必须覆盖节点`不超过 4 个。
 
 验证全部通过后，生成显式结构化写回文件 `大纲/第{volume_id}卷-总纲写回.json`（只写规划中显式列出的伏笔 / 开放环，禁止从卷纲自由文本推断）：
 
@@ -244,7 +238,6 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" sto
 ## 硬失败条件
 
 - 节拍表 / 时间线表 / 详细大纲不存在或为空。
-- 中段反转缺失且未给出理由。
 - 任一章节缺少时间字段；时间回跳且未标注闪回；倒计时算术冲突。
 - 与总纲核心冲突或卷末高潮明显冲突。
 - 存在 `BLOCKER` 未裁决。

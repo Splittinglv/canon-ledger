@@ -229,29 +229,29 @@ class DataModulesConfig:
         "断裂",
     )
     context_ranker_debug: bool = False
-    context_reader_signal_enabled: bool = True
+    context_reader_signal_enabled: bool = False
     context_reader_signal_recent_limit: int = 5
     context_reader_signal_window_chapters: int = 20
     context_reader_signal_review_window: int = 5
     context_reader_signal_include_debt: bool = False
-    context_genre_profile_enabled: bool = True
+    context_genre_profile_enabled: bool = False
     context_genre_profile_max_refs: int = 8
-    context_genre_profile_fallback: str = "shuangwen"
+    context_genre_profile_fallback: str = ""
     context_compact_text_enabled: bool = True
     context_compact_min_budget: int = 120
     context_compact_head_ratio: float = 0.65
-    context_writing_guidance_enabled: bool = True
+    context_writing_guidance_enabled: bool = False
     context_writing_guidance_max_items: int = 6
     context_writing_guidance_low_score_threshold: float = 75.0
     context_writing_guidance_hook_diversify: bool = True
-    context_methodology_enabled: bool = True
+    context_methodology_enabled: bool = False
     context_methodology_genre_whitelist: tuple[str, ...] = ("*",)
     context_methodology_label: str = "digital-serial-v1"
-    context_writing_checklist_enabled: bool = True
+    context_writing_checklist_enabled: bool = False
     context_writing_checklist_min_items: int = 3
     context_writing_checklist_max_items: int = 6
     context_writing_checklist_default_weight: float = 1.0
-    context_writing_score_persist_enabled: bool = True
+    context_writing_score_persist_enabled: bool = False
     context_writing_score_include_reader_trend: bool = True
     context_writing_score_trend_window: int = 10
     context_rag_assist_enabled: bool = True

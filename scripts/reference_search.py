@@ -61,6 +61,9 @@ def load_tables(csv_dir: Path, table: Optional[str] = None) -> Dict[str, List[Di
 
 _MULTI_VALUE_SPLIT_RE = re.compile(r"[|,，、；;]+")
 _INTERNAL_TABLE_ROLES = {"route", "reasoning"}
+CRAFT_TABLES = frozenset({"场景写法", "写作技法", "桥段套路", "爽点与节奏"})
+CONSISTENCY_TABLES = frozenset({"命名规则", "人设与关系", "金手指与设定"})
+_WRITE_HIDDEN_CRAFT_SKILLS = {"write", "review"}
 
 
 def split_multi_value(cell: Any) -> List[str]:
@@ -101,11 +104,16 @@ def _genre_matches(row: Dict[str, str], genre: Optional[str]) -> bool:
 
 
 def _table_visible_for_search(table_name: str, skill: str, explicit_table: bool) -> bool:
-    """Keep story-system internals out of normal cross-table skill searches."""
+    """Keep story-system internals and craft tables out of default write search."""
+    cfg = CSV_CONFIG.get(table_name) or {}
+    if cfg.get("role") in _INTERNAL_TABLE_ROLES and skill != "story-system" and not explicit_table:
+        return False
+    if skill in _WRITE_HIDDEN_CRAFT_SKILLS and not explicit_table:
+        if cfg.get("craft") or table_name in CRAFT_TABLES:
+            return False
     if explicit_table or skill == "story-system":
         return True
-    cfg = CSV_CONFIG.get(table_name) or {}
-    return cfg.get("role") not in _INTERNAL_TABLE_ROLES
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +153,8 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
         "output_cols": ["编号", "模式名称", "核心摘要", "大模型指令", "详细展开"],
         "poison_col": "毒点",
         "role": "base",
-        "contract_inject": "CHAPTER_BRIEF.dynamic_context",
+        "craft": True,
+        "contract_inject": "",
         "prefix": "SP",
         "required_cols": ["编号", "适用技能", "分类", "层级", "关键词", "适用题材", "核心摘要"],
     },
@@ -155,7 +164,8 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
         "output_cols": ["编号", "技法名称", "核心摘要", "大模型指令", "详细展开"],
         "poison_col": "毒点",
         "role": "base",
-        "contract_inject": "CHAPTER_BRIEF.dynamic_context",
+        "craft": True,
+        "contract_inject": "",
         "prefix": "WT",
         "required_cols": ["编号", "适用技能", "分类", "层级", "关键词", "适用题材", "核心摘要"],
     },
@@ -165,7 +175,8 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
         "output_cols": ["编号", "桥段名称", "核心摘要", "大模型指令", "详细展开"],
         "poison_col": "毒点",
         "role": "dynamic",
-        "contract_inject": "CHAPTER_BRIEF.dynamic_context",
+        "craft": True,
+        "contract_inject": "",
         "prefix": "TR",
         "required_cols": ["编号", "适用技能", "分类", "层级", "关键词", "适用题材", "核心摘要"],
     },
@@ -175,7 +186,8 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
         "output_cols": ["编号", "节奏类型", "核心摘要", "大模型指令", "详细展开"],
         "poison_col": "毒点",
         "role": "dynamic",
-        "contract_inject": "CHAPTER_BRIEF.dynamic_context",
+        "craft": True,
+        "contract_inject": "",
         "prefix": "PA",
         "required_cols": ["编号", "适用技能", "分类", "层级", "关键词", "适用题材", "核心摘要"],
     },
@@ -216,7 +228,8 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
                         "毒点权重", "冲突裁决", "contract注入层", "反模式"],
         "poison_col": "",
         "role": "reasoning",
-        "contract_inject": "CHAPTER_BRIEF.writing_guidance",
+        "craft": True,
+        "contract_inject": "",
         "prefix": "RS",
         "required_cols": ["编号", "题材", "风格优先级", "爽点优先级", "节奏默认策略", "冲突裁决"],
     },

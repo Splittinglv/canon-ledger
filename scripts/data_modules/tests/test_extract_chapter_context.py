@@ -210,7 +210,9 @@ def test_build_chapter_context_payload_includes_contract_sections(tmp_path):
     assert payload["context_contract_version"] == "v3"
     assert payload.get("context_weight_stage") in {"early", "mid", "late"}
     assert "writing_guidance" in payload
+    assert payload["writing_guidance"].get("enabled") is False
     assert isinstance(payload["writing_guidance"].get("guidance_items"), list)
+    assert payload["writing_guidance"].get("guidance_items") == []
     assert isinstance(payload["writing_guidance"].get("checklist"), list)
     assert isinstance(payload["writing_guidance"].get("checklist_score"), dict)
     assert payload["genre_profile"].get("genre") == "xuanhuan"

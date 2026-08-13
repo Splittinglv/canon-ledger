@@ -59,6 +59,9 @@ def test_csv_config_has_contract_inject_field():
     for name, config in CSV_CONFIG.items():
         assert "contract_inject" in config, f"表 {name} 缺少 contract_inject 字段"
         assert isinstance(config["contract_inject"], str)
+        if config.get("craft"):
+            assert config["contract_inject"] == ""
+            continue
         assert "." in config["contract_inject"]
 
 

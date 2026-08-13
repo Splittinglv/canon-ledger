@@ -15,6 +15,7 @@ from reference_search import (
     split_multi_value,
 )
 
+from .consistency_context import CONSISTENCY_TABLES, filter_consistency_tables
 from .story_contracts import merge_anti_patterns
 
 
@@ -77,36 +78,31 @@ class StorySystemEngine:
             route.get("default_query", ""),
             self._directive_query_text(chapter_directive),
         )
+        consistency_base = filter_consistency_tables(route["recommended_base_tables"])
+        consistency_dynamic = filter_consistency_tables(route["recommended_dynamic_tables"])
         base_context = self._collect_tables(
             search_query,
-            route["recommended_base_tables"],
+            consistency_base,
             genre=route["genre_filter"],
             top_k=1,
         )
         dynamic_context = self._collect_tables(
             search_query,
-            route["recommended_dynamic_tables"],
+            consistency_dynamic,
             genre=route["genre_filter"],
             top_k=2,
         )
 
-        # Reasoning layer — try routed genre first, then original genre
         canonical_genre = str(route.get("meta", {}).get("canonical_genre", "") or "").strip()
-        reasoning = self._load_reasoning(canonical_genre)
-        if not reasoning and genre:
-            fallback_genre = self._primary_resolved_genre(genre) or genre
-            if fallback_genre != canonical_genre:
-                reasoning = self._load_reasoning(fallback_genre)
-        ranked = self._apply_reasoning(reasoning, base_context, dynamic_context, chapter_directive)
-
-        source_trace = route["source_trace"] + self._build_source_trace_with_reasoning(ranked, reasoning)
-
-        raw_anti = merge_anti_patterns(
-            route["route_anti_patterns"],
+        ranked = self._apply_reasoning({}, base_context, dynamic_context, chapter_directive)
+        source_trace = route["source_trace"] + self._build_source_trace_with_reasoning(ranked, {})
+        anti_patterns = merge_anti_patterns(
             self._extract_anti_patterns(base_context),
             self._extract_anti_patterns(dynamic_context),
         )
-        anti_patterns = self._rank_anti_patterns(reasoning, raw_anti)
+        route_meta = dict(route["meta"])
+        route_meta["recommended_base_tables"] = consistency_base
+        route_meta["recommended_dynamic_tables"] = consistency_dynamic
 
         return {
             "meta": {"query": query, "chapter": chapter, "explicit_genre": genre or ""},
@@ -117,15 +113,12 @@ class StorySystemEngine:
                     "generator_version": "phase1",
                     "query": query,
                 },
-                "route": route["meta"],
-                "master_constraints": {
-                    "core_tone": route["core_tone"],
-                    "pacing_strategy": route["pacing_strategy"],
-                },
-                "base_context": [r for r in ranked if r.get("_priority_rank", 999) < 999],
+                "route": route_meta,
+                "master_constraints": {},
+                "base_context": [r for r in ranked if str(r.get("_table") or "") in CONSISTENCY_TABLES],
                 "source_trace": source_trace,
                 "override_policy": {
-                    "locked": ["route.primary_genre", "master_constraints.core_tone"],
+                    "locked": ["route.primary_genre"],
                     "append_only": ["anti_patterns"],
                     "override_allowed": [],
                 },
@@ -142,18 +135,9 @@ class StorySystemEngine:
                         "chapter_focus": self._suggest_chapter_focus(query, chapter_directive),
                     },
                     "chapter_directive": chapter_directive,
-                    "dynamic_context": ranked,
+                    "dynamic_context": [],
                     "source_trace": source_trace,
-                    "reasoning": (
-                        {
-                            "genre": reasoning.get("题材", ""),
-                            "inject_target": self._reasoning_inject_target(reasoning),
-                            "style_priority": reasoning.get("风格优先级", ""),
-                            "pacing_strategy": reasoning.get("节奏默认策略", ""),
-                        }
-                        if reasoning
-                        else {}
-                    ),
+                    "reasoning": ({"genre": canonical_genre} if canonical_genre else {}),
                 }
                 if chapter is not None
                 else None

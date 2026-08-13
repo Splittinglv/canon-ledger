@@ -73,11 +73,9 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
 | Trigger | Reference |
 |---------|-----------|
 | always | `../../references/review-schema.md` |
-| 审查涉及伏笔或钩子是否被回应 | `../../references/shared/cool-points-guide.md`（只核事实，不核文笔） |
-| 审查涉及多线交织 | `../../references/shared/strand-weave-pattern.md` |
 | blocking issue 需用户裁决 (Step 8) | `../../references/review/blocking-override-guidelines.md` |
 
-不要加载 `core-constraints.md` 的 Style / Anti-AI 段。审查只对设定、时间线、连贯、角色动机/知识、逻辑。
+审查只对设定、时间线、连贯、角色动机/知识、逻辑。不要加载写法教程或爽点库。
 
 ### Step 4：加载投影状态与待审正文
 

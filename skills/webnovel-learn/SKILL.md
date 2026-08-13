@@ -42,12 +42,12 @@ export PROJECT_ROOT="$(python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-roo
 
 ## 目标
 
-提取可复用的写作模式（钩子/节奏/对话/微兑现等），追加到 `.webnovel/project_memory.json`。
+提取可复用的跨章事实处理方式（伏笔回收、时间线衔接、设定执行），追加到 `.webnovel/project_memory.json`。口吻、句式、文笔偏好请写进 `设定集/文风提示词.md`，不要当作项目记忆。
 
 ## 执行流程
 
 1. 读取 `"$PROJECT_ROOT/.webnovel/state.json"` 的 `progress.current_chapter` 作为当前章节号；缺失则用 `source_chapter: null`，不阻断。
-2. 解析用户输入（`/webnovel-learn` 后的经验文本；为空则取本次对话中用户认可的写法），归类 `pattern_type`（hook/pacing/dialogue/payoff/emotion/format/other，无法归类用 `other`）。
+2. 解析用户输入（`/webnovel-learn` 后的经验文本；为空则取本次对话中用户认可的写法），归类 `pattern_type`（foreshadow/timeline/setting/character/other，无法归类用 `other`）。对话/口吻/节奏类内容改写入文风提示词，不进 project_memory。
 3. 调用 `project-memory add-pattern` 写入，不得手写或拼接 JSON：
 
 ```bash

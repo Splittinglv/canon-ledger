@@ -23,14 +23,13 @@ description: 深度初始化网文项目：分阶段收集书名、题材、主�
 
 | Step | Trigger | Reference |
 |------|---------|-----------|
-| Step 1 | always | `references/system-data-flow.md`、`references/genre-tropes.md` |
-| 题材/卖点采集 | always | `../../references/genre-profiles.md`（只读当前 genre 段） |
+| Step 1 | always | `references/system-data-flow.md` |
+| 题材公式 | 用户明确要题材套路参考 | `references/genre-tropes.md`（只读当前题材段） |
 | 角色卡顿 | 人物扁平 | `references/worldbuilding/character-design.md` |
 | 世界观/力量 | 按需 | `references/worldbuilding/faction-systems.md`、`references/worldbuilding/power-systems.md`、`references/worldbuilding/world-rules.md`、`references/worldbuilding/setting-consistency.md` |
-| 创意约束 | Step 6 | `references/creativity/creativity-constraints.md`（区段：采集读 `## 一、创意包 Schema (Idea Package)`、`## 六、硬约束驱动创意 (Hard Constraints)`、`## 八、评分系统 (Scoring System)`，评分展示读 `### 8.1 五维评分`）、`references/creativity/selling-points.md`（区段：`## 9. 核心卖点定位模板` 骨架，按需补 `### 1.3 核心卖点黄金公式`、`## 7. 实战检查清单`）；复合题材读 `creative-combination.md`；卡顿读 `inspiration-collection.md`；题材命中读 `anti-trope-*.md` |
 | 命名 | 开始命名 | `python -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill init --table 命名规则 --query "{命名对象} {题材}" --genre {题材}` |
 
-按需读取上述长细则（创意约束、反套路库、世界观设计指南、卖点模板），不内联其条目。
+按需读取世界观设计指南。不加载卖点公式、反套路库或追读力配置。
 
 ## 工具策略
 
@@ -81,7 +80,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" s
 - 确认当前目录可写；确认入口脚本 `${SCRIPTS_DIR}/webnovel.py` 存在（仅支持插件目录）。
 - 初始化前不要用 `where` 把 `WORKSPACE_ROOT` 解析成书项目根；新项目尚不存在时 `where` 可能命中旧指针或旧项目。
 - 只打印工作区与脚本目录，确认生成目标将在工作区下的书名安全化子目录中。
-- 加载最小参考：`references/system-data-flow.md`、`references/genre-tropes.md`；`templates/genres/` 仅在选定题材后按需读取。
+- 加载最小参考：`references/system-data-flow.md`。`references/genre-tropes.md` 与 `templates/genres/` 仅在用户明确要题材公式，或已选定题材后按需读取。
 
 输出：进入 Deep 采集前的"已知信息清单"和"待收集清单"。
 
@@ -143,7 +142,7 @@ canonical 题材集合（写入 `project_info.genre`）：都市、玄幻、仙�
 
 ### Step 4：金手指与兑现机制
 
-必收：金手指类型（可为"无金手指"）、名称/系统名（无则留空）、风格、可见度、不可逆代价（必须有代价或明确"无+理由"）、成长节奏。
+必收：金手指类型仅当用户要金手指时收集（可为"无金手指"）。未提金手指则跳过，不阻断。若收集：名称/系统名可空、可见度、不可逆代价（必须有代价或明确"无+理由"）。
 条件必收：系统流给系统性格+升级节奏；重生给重生时间点+记忆完整度；传承/器灵给辅助边界+出手限制。
 
 ### Step 5：世界观与力量规则
@@ -151,15 +150,14 @@ canonical 题材集合（写入 `project_info.genre`）：都市、玄幻、仙�
 必收：世界规模（单城/多域/大陆/多界）、力量体系类型、势力格局、社会阶层与资源分配。
 题材相关：货币体系与兑换规则、宗门/组织层级、境界链与小境界。
 
-### Step 6：创意约束包（差异化核心）
+### Step 6：创意约束包（可选）
+
+仅当用户明确要求差异化卖点、反套路或市场定位时，用对话整理，不加载插件内套路库。未要求则跳过，不阻断初始化。
 
 流程：
-1. 汇总 Step 1.5 已确认的灵感来源：原创想法、参考拆书结果、市场趋势、题材模板或反套路库。
-2. 基于题材映射加载反套路库（最多 2 个主相关库）。
-3. 生成 2-3 套创意包，每套含：一句话卖点、反套路规则 1 条、硬约束 2-3 条、主角缺陷驱动一句话、反派镜像一句话、开篇钩子。
-4. 三问筛选：为什么这题材必须这么写？换常规主角会不会塌？卖点能否一句话讲清且不撞模板？
-5. 展示五维评分（详见 `references/creativity/creativity-constraints.md` 的 `8.1 五维评分`）辅助决策。
-6. 用户选择最终方案，或拒绝并给出原因。
+1. 汇总 Step 1.5 已确认的灵感来源：原创想法、参考拆书结果、市场趋势或用户自己的约束。
+2. 用对话生成 2-3 套差异化表达，每套含：一句话卖点、硬约束 2-3 条、主角缺陷驱动一句话、反派镜像一句话。
+3. 用户选择最终方案，或拒绝并给出原因。
 
 备注：
 - 若用户要求"贴近当下市场"，可触发外部检索并标注时间戳。
@@ -167,7 +165,7 @@ canonical 题材集合（写入 `project_info.genre`）：都市、玄幻、仙�
 
 ### Step 7：一致性复述与最终确认
 
-必须输出"初始化摘要草案"并让用户确认：故事核（题材/一句话故事/核心冲突）、主角核（欲望/缺陷）、金手指核（能力与代价）、世界核（规模/力量/势力）、创意约束核（反套路+硬约束）。
+必须输出"初始化摘要草案"并让用户确认：故事核（题材/一句话故事/核心冲突）、主角核（欲望/缺陷）、世界核（规模/力量/势力）。金手指核、创意约束核有则写，没有标「无」。
 
 确认规则：用户未明确确认，不执行生成；用户仅改局部，回到对应 Step 最小重采集。
 
@@ -179,8 +177,7 @@ canonical 题材集合（写入 `project_info.genre`）：都市、玄幻、仙�
 2. 目标规模可计算（字数或章数至少一个）。
 3. 主角姓名 + 欲望 + 缺陷完整。
 4. 世界规模 + 力量体系类型完整。
-5. 金手指类型已确定（允许"无金手指"）。
-6. 创意约束已确定：反套路规则 1 条 + 硬约束至少 2 条，或用户明确拒绝并记录原因。
+5. 金手指、反套路、卖点公式均非必填。
 
 ## 项目目录安全规则（必须）
 
@@ -227,7 +224,7 @@ python "${SCRIPTS_DIR}/webnovel.py" init \
 
 ### 3) Patch 总纲
 
-`大纲/总纲.md` 必须补齐：故事一句话、核心主线/暗线、创意约束（反套路、硬约束、主角缺陷、反派镜像）、反派分层、关键爽点里程碑（2-3 条）。
+`大纲/总纲.md` 必须补齐：故事一句话、核心主线/暗线。创意约束、反派分层、爽点里程碑可写，不写不算失败。
 
 ### 4) 生成写前合同树（Story System 初始化）
 

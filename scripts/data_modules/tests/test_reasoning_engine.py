@@ -144,9 +144,10 @@ def test_build_with_reasoning_includes_reasoning_rule_in_source_trace(tmp_path):
     contract = engine.build(query="玄幻", genre=None, chapter=1)
 
     source_trace = contract["master_setting"]["source_trace"]
-    reasoning_entries = [e for e in source_trace if e.get("reasoning_rule") == "玄幻"]
-    assert len(reasoning_entries) > 0, f"Expected reasoning_rule='玄幻' in source_trace, got {source_trace}"
-    assert reasoning_entries[0]["inject_target"] == "CHAPTER_BRIEF.writing_guidance"
+    inject_targets = {e.get("inject_target") for e in source_trace if "inject_target" in e}
+    assert "CHAPTER_BRIEF.writing_guidance" not in inject_targets
+    assert contract["chapter_brief"]["dynamic_context"] == []
+    assert contract["chapter_brief"]["reasoning"] == {"genre": "玄幻"}
 
 
 def test_reasoning_anti_patterns_sorted_by_weight(tmp_path):
@@ -157,13 +158,9 @@ def test_reasoning_anti_patterns_sorted_by_weight(tmp_path):
     contract = engine.build(query="玄幻", genre=None, chapter=None)
 
     anti_patterns = contract["anti_patterns"]
-    assert len(anti_patterns) > 0, "Expected non-empty anti_patterns"
-
-    # Check that reasoning 反模式 entries are present
     texts = [a["text"] for a in anti_patterns]
-    assert "情绪标签化" in texts or "角色行为无逻辑" in texts, (
-        f"Expected reasoning 反模式 in anti_patterns, got {texts}"
-    )
+    assert "情绪标签化" not in texts
+    assert "角色行为无逻辑" not in texts
 
 
 def test_reasoning_not_found_falls_back_gracefully(tmp_path):

@@ -7,9 +7,7 @@ description: 按上下文→起草→事实审查→提交→备份产出章节�
 
 ## 目标
 
-产出章节到 `正文/第{NNNN}章-{title}.md`。本分支**不改文风**：不跑网文口感、Anti-AI 终检、风格适配、排版美化。口吻只来自书项目里的 `设定集/文风提示词.md`（可空，作者手改）。
-
-默认 2000-2500 字，用户/大纲另有要求时从之。
+产出章节到 `正文/第{NNNN}章-{title}.md`。默认只守长期一致性：设定、时间线、伏笔、角色知识边界、章纲事实。文风只读书项目 `设定集/文风提示词.md`（可空）；空则按当前模型默认写。字数跟用户或大纲走，插件不规定章长。
 
 ## 模式
 
@@ -25,21 +23,20 @@ description: 按上下文→起草→事实审查→提交→备份产出章节�
 - 必须使用 `Task` 工具调用指定 subagent；不得用主流程口头代替 subagent 输出
 - 审查只跑一轮；blocking 事实问题定点修复或经用户裁决后才进 Step 4/5
 - 失败只补跑失败步骤，不回退
-- **禁止**加载 `polish-guide.md`、`style-adapter.md`、`anti-ai-guide.md`、`style-variants.md`、`typesetting.md`、`naming-and-voice-gaps.md`
-- **禁止**把书面语/口语、句式、网文腔、副词密度当问题来改正文
-- 参考资料按步骤按需加载
+- 默认不加载写法教程、爽点库、Anti-AI / 润色材料；不把书面语/口语、句式、修辞当问题来改正文
+- 参考资料按步骤按需加载，只取一致性事实
 
 ## 优先级
 
 用户要求 > 用户文风提示词 > 状态机硬门槛 > 项目约束（总纲/设定/记忆）> skill 流程
 
-## CSV 检索（Step 2 按需，仅事实）
+## CSV 检索（Step 2 按需，仅命名区分）
 
 ```bash
 python -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill write --table {表名} --query "{关键词}" --genre {题材}
 ```
 
-触发条件：新角色→命名规则（区分人物，不规定文笔）。禁止为「写得像网文 / 去 AI 味 / 对话技法 / 场景修辞」检索写作技法或场景写法。
+触发条件：新角色→命名规则（区分人物，不规定文笔）。不要检索场景写法、写作技法、桥段套路或爽点与节奏。
 
 ## 执行流程
 
@@ -96,16 +93,16 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
   write-gate --chapter {chapter_num} --stage prewrite --format json
 ```
 
-必备文件：`MASTER_SETTING.json`（调性/禁忌）、`volume_{NNN}.json`（卷级节奏）、`chapter_{NNN}.review.json`（必须节点/禁区）。缺失则阻断。
+必备文件：`MASTER_SETTING.json`（题材/设定合同）、`volume_{NNN}.json`（卷级约束）、`chapter_{NNN}.review.json`（必须节点/禁区）。缺失则阻断。
 
 `chapter_{NNN}.json` 必须优先检查顶层 `chapter_directive`。`chapter_focus` 只能来自 `chapter_directive.goal` 或真实 query，不得从 `dynamic_context` 的参考摘要继承。
 
 写作任务书排序必须固定为：
 1. 本章硬性约束：`chapter_directive.goal/time_anchor/chapter_span/countdown/chapter_end_open_question`
-2. CBN/CPNs/CEN 与 `must_cover_nodes`
+2. 章纲节点（若有 CBN/CPNs/CEN / `must_cover_nodes`）
 3. 本章禁区：`forbidden_zones`，违反即不通过
 4. 剧情/人物事实：上章钩子、伏笔、能力边界、OOC 事实警戒、剧情向 anti_patterns
-5. 文风：只粘贴 `设定集/文风提示词.md` 里作者手写的正文（去掉 HTML 注释）。文件不存在或只有说明文字 → 写「无用户文风要求，按模型默认写，不要套插件网文腔」
+5. 文风：只粘贴 `设定集/文风提示词.md` 里作者手写的正文（去掉 HTML 注释）。文件不存在或只有说明文字 → 写「无」
 
 ### Step 1：context-agent 生成写作任务书
 
@@ -119,8 +116,8 @@ Task:
 - scripts_dir=${SCRIPTS_DIR}
 - storage_path=${PROJECT_ROOT}/.webnovel
 - state_file=${PROJECT_ROOT}/.webnovel/state.json（projection/read-model，仅兼容读取）
-- 先 research，再按 本章硬性约束 → CBN/CPNs/CEN → 本章禁区 → 剧情/人物事实 → 用户文风提示词 的顺序输出五段写作任务书。
-- 不要把 `style_priority`、writing_guidance 里的句式/口吻建议、网文腔、Anti-AI 规则写进任务书。
+- 先 research，再按 本章硬性约束 → 章纲节点（若有）→ 本章禁区 → 剧情/人物事实 → 用户文风提示词 的顺序输出五段写作任务书。
+- 不要把写法教程、句式/口吻建议、题材节奏配方写进任务书。
 - 上下文不足时返回 blocker。
 
 产物：一份写作任务书，能独立支撑 Step 2 起草。
@@ -144,9 +141,9 @@ Task:
 
 ### Step 2：起草正文
 
-只根据任务书起草。**不要**加载 `core-constraints.md` 的 Style/Anti-AI 段、`anti-ai-guide.md`、`style-adapter.md`、`polish-guide.md`。
+只根据任务书起草。不要加载插件里的写法教程。
 
-只输出纯正文，无占位符。有结构化节点时围绕 CBN→CPNs→CEN 展开，守设定和章纲。文风只服从任务书第 5 段里的用户提示词；没有提示词就按当前模型默认写，不要自行改成网文腔或「去 AI 味」模板。
+只输出纯正文，无占位符。有结构化节点时围绕章纲节点展开，守设定和章纲。文风只服从任务书第 5 段里的用户提示词；没有提示词就按当前模型默认写。
 
 ### Step 3：审查
 
@@ -198,13 +195,11 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" rev
 python -X utf8 -c "import json,os; from pathlib import Path; root=Path(os.environ['PROJECT_ROOT']); ch=int('{chapter_num}'); p=root/'.webnovel'/'tmp'/'review_results.json'; p.parent.mkdir(parents=True,exist_ok=True); p.write_text(json.dumps({'chapter':ch,'issues':[],'issues_count':0,'blocking_count':0,'has_blocking':False,'summary':'minimal mode: reviewer skipped by user-selected --minimal flow','review_skipped':True,'review_mode':'minimal'},ensure_ascii=False,indent=2),encoding='utf-8')"
 ```
 
-### Step 4：事实修补（不改文风）
-
-禁止读取：`references/polish-guide.md`、`references/style-adapter.md`、`references/anti-ai-guide.md`、`references/style-variants.md`、`references/writing/typesetting.md`。
+### Step 4：事实修补
 
 只修补 Step 3 留下的可验证事实问题（设定 / 时间线 / 连贯 / 角色动机与知识边界 / 逻辑）。没有此类 issue 则立即进入 Step 5。
 
-修复时只改正错的事实，不顺带改口吻、修辞、节奏或句式。不输出、不检查 `anti_ai_force_check`。`--minimal` 跳过本步。
+修复时只改正错的事实，不顺带改口吻、修辞或句式。`--minimal` 跳过本步。
 
 ### Step 5：提交
 
@@ -356,14 +351,14 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" use
 1. 正文文件存在且非空
 2. 审查已落库（`--minimal` 除外）
 3. blocking=true 必须在 Step 3 定点修复或经用户裁决
-4. 未对正文做风格适配 / Anti-AI 终检 / 网文腔改写
+4. 未把插件写法教程写进正文要求
 5. accepted CHAPTER_COMMIT，projection 五项 done/skipped
 6. chapter_status=committed（projection 自动推进）
 7. `write-gate` 的 prewrite / precommit / postcommit 均通过
 
 ## 失败恢复
 
-审查缺失→重跑 Step 3。摘要/状态/记忆缺失→重跑 Step 5。事实修补后设定仍冲突→回 Step 4 只改事实，再重跑 Step 5。禁止用润色/Anti-AI 重写来「修复」文风。
+审查缺失→重跑 Step 3。摘要/状态/记忆缺失→重跑 Step 5。事实修补后设定仍冲突→回 Step 4 只改事实，再重跑 Step 5。不要用润色重写来「修复」文风。
 
 ## 作者友好最终报告契约
 

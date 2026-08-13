@@ -51,9 +51,19 @@ def test_style_prompt_template_exists_and_is_author_owned():
     assert "## 作者提示词" in text
     assert "不会" in text or "不覆盖" in text
     write_skill = (PLUGIN_ROOT / "skills" / "webnovel-write" / "SKILL.md").read_text(encoding="utf-8")
-    assert "polish-guide.md" in write_skill
-    assert "禁止" in write_skill
+    assert "polish-guide.md" not in write_skill
+    assert "style-adapter.md" not in write_skill
+    assert "anti-ai-guide.md" not in write_skill
     assert "anti_ai_force_check=pass" not in write_skill
+
+
+def test_optional_craft_pack_is_removed():
+    assert not (PLUGIN_ROOT / "optional" / "webnovel-craft").exists()
+    readme = (PLUGIN_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "optional/webnovel-craft" not in readme
+    for skill_name in ("webnovel-write", "webnovel-plan", "webnovel-init", "webnovel-query"):
+        text = (PLUGIN_ROOT / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8")
+        assert "optional/webnovel-craft" not in text, f"{skill_name} 仍引用已删除的技法目录"
 
 
 def test_resolve_plugin_root_from_this_file():

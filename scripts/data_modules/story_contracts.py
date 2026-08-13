@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from chapter_outline_loader import volume_num_for_chapter_from_state
+from .consistency_context import sanitize_story_contracts
 
 try:
     from security_utils import atomic_write_json
@@ -145,13 +146,10 @@ def write_marked_markdown(path: Path, generated_block: str) -> None:
 
 def render_master_markdown(master_payload: Dict[str, Any]) -> str:
     route = master_payload.get("route") or {}
-    constraints = master_payload.get("master_constraints") or {}
     return "\n".join(
         [
             "# MASTER_SETTING",
             f"- 题材：{route.get('primary_genre', '')}",
-            f"- 调性：{constraints.get('core_tone', '')}",
-            f"- 节奏：{constraints.get('pacing_strategy', '')}",
         ]
     )
 
@@ -179,6 +177,16 @@ def persist_story_seed(
     chapter_payload: Dict[str, Any] | None,
     anti_patterns: List[Dict[str, Any]],
 ) -> None:
+    cleaned = sanitize_story_contracts(
+        {
+            "master_setting": master_payload,
+            "chapter_brief": chapter_payload,
+            "anti_patterns": anti_patterns,
+        }
+    )
+    master_payload = cleaned.get("master_setting") or master_payload
+    chapter_payload = cleaned.get("chapter_brief") if chapter_payload is not None else None
+    anti_patterns = cleaned.get("anti_patterns") or []
     paths = StoryContractPaths.from_project_root(project_root)
     paths.root.mkdir(parents=True, exist_ok=True)
     paths.chapters_dir.mkdir(parents=True, exist_ok=True)
@@ -204,6 +212,14 @@ def persist_runtime_contracts(
     volume_brief: Dict[str, Any],
     review_contract: Dict[str, Any],
 ) -> None:
+    cleaned = sanitize_story_contracts(
+        {
+            "volume_brief": volume_brief,
+            "review_contract": review_contract,
+        }
+    )
+    volume_brief = cleaned.get("volume_brief") or volume_brief
+    review_contract = cleaned.get("review_contract") or review_contract
     paths = StoryContractPaths.from_project_root(project_root)
     volume = volume_num_for_chapter_from_state(paths.project_root, chapter) or 1
     paths.volumes_dir.mkdir(parents=True, exist_ok=True)

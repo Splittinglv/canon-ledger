@@ -59,7 +59,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 ### 4. 角色一致性（category: character）
 - 行为是否与已建立的性格/动机一致
 - 角色知识边界——角色是否使用了不应知道的信息
-- 禁止把书面语/口语、句长、网文腔、修辞习惯当成 issue；那是文风，不是事实
+- 不把口吻、句长、修辞习惯当成 issue；那是文风，不是事实
 
 ### 5. 逻辑（category: logic）
 - 因果关系是否成立

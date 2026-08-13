@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import csv
-import uuid
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -19,11 +19,7 @@ def _write_csv(path, headers, rows):
 
 
 def _make_local_tmp_path() -> Path:
-    base_dir = Path(__file__).resolve().parents[4] / ".tmp_story_system_engine"
-    base_dir.mkdir(exist_ok=True)
-    tmp_dir = base_dir / f"case_{uuid.uuid4().hex}"
-    tmp_dir.mkdir()
-    return tmp_dir
+    return Path(tempfile.mkdtemp(prefix="story_system_engine_"))
 
 
 def test_story_system_routes_explicit_genre_and_collects_anti_patterns():
@@ -133,15 +129,13 @@ def test_story_system_routes_explicit_genre_and_collects_anti_patterns():
     contract = engine.build(query="玄幻退婚流", genre=None, chapter=None)
 
     assert contract["master_setting"]["route"]["primary_genre"] == "玄幻退婚流"
-    assert contract["master_setting"]["master_constraints"]["core_tone"] == "压抑蓄势后爆裂反击"
+    assert "core_tone" not in contract["master_setting"]["master_constraints"]
     assert "命名规则" in contract["master_setting"]["route"]["recommended_base_tables"]
-    assert {
-        item["text"] for item in contract["anti_patterns"]
-    } >= {
-        "打脸节奏不能缺最后一拍补刀",
-        "主角还没反打就被配角替他出手",
-        "打脸收尾太软，没有读者情绪补刀",
-    }
+    assert contract["master_setting"]["route"]["recommended_dynamic_tables"] == []
+    texts = {item["text"] for item in contract["anti_patterns"]}
+    assert "主角还没反打就被配角替他出手" not in texts
+    assert "打脸收尾太软，没有读者情绪补刀" not in texts
+    assert "打脸节奏不能缺最后一拍补刀" not in texts
 
 
 def test_story_system_falls_back_to_explicit_genre():
@@ -185,7 +179,7 @@ def test_story_system_falls_back_to_explicit_genre():
 
     assert contract["master_setting"]["route"]["primary_genre"] == "现言"
     assert contract["master_setting"]["route"]["route_source"] == "explicit_genre_fallback"
-    assert contract["master_setting"]["route"]["recommended_dynamic_tables"] == ["桥段套路", "爽点与节奏", "场景写法"]
+    assert contract["master_setting"]["route"]["recommended_dynamic_tables"] == []
 
 
 def test_story_system_unmatched_genre_raises_routing_error():
@@ -629,7 +623,7 @@ def test_story_system_reference_matching_prefers_chapter_keywords_with_same_prio
     )
 
     selected = contract["chapter_brief"]["dynamic_context"]
-    assert selected[0]["编号"] == "FIN-001"
+    assert selected == []
 
 
 def test_story_system_reference_matching_combines_priority_and_chapter_keywords():
@@ -700,9 +694,8 @@ def test_story_system_reference_matching_combines_priority_and_chapter_keywords(
     )
 
     selected = contract["chapter_brief"]["dynamic_context"]
-    assert [row["编号"] for row in selected[:2]] == ["FIN-001", "TR-001"]
-    trace_by_id = {row["id"]: row for row in contract["chapter_brief"]["source_trace"]}
-    assert trace_by_id["FIN-001"]["combined_rank_score"] > trace_by_id["TR-001"]["combined_rank_score"]
+    assert selected == []
+    assert "style_priority" not in contract["chapter_brief"].get("reasoning", {})
 
 
 def test_story_system_composite_platform_genre_filters_dynamic_context():
@@ -752,4 +745,4 @@ def test_story_system_composite_platform_genre_filters_dynamic_context():
     assert route["canonical_genre"] == "都市"
     assert route["route_source"] == "explicit_genre_fallback"
     selected_ids = [row["编号"] for row in contract["chapter_brief"]["dynamic_context"]]
-    assert selected_ids == ["FOOD-001"]
+    assert selected_ids == []

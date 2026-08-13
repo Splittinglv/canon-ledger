@@ -26,10 +26,10 @@ class RuntimeContractBuilder:
                 "meta": {"schema_version": "story-system/v1", "contract_type": "VOLUME_BRIEF"},
                 "volume_goal": {"summary": f"第{volume}卷延续 {master.route.get('primary_genre', '')} 的主冲突"},
                 "selected_tropes": [master.route.get("primary_genre", "")],
-                "selected_pacing": {"wave": master.master_constraints.get("pacing_strategy", "")},
+                "selected_pacing": {},
                 "selected_scenes": list(plot.get("cpns") or []),
                 "anti_patterns": [row.get("text", "") for row in anti_patterns if row.get("text")],
-                "system_constraints": [master.master_constraints.get("core_tone", "")] if master.master_constraints.get("core_tone") else [],
+                "system_constraints": [],
                 "overrides": {"locked": {}, "append_only": {}, "override_allowed": {}},
             }
         ).model_dump()

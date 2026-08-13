@@ -42,19 +42,16 @@ class TestSkillAndGenreFiltering:
         assert "NR-001" in ids
         assert "NR-002" not in ids
 
-    def test_skill_write_cross_table_search(self):
-        """--skill write --query 战斗描写 → SP-001 from 场景写法."""
+    def test_skill_write_cross_table_search_hides_craft_tables(self):
+        """默认 write 跨表检索不应命中场景写法等技法表。"""
         out = run_search(
             "--skill", "write",
             "--query", "战斗描写",
         )
         assert out["status"] == "success"
-        assert out["data"]["total"] >= 1
-        ids = [r["编号"] for r in out["data"]["results"]]
-        assert "SP-001" in ids
-        # Verify it comes from the right table
-        tables = [r["表"] for r in out["data"]["results"] if r["编号"] == "SP-001"]
-        assert tables[0] == "场景写法"
+        tables = {r["表"] for r in out["data"]["results"]}
+        assert "场景写法" not in tables
+        assert "写作技法" not in tables
 
     def test_nonexistent_query_returns_empty(self):
         """--skill plan --query nonexistent → empty results, no error."""

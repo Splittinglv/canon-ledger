@@ -65,7 +65,6 @@ export PROJECT_ROOT="$(python "${SCRIPTS_DIR}/webnovel.py" --project-root "${WOR
 |---------|-----------|---------|
 | 数据流 / 优先级 | 数据流规范 | `${SKILL_ROOT}/references/system-data-flow.md` |
 | 伏笔分析 | 伏笔分析 | `${SKILL_ROOT}/references/advanced/foreshadowing.md` |
-| 节奏分析 | Strand 模式 | `${SKILL_ROOT}/../../references/shared/strand-weave-pattern.md` |
 | 格式查询 | 标签规范 | `${SKILL_ROOT}/references/tag-specification.md` |
 
 不得同时加载两个以上 reference，除非用户请求明确跨多类型。

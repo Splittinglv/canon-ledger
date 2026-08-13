@@ -27,6 +27,15 @@ def temp_project(tmp_path):
     return cfg
 
 
+def _enable_craft_context(manager):
+    manager.config.context_writing_guidance_enabled = True
+    manager.config.context_genre_profile_enabled = True
+    manager.config.context_methodology_enabled = True
+    manager.config.context_writing_checklist_enabled = True
+    manager.config.context_reader_signal_enabled = True
+    manager.config.context_writing_score_persist_enabled = True
+
+
 def test_context_manager_build_and_filter(temp_project):
     state = {
         "protagonist_state": {"name": "萧炎", "location": {"current": "天云宗"}},
@@ -287,7 +296,7 @@ def test_context_manager_prefers_contract_route_over_legacy_genre_profile(temp_p
 
     assert payload["story_contract"]["master_setting"]["route"]["primary_genre"] == "都市异能"
     assert payload["genre_profile"]["genre"] == "都市异能"
-    assert payload["writing_guidance"]["signals_used"]["genre"] == "都市异能"
+    assert payload["writing_guidance"].get("enabled") is False
     assert payload["runtime_status"]["fallback_sources"] == [
         "missing_volume_contract",
         "missing_chapter_contract",
@@ -452,6 +461,7 @@ def test_context_manager_includes_reader_signal_and_genre_profile(temp_project):
     )
 
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
     payload = manager.build_context(4)
 
     reader_signal = payload["reader_signal"]
@@ -493,6 +503,7 @@ def test_context_manager_genre_section_and_refs_extraction(temp_project):
     )
 
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
 
     profile = manager._load_genre_profile({"project": {"genre": "xuanhuan"}})
     assert profile["genre"] == "xuanhuan"
@@ -507,6 +518,7 @@ def test_context_manager_genre_section_and_refs_extraction(temp_project):
 
 def test_context_manager_reader_signal_with_debt_and_disable_switch(temp_project):
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
     manager.config.context_reader_signal_include_debt = True
 
     signal = manager._load_reader_signal(chapter=5)
@@ -550,6 +562,7 @@ def test_context_manager_includes_writing_guidance(temp_project):
     )
 
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
     payload = manager.build_context(4)
 
     guidance = payload["writing_guidance"]
@@ -609,6 +622,7 @@ def test_context_manager_dynamic_weights_and_composite_genre(temp_project):
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
     payload_early = manager.build_context(10, template="plot")
     payload_late = manager.build_context(150, template="plot")
 
@@ -658,6 +672,7 @@ def test_context_manager_genre_alias_guidance_and_heading_extraction(temp_projec
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
     payload = manager.build_context(12, template="plot")
     guidance = payload["writing_guidance"]
     items = guidance.get("guidance_items") or []
@@ -698,6 +713,7 @@ def test_context_manager_genre_aliases_normalized_for_profile_lookup(temp_projec
     )
 
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
 
     assert manager._parse_genre_tokens("电竞文") == ["电竞"]
     assert manager._parse_genre_tokens("直播") == ["直播文"]
@@ -733,6 +749,7 @@ def test_context_manager_enables_methodology_for_xianxia(temp_project):
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
     manager.config.context_writing_checklist_max_items = 8
     payload = manager.build_context(21, template="plot")
 
@@ -756,6 +773,7 @@ def test_context_manager_enables_methodology_for_non_xianxia_by_default(temp_pro
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
     payload = manager.build_context(21, template="plot")
 
     guidance = payload["writing_guidance"]
@@ -776,6 +794,7 @@ def test_context_manager_allows_methodology_whitelist_restriction(temp_project):
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
     manager.config.context_methodology_genre_whitelist = ("xianxia",)
     payload = manager.build_context(21, template="plot")
 
@@ -815,6 +834,7 @@ def test_context_manager_persist_writing_checklist_score_logs_failure(temp_proje
 
 def test_context_manager_composite_genre_boundary_three_plus(temp_project):
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
     manager.config.context_genre_profile_support_composite = True
     manager.config.context_genre_profile_max_genres = 3
 
@@ -854,6 +874,7 @@ def test_context_manager_dynamic_weights_from_config_override(temp_project):
 
 def test_context_manager_genre_profile_fallbacks_to_project_info(temp_project):
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
 
     profile = manager._load_genre_profile({"project_info": {"genre": "xuanhuan"}})
 
@@ -863,6 +884,7 @@ def test_context_manager_genre_profile_fallbacks_to_project_info(temp_project):
 
 def test_context_manager_genre_profile_prefers_project_info_over_project(temp_project):
     manager = ContextManager(temp_project)
+    _enable_craft_context(manager)
 
     profile = manager._load_genre_profile(
         {
