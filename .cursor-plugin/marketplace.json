@@ -1,0 +1,31 @@
+{
+  "name": "webnovel-writer-cursor",
+  "owner": {
+    "name": "Splittinglv"
+  },
+  "metadata": {
+    "description": "本地 Cursor 插件市场：webnovel-writer 网文创作插件",
+    "version": "6.2.1"
+  },
+  "plugins": [
+    {
+      "name": "webnovel-writer",
+      "source": ".",
+      "description": "长篇网文创作系统的 Cursor 移植版（skills + agents + Story System + RAG + Dashboard）",
+      "version": "6.2.1",
+      "author": {
+        "name": "lingfengQAQ"
+      },
+      "homepage": "https://github.com/Splittinglv/webnovel-writer-cursor",
+      "repository": "https://github.com/Splittinglv/webnovel-writer-cursor",
+      "license": "GPL-3.0",
+      "keywords": [
+        "webnovel",
+        "cursor",
+        "skills",
+        "agents",
+        "rag"
+      ]
+    }
+  ]
+}

@@ -82,6 +82,55 @@ def test_validate_plugin_package_accepts_plugin_root(tmp_path):
     assert report["error_count"] == 0
 
 
+def test_validate_plugin_package_accepts_cursor_root_marketplace(tmp_path):
+    _write_json(
+        tmp_path / ".cursor-plugin" / "plugin.json",
+        {"name": "webnovel-writer", "version": "1.2.3", "description": "desc"},
+    )
+    _write_json(
+        tmp_path / ".cursor-plugin" / "marketplace.json",
+        {
+            "name": "webnovel-writer-cursor",
+            "owner": {"name": "test"},
+            "plugins": [
+                {
+                    "name": "webnovel-writer",
+                    "version": "1.2.3",
+                    "source": ".",
+                }
+            ],
+        },
+    )
+    (tmp_path / "README.md").write_text(
+        "\n".join(
+            [
+                "# Test",
+                "",
+                "[![Version](https://img.shields.io/badge/version-1.2.3-brightgreen.svg)](.cursor-plugin/plugin.json)",
+                "",
+                "| 版本 | 说明 |",
+                "|------|------|",
+                "| **v1.2.3 (当前)** | test |",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "LICENSE").write_text("license\n", encoding="utf-8")
+    skill = tmp_path / "skills" / "demo" / "SKILL.md"
+    skill.parent.mkdir(parents=True, exist_ok=True)
+    skill.write_text("---\nname: demo\ndescription: demo\n---\n\n# Demo\n", encoding="utf-8")
+    agent = tmp_path / "agents" / "demo.md"
+    agent.parent.mkdir(parents=True, exist_ok=True)
+    agent.write_text("---\nname: demo\ndescription: demo\ntools: Read\n---\n\n# Demo\n", encoding="utf-8")
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is True
+    assert report["error_count"] == 0
+    assert not any(item["code"] == "marketplace.json" for item in report["issues"])
+
+
 def test_validate_plugin_package_detects_version_mismatch(tmp_path):
     _write_minimal_package(tmp_path, plugin_version="1.2.3", marketplace_version="1.2.4")
 

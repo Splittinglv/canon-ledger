@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -34,6 +35,14 @@ def isolate_plugin_env(monkeypatch, tmp_path):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (tmp_path / "home").mkdir(parents=True, exist_ok=True)
+
+
+def test_cursor_marketplace_manifest_lists_root_plugin():
+    marketplace = json.loads((PLUGIN_ROOT / ".cursor-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+    plugin = next(item for item in marketplace["plugins"] if item["name"] == "webnovel-writer")
+    assert plugin["source"] in {".", "./"}
+    assert plugin["version"] == "6.2.1"
+    assert (PLUGIN_ROOT / ".cursor-plugin" / "plugin.json").is_file()
 
 
 def test_resolve_plugin_root_from_this_file():

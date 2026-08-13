@@ -40,14 +40,18 @@ Cursor Agent 默认使用系统里的 `python3`。请保证该解释器已安装
 
 ### 2. 把本仓库装成本地 Cursor 插件
 
-推荐符号链接（开发与使用同一份代码）：
+Cursor 的 **Settings → Plugins → 添加本地目录** 认的是 **marketplace**，不是单独的 `plugin.json`。本仓库根目录已包含 `.cursor-plugin/marketplace.json`。
+
+**方法 A（推荐，开发与使用同一份代码）：**
 
 ```bash
 mkdir -p ~/.cursor/plugins/local
 ln -s "/absolute/path/to/webnovel-writer-to-cursor" ~/.cursor/plugins/local/webnovel-writer
 ```
 
-也可以在 Cursor **Settings → Plugins** 里添加本地目录。装好后重载窗口，Agent 聊天应能看到 `/webnovel-*`。
+然后执行 **Developer: Reload Window**。
+
+**方法 B：** 在 **Settings → Plugins** 里添加本地目录，选本仓库根目录（必须能看到 `.cursor-plugin/marketplace.json`）。装好后重载窗口，Agent 聊天应能看到 `/webnovel-*`。
 
 ### 3. 打开书项目的父目录当工作区
 

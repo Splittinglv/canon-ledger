@@ -94,10 +94,39 @@ def _plugin_root(root: Path) -> Path:
     return root if _is_plugin_root(root) else root / PLUGIN_NAME
 
 
+def _marketplace_candidates(repo_root: Path) -> list[Path]:
+    return [
+        repo_root / ".cursor-plugin" / "marketplace.json",
+        repo_root / ".claude-plugin" / "marketplace.json",
+    ]
+
+
+def _existing_marketplace(repo_root: Path) -> Path | None:
+    for candidate in _marketplace_candidates(repo_root):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _repo_root(root: Path) -> Path:
-    if _is_plugin_root(root) and (root.parent / ".claude-plugin" / "marketplace.json").is_file():
+    if _is_plugin_root(root) and _existing_marketplace(root.parent) is not None:
         return root.parent
     return root
+
+
+def _normalize_marketplace_source(value: Any) -> str:
+    text = str(value or "").strip()
+    if text in {".", "./"}:
+        return "."
+    return text.rstrip("/")
+
+
+def _allowed_marketplace_sources(root: Path) -> set[str]:
+    plugin_root = _plugin_root(root).resolve()
+    repo_root = _repo_root(root).resolve()
+    if plugin_root == repo_root:
+        return {".", "./"}
+    return {"./webnovel-writer", "webnovel-writer"}
 
 
 def _check_manifest(root: Path, issues: list[dict[str, str]]) -> tuple[str, str]:
@@ -118,7 +147,8 @@ def _check_manifest(root: Path, issues: list[dict[str, str]]) -> tuple[str, str]
 
 
 def _check_marketplace(root: Path, plugin_version: str, issues: list[dict[str, str]]) -> None:
-    marketplace = _repo_root(root) / ".claude-plugin" / "marketplace.json"
+    repo_root = _repo_root(root)
+    marketplace = _existing_marketplace(repo_root) or _marketplace_candidates(repo_root)[0]
     payload, error = _load_json(marketplace)
     if error:
         severity = "warning" if _is_plugin_root(root) else "error"
@@ -128,7 +158,7 @@ def _check_marketplace(root: Path, plugin_version: str, issues: list[dict[str, s
                 message=error,
                 severity=severity,
                 path=str(marketplace),
-                repair="在仓库根运行可校验 marketplace；插件根安装包可忽略该项。",
+                repair="在仓库根补齐 .cursor-plugin/marketplace.json；嵌套安装包也可使用 .claude-plugin/marketplace.json。",
             )
         )
         return
@@ -136,8 +166,18 @@ def _check_marketplace(root: Path, plugin_version: str, issues: list[dict[str, s
     if plugin is None:
         issues.append(_issue("marketplace.plugin", message=f"{PLUGIN_NAME} missing from marketplace", path=str(marketplace), repair="在 plugins[] 中加入 webnovel-writer。"))
         return
-    if plugin.get("source") != "./webnovel-writer":
-        issues.append(_issue("marketplace.source", message=f"unexpected source: {plugin.get('source')}", path=str(marketplace), repair="source 应为 ./webnovel-writer。"))
+    source = str(plugin.get("source") or "")
+    allowed = _allowed_marketplace_sources(root)
+    if _normalize_marketplace_source(source) not in {_normalize_marketplace_source(item) for item in allowed}:
+        expected = " 或 ".join(sorted(allowed))
+        issues.append(
+            _issue(
+                "marketplace.source",
+                message=f"unexpected source: {plugin.get('source')}",
+                path=str(marketplace),
+                repair=f"source 应为 {expected}。",
+            )
+        )
     marketplace_version = str(plugin.get("version") or "")
     if plugin_version and marketplace_version != plugin_version:
         issues.append(
