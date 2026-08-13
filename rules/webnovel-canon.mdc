@@ -1,0 +1,22 @@
+---
+description: 长篇网文防幻觉与真源保护。打开书项目或使用 /webnovel-* 时始终适用。
+alwaysApply: true
+---
+
+# Webnovel canon
+
+- **大纲即法律**：剧情推进以总纲/卷纲/章纲为准，不擅自改结局或跳过必须节点。
+- **设定即物理**：战力、地点、时间线、世界规则以设定集和 `.story-system/` 合同为准。
+- **发明需识别**：新角色/地点/道具必须经 data-agent 提取并入库，禁止口头发明后不登记。
+
+## 真源与投影
+
+- 写前真源：`.story-system/MASTER_SETTING.json`、`volumes/`、`chapters/`、`reviews/`
+- 写后真源：accepted `CHAPTER_COMMIT`
+- `.webnovel/state.json`、`index.db`、`summaries/`、`memory_scratchpad.json` 只是投影，禁止手改后当作事实
+
+## 禁止手改
+
+不要直接编辑 `.story-system/commits/`、`.webnovel/index.db`、`.webnovel/vectors.db`、`.webnovel/memory_scratchpad.json`、`.webnovel/projection_log.jsonl`。提交与投影只走 `scripts/webnovel.py` 的 `write-gate` / `chapter-commit` / `projections retry|replay`。
+
+写作、规划、审查、查询走对应 `/webnovel-*` skill，不要跳过预检与提交链。
