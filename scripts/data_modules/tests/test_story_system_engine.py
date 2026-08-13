@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from data_modules.story_system_engine import StorySystemEngine, StorySystemRoutingError
-from reference_search import GENRE_CANONICAL
 
 
 def _write_csv(path, headers, rows):
@@ -22,7 +21,7 @@ def _make_local_tmp_path() -> Path:
     return Path(tempfile.mkdtemp(prefix="story_system_engine_"))
 
 
-def test_story_system_routes_explicit_genre_and_collects_anti_patterns():
+def test_story_system_infers_only_neutral_genre_and_ignores_craft_routes():
     csv_dir = _make_local_tmp_path() / "csv"
     csv_dir.mkdir()
 
@@ -128,17 +127,19 @@ def test_story_system_routes_explicit_genre_and_collects_anti_patterns():
     engine = StorySystemEngine(csv_dir=csv_dir)
     contract = engine.build(query="玄幻退婚流", genre=None, chapter=None)
 
-    assert contract["master_setting"]["route"]["primary_genre"] == "玄幻退婚流"
-    assert "core_tone" not in contract["master_setting"]["master_constraints"]
-    assert "命名规则" in contract["master_setting"]["route"]["recommended_base_tables"]
-    assert contract["master_setting"]["route"]["recommended_dynamic_tables"] == []
-    texts = {item["text"] for item in contract["anti_patterns"]}
-    assert "主角还没反打就被配角替他出手" not in texts
-    assert "打脸收尾太软，没有读者情绪补刀" not in texts
-    assert "打脸节奏不能缺最后一拍补刀" not in texts
+    route = contract["master_setting"]["route"]
+    assert route["primary_genre"] == "玄幻"
+    assert route["canonical_genre"] == "玄幻"
+    assert route["route_source"] == "inferred_genre_neutral"
+    assert route["recommended_base_tables"] == []
+    assert route["recommended_dynamic_tables"] == []
+    assert contract["master_setting"]["base_context"] == []
+    assert contract["master_setting"]["source_trace"] == []
+    assert contract["master_setting"]["override_policy"]["locked"] == []
+    assert contract["anti_patterns"] == []
 
 
-def test_story_system_falls_back_to_explicit_genre():
+def test_story_system_preserves_explicit_genre_as_neutral_metadata():
     csv_dir = _make_local_tmp_path() / "csv"
     csv_dir.mkdir()
 
@@ -178,11 +179,14 @@ def test_story_system_falls_back_to_explicit_genre():
     contract = engine.build(query="压抑一点，后面爆", genre="现言", chapter=None)
 
     assert contract["master_setting"]["route"]["primary_genre"] == "现言"
-    assert contract["master_setting"]["route"]["route_source"] == "explicit_genre_fallback"
+    assert contract["master_setting"]["route"]["author_genre_label"] == "现言"
+    assert contract["master_setting"]["route"]["route_source"] == "explicit_genre_neutral"
+    assert contract["master_setting"]["route"]["recommended_base_tables"] == []
     assert contract["master_setting"]["route"]["recommended_dynamic_tables"] == []
+    assert contract["anti_patterns"] == []
 
 
-def test_story_system_unmatched_genre_raises_routing_error():
+def test_story_system_preserves_unknown_chinese_genre_without_selecting_a_preset():
     csv_dir = _make_local_tmp_path() / "csv"
     csv_dir.mkdir()
 
@@ -220,13 +224,17 @@ def test_story_system_unmatched_genre_raises_routing_error():
 
     engine = StorySystemEngine(csv_dir=csv_dir)
 
-    with pytest.raises(StorySystemRoutingError) as exc:
-        engine.build(query="赛博厨神", genre="赛博厨神", chapter=None)
+    contract = engine.build(query="赛博厨神", genre="赛博厨神", chapter=None)
 
-    message = str(exc.value)
-    assert "赛博厨神" in message
-    assert "未命中任何路由行" in message
-    assert "玄幻退婚流" not in message
+    route = contract["master_setting"]["route"]
+    assert route["primary_genre"] == "赛博厨神"
+    assert route["canonical_genre"] == ""
+    assert route["author_genre_label"] == "赛博厨神"
+    assert route["route_source"] == "explicit_genre_neutral"
+    assert route["recommended_base_tables"] == []
+    assert route["recommended_dynamic_tables"] == []
+    assert contract["master_setting"]["base_context"] == []
+    assert contract["anti_patterns"] == []
 
 
 def test_story_system_routes_chinese_rules_mystery_to_canonical_suspense():
@@ -241,36 +249,54 @@ def test_story_system_routes_chinese_rules_mystery_to_canonical_suspense():
     route = contract["master_setting"]["route"]
     assert route["canonical_genre"] == "悬疑"
     assert route["genre_filter"] == "悬疑"
-    assert route["route_source"] != "default_seed_fallback"
+    assert route["primary_genre"] == "悬疑"
+    assert route["author_genre_label"] == "规则怪谈"
+    assert route["route_source"] == "explicit_genre_neutral"
 
 
-def test_story_system_routes_every_real_route_row():
+def test_story_system_never_downgrades_broad_genres_to_first_trope_rows():
     csv_dir = Path(__file__).resolve().parents[3] / "references" / "csv"
     engine = StorySystemEngine(csv_dir=csv_dir)
-    route_rows = engine._load_csv_rows("题材与调性推理")
 
-    assert route_rows
-    for row in route_rows:
-        aliases = (
-            engine._split_multi_value(row.get("关键词"))
-            + engine._split_multi_value(row.get("意图与同义词"))
-            + engine._split_multi_value(row.get("题材别名"))
-        )
-        query = next((value for value in aliases if value), row.get("题材/流派") or row.get("canonical_genre") or "")
+    cases = {
+        "玄幻": "玄幻",
+        "仙侠": "仙侠",
+        "奇幻": "奇幻",
+        "科幻": "科幻",
+        "历史": "历史",
+        "悬疑": "悬疑",
+        "都市": "都市",
+        "现言": "现言",
+        "古言": "古言",
+        "年代": "年代",
+        "种田": "种田",
+        "快穿": "快穿",
+        "衍生": "衍生",
+    }
+    forbidden_presets = {
+        "玄幻退婚流",
+        "西幻冒险",
+        "末世求生",
+        "穿越流",
+        "规则动物园",
+        "都市赘婿流",
+        "追妻火葬场",
+        "年代民国",
+        "种田经营",
+        "快穿任务",
+        "同人衍生",
+    }
+
+    for query, expected in cases.items():
         contract = engine.build(query=query, genre=None, chapter=None)
         route = contract["master_setting"]["route"]
-
-        canonical = route["canonical_genre"]
-        assert canonical in GENRE_CANONICAL or canonical == "全部"
-        if canonical == "全部":
-            assert route["genre_filter"] == ""
-        else:
-            assert route["genre_filter"] == canonical
-        assert route["route_source"] in {
-            "keyword_or_alias_match",
-            "explicit_genre_fallback",
-            "inferred_genre_fallback",
-        }
+        assert route["primary_genre"] == expected
+        assert route["canonical_genre"] == expected
+        assert route["primary_genre"] not in forbidden_presets
+        assert route["route_source"] == "inferred_genre_neutral"
+        assert route["recommended_base_tables"] == []
+        assert route["recommended_dynamic_tables"] == []
+        assert contract["anti_patterns"] == []
 
 
 def test_story_system_rejects_english_explicit_genre_even_when_query_routes():
@@ -394,12 +420,14 @@ def test_route_infers_canonical_genre_from_spaced_query():
     engine = StorySystemEngine(csv_dir=csv_dir)
     route = engine._route("快穿 任务 原主", None)
 
-    assert route["meta"]["primary_genre"] == "快穿任务"
+    assert route["meta"]["primary_genre"] == "快穿"
     assert route["meta"]["canonical_genre"] == "快穿"
-    assert route["meta"]["route_source"] == "inferred_genre_fallback"
+    assert route["meta"]["route_source"] == "inferred_genre_neutral"
+    assert route["recommended_base_tables"] == []
+    assert route["recommended_dynamic_tables"] == []
 
 
-def test_build_uses_canonical_genre_for_reasoning_lookup():
+def test_build_does_not_activate_craft_reasoning_from_trope_words():
     csv_dir = _make_local_tmp_path() / "csv"
     csv_dir.mkdir()
 
@@ -523,8 +551,14 @@ def test_build_uses_canonical_genre_for_reasoning_lookup():
     engine = StorySystemEngine(csv_dir=csv_dir)
     contract = engine.build(query="退婚流 三年之约", genre=None, chapter=1)
 
-    assert contract["master_setting"]["route"]["canonical_genre"] == "玄幻"
-    assert contract["chapter_brief"]["reasoning"]["genre"] == "玄幻"
+    route = contract["master_setting"]["route"]
+    assert route["canonical_genre"] == ""
+    assert route["primary_genre"] == ""
+    assert route["route_source"] == "unclassified"
+    assert contract["master_setting"]["base_context"] == []
+    assert contract["chapter_brief"]["dynamic_context"] == []
+    assert contract["chapter_brief"]["reasoning"] == {}
+    assert contract["anti_patterns"] == []
 
 
 def test_chapter_focus_uses_directive_goal_not_dynamic_summary():
@@ -743,6 +777,8 @@ def test_story_system_composite_platform_genre_filters_dynamic_context():
 
     route = contract["master_setting"]["route"]
     assert route["canonical_genre"] == "都市"
-    assert route["route_source"] == "explicit_genre_fallback"
+    assert route["primary_genre"] == "都市"
+    assert route["author_genre_label"] == "都市脑洞,美食,甜宠"
+    assert route["route_source"] == "explicit_genre_neutral"
     selected_ids = [row["编号"] for row in contract["chapter_brief"]["dynamic_context"]]
     assert selected_ids == []

@@ -30,7 +30,7 @@ import re
 # 安全修复：导入安全工具函数
 from security_utils import sanitize_commit_message, atomic_write_json, is_git_available
 from project_locator import write_current_project_pointer
-from genre_taxonomy import resolve_genre_input, resolve_template_stems
+from genre_taxonomy import resolve_genre_input
 
 
 # Windows 编码兼容性修复
@@ -62,22 +62,6 @@ def _write_text_if_missing(path: Path, content: str) -> None:
     if path.exists():
         return
     path.write_text(content, encoding="utf-8")
-
-
-def _split_genre_keys(genre: str) -> list[str]:
-    raw = (genre or "").strip()
-    if not raw:
-        return []
-    # 支持复合题材：A+B / A+B / A、B / A与B
-    raw = re.sub(r"[＋/、]", "+", raw)
-    raw = raw.replace("与", "+")
-    parts = [p.strip() for p in raw.split("+") if p.strip()]
-    return parts or [raw]
-
-
-def _normalize_genre_key(key: str) -> str:
-    stems = resolve_template_stems(key)
-    return stems[0] if stems else key
 
 
 def _apply_label_replacements(text: str, replacements: Dict[str, str]) -> str:
@@ -175,7 +159,14 @@ def _ensure_state_schema(state: Dict[str, Any]) -> Dict[str, Any]:
     ps.setdefault("name", "")
     ps.setdefault("power", {"realm": "", "layer": 1, "bottleneck": ""})
     ps.setdefault("location", {"current": "", "last_chapter": 0})
-    ps.setdefault("golden_finger", {"name": "", "level": 1, "cooldown": 0, "skills": []})
+    golden_finger = ps.get("golden_finger")
+    if not isinstance(golden_finger, dict):
+        golden_finger = {}
+        ps["golden_finger"] = golden_finger
+    golden_finger.setdefault("name", "")
+    golden_finger.setdefault("level", 0)
+    golden_finger.setdefault("cooldown", 0)
+    golden_finger.setdefault("skills", [])
     ps.setdefault("attributes", {})
 
     return state
@@ -268,6 +259,7 @@ def init_project(
     sect_hierarchy: str = "",
     cultivation_chain: str = "",
     cultivation_subtiers: str = "",
+    include_genre_templates: bool = False,
 ) -> None:
     project_path = Path(project_dir).expanduser().resolve()
     if ".claude" in project_path.parts:
@@ -305,6 +297,9 @@ def init_project(
         state = {}
 
     state = _ensure_state_schema(state)
+    previous_golden_finger_name = str(
+        (state.get("project_info") or {}).get("golden_finger_name") or ""
+    ).strip()
     created_at = state.get("project_info", {}).get("created_at") or datetime.now().strftime("%Y-%m-%d")
 
     state["project_info"].update(
@@ -316,7 +311,12 @@ def init_project(
                 "route": genre_resolution.route_tags,
                 "trope": genre_resolution.trope_tags,
                 "format": genre_resolution.format_tags,
-                "templates": [Path(name).stem for name in genre_resolution.template_files],
+                # 题材模板属于可选参考材料，不是 canon。只有作者显式选择时才记录。
+                "templates": (
+                    [Path(name).stem for name in genre_resolution.template_files]
+                    if include_genre_templates
+                    else []
+                ),
             },
             "created_at": created_at,
             "target_words": int(target_words),
@@ -353,17 +353,19 @@ def init_project(
     if protagonist_name:
         state["protagonist_state"]["name"] = protagonist_name
 
+    golden_finger = state["protagonist_state"]["golden_finger"]
     gf_type_norm = (golden_finger_type or "").strip()
     if gf_type_norm in {"无", "无金手指", "none"}:
-        state["protagonist_state"]["golden_finger"]["name"] = "无金手指"
-        state["protagonist_state"]["golden_finger"]["level"] = 0
-        state["protagonist_state"]["golden_finger"]["cooldown"] = 0
+        golden_finger["name"] = "无金手指"
+        golden_finger["level"] = 0
+        golden_finger["cooldown"] = 0
     elif golden_finger_name:
-        state["protagonist_state"]["golden_finger"]["name"] = golden_finger_name
-
-    # 确保 golden_finger 字段存在且可编辑
-    if not state["protagonist_state"]["golden_finger"].get("name"):
-        state["protagonist_state"]["golden_finger"]["name"] = "未命名金手指"
+        golden_finger["name"] = golden_finger_name
+    elif golden_finger.get("name") == "未命名金手指" and not previous_golden_finger_name:
+        # 迁移旧版本自动制造的占位事实；未声明金手指应保持未知/未设置。
+        golden_finger["name"] = ""
+        golden_finger["level"] = 0
+        golden_finger["cooldown"] = 0
 
     state["progress"]["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -374,10 +376,7 @@ def init_project(
     script_dir = Path(__file__).resolve().parent
     templates_dir = script_dir.parent / "templates"
     output_templates_dir = templates_dir / "output"
-    genre_key = (genre or "").strip()
-    template_files = list(genre_resolution.template_files)
-    if not template_files:
-        template_files = [f"{_normalize_genre_key(k)}.md" for k in _split_genre_keys(genre_key)]
+    template_files = list(genre_resolution.template_files) if include_genre_templates else []
     genre_templates = []
     seen = set()
     for template_file in template_files:
@@ -421,9 +420,6 @@ def init_project(
                 "- 主要势力：",
                 "- 关键地点：",
                 "",
-                "## 参考题材模板（可删/可改）",
-                "",
-                (genre_template.strip() + "\n") if genre_template else "（未找到对应题材模板，可自行补充）\n",
             ]
         ).rstrip() + "\n"
     else:
@@ -439,17 +435,24 @@ def init_project(
                 "兑换规则": currency_exchange,
             },
         )
-        if genre_template:
-            worldview_content = (
-                worldview_content.rstrip()
-                + "\n\n## 参考题材模板（可删/可改）\n\n"
-                + genre_template.strip()
-                + "\n"
-            )
     _write_text_if_missing(
         project_path / "设定集" / "世界观.md",
         worldview_content,
     )
+    if genre_template:
+        _write_text_if_missing(
+            project_path / "参考" / "题材模板.md",
+            "\n".join(
+                [
+                    "# 题材模板（可选参考）",
+                    "",
+                    "> 本文件不是设定真源，不会自动进入写作合同；仅供作者主动参考。",
+                    "",
+                    genre_template.strip(),
+                    "",
+                ]
+            ),
+        )
 
     power_content = output_power.strip() if output_power else ""
     if not power_content:
@@ -776,6 +779,11 @@ def main() -> None:
     parser.add_argument("--sect-hierarchy", default="", help="宗门/组织层级")
     parser.add_argument("--cultivation-chain", default="", help="典型境界链")
     parser.add_argument("--cultivation-subtiers", default="", help="小境界划分（初/中/后/巅 等）")
+    parser.add_argument(
+        "--include-genre-templates",
+        action="store_true",
+        help="显式生成独立的参考/题材模板.md；不会写入设定集或 Story System canon",
+    )
 
     # 深度模式可选参数（用于预填模板）
     parser.add_argument("--protagonist-desire", default="", help="主角核心欲望（深度模式）")
@@ -823,6 +831,7 @@ def main() -> None:
         sect_hierarchy=args.sect_hierarchy,
         cultivation_chain=args.cultivation_chain,
         cultivation_subtiers=args.cultivation_subtiers,
+        include_genre_templates=args.include_genre_templates,
     )
 
 

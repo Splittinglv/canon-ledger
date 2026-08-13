@@ -53,6 +53,9 @@ def test_runtime_contract_builder_creates_volume_and_review_contracts(tmp_path):
     assert review_contract["meta"]["contract_type"] == "REVIEW_CONTRACT"
     assert "发现陷阱" in review_contract["must_check"]
     assert "不可提前摊牌" in review_contract["blocking_rules"]
+    assert volume_brief["selected_tropes"] == []
+    assert review_contract["genre_specific_risks"] == []
+    assert "玄幻退婚流" not in volume_brief["volume_goal"]["summary"]
 
 
 def test_runtime_contract_builder_surfaces_review_extracted_anti_patterns(tmp_path):

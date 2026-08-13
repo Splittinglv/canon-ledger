@@ -127,10 +127,11 @@ def extract_state_summary(project_root: Path) -> str:
         power = ps.get("power", {})
         summary_parts.append(f"**主角实力**: {power.get('realm', '?')} {power.get('layer', '?')}层")
         summary_parts.append(f"**当前位置**: {ps.get('location', '?')}")
-        golden_finger = ps.get("golden_finger", {})
-        summary_parts.append(
-            f"**金手指**: {golden_finger.get('name', '?')} Lv.{golden_finger.get('level', '?')}"
-        )
+        golden_finger = ps.get("golden_finger")
+        if isinstance(golden_finger, dict) and str(golden_finger.get("name") or "").strip():
+            summary_parts.append(
+                f"**金手指**: {golden_finger.get('name')} Lv.{golden_finger.get('level', 0)}"
+            )
 
     if "strand_tracker" in state:
         tracker = state["strand_tracker"]
@@ -386,4 +387,3 @@ if __name__ == "__main__":
     if sys.platform == "win32":
         enable_windows_utf8_stdio()
     main()
-

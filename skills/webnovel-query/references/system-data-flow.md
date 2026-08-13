@@ -132,7 +132,7 @@ Context Agent (读) ←→ index.db + state.json ←→ Data Agent (写)
     "name": "",
     "power": {"realm": "", "layer": 1, "bottleneck": ""},
     "location": {"current": "", "last_chapter": 0},
-    "golden_finger": {"name": "", "level": 1, "skills": []}
+    "golden_finger": {"name": "", "level": 0, "skills": []}
   },
   "strand_tracker": {
     "last_quest_chapter": 0,

@@ -118,9 +118,10 @@ class StorySystemEngine:
                 "base_context": [r for r in ranked if str(r.get("_table") or "") in CONSISTENCY_TABLES],
                 "source_trace": source_trace,
                 "override_policy": {
-                    "locked": ["route.primary_genre"],
+                    # 题材标签来自作者输入或中性归类，不作为不可修订的剧情事实。
+                    "locked": [],
                     "append_only": ["anti_patterns"],
-                    "override_allowed": [],
+                    "override_allowed": ["route.primary_genre", "route.canonical_genre"],
                 },
             },
             "chapter_brief": (
@@ -146,72 +147,62 @@ class StorySystemEngine:
         }
 
     def _route(self, query: str, genre: Optional[str]) -> Dict[str, Any]:
-        route_rows = self._load_csv_rows("题材与调性推理")
-        query_text = self._normalize_text(" ".join([query or "", genre or ""]))
-        inferred_canonical = "" if genre else self._infer_genre_from_text(query)
-
-        matched = None
-        route_source = ""
-        for row in route_rows:
-            aliases = (
-                self._split_multi_value(row.get("关键词"))
-                + self._split_multi_value(row.get("意图与同义词"))
-                + self._split_multi_value(row.get("题材别名"))
+        if genre:
+            canonical = self._primary_resolved_genre(genre) or ""
+            if canonical not in GENRE_CANONICAL:
+                canonical = ""
+            return self._neutral_route(
+                primary_genre=canonical or str(genre).strip(),
+                canonical_genre=canonical,
+                route_source="explicit_genre_neutral",
+                author_genre_label=str(genre).strip(),
             )
-            if any(alias and self._normalize_text(alias) in query_text for alias in aliases):
-                matched = row
-                route_source = "keyword_or_alias_match"
-                break
-        if matched is None and genre:
-            matched = self._fallback_row_for_genre(route_rows, genre)
-            if matched is not None:
-                route_source = "explicit_genre_fallback"
-        if matched is None and inferred_canonical:
-            matched = self._fallback_row_for_genre(route_rows, inferred_canonical)
-            if matched is not None:
-                route_source = "inferred_genre_fallback"
-        if matched is None:
-            raise self._routing_error(query=query, genre=genre, route_rows=route_rows)
 
-        primary_genre = str(matched.get("题材/流派") or genre or "").strip()
-        explicit_canonical = self._primary_resolved_genre(genre)
-        canonical_genre = str(matched.get("canonical_genre") or "").strip()
-        row_canonicals = [
-            resolved
-            for raw in self._split_genre_value(matched.get("适用题材"))
-            for resolved in [resolve_genre(raw) or str(raw or "").strip()]
-            if resolved and resolved != "全部"
-        ]
-        if explicit_canonical and explicit_canonical != "全部":
-            if not row_canonicals or explicit_canonical in row_canonicals or canonical_genre in ("", "全部"):
-                canonical_genre = explicit_canonical
-        elif inferred_canonical and inferred_canonical != "全部":
-            if not row_canonicals or inferred_canonical in row_canonicals or canonical_genre in ("", "全部"):
-                canonical_genre = inferred_canonical
-        if not canonical_genre:
-            resolved_primary = resolve_genre(primary_genre)
-            if resolved_primary in GENRE_CANONICAL:
-                canonical_genre = resolved_primary
-            elif explicit_canonical and explicit_canonical != "全部":
-                canonical_genre = explicit_canonical
-        genre_filter = canonical_genre if canonical_genre not in ("", "全部") else ""
-        return {
-            "meta": {
-                "primary_genre": primary_genre,
-                "canonical_genre": canonical_genre,
-                "route_source": route_source,
-                "genre_filter": genre_filter,
-                "recommended_base_tables": self._split_multi_value(matched.get("推荐基础检索表")),
-                "recommended_dynamic_tables": self._split_multi_value(matched.get("推荐动态检索表")),
-            },
-            "core_tone": str(matched.get("核心调性") or "").strip(),
-            "pacing_strategy": str(matched.get("节奏策略") or "").strip(),
-            "route_anti_patterns": self._extract_route_anti_patterns(matched),
-            "recommended_base_tables": self._split_multi_value(matched.get("推荐基础检索表")),
-            "recommended_dynamic_tables": self._split_multi_value(matched.get("推荐动态检索表")),
+        inferred_canonical = self._infer_genre_from_text(query)
+        if inferred_canonical:
+            return self._neutral_route(
+                primary_genre=inferred_canonical,
+                canonical_genre=inferred_canonical,
+                route_source="inferred_genre_neutral",
+                author_genre_label="",
+            )
+        return self._neutral_route(
+            primary_genre="",
+            canonical_genre="",
+            route_source="unclassified",
+            author_genre_label="",
+        )
+
+    def _neutral_route(
+        self,
+        *,
+        primary_genre: str,
+        canonical_genre: str,
+        route_source: str,
+        author_genre_label: str,
+    ) -> Dict[str, Any]:
+        """Build a route that preserves author labels without injecting a trope preset."""
+        canonical = str(canonical_genre or "").strip()
+        genre_filter = canonical if canonical in GENRE_CANONICAL else ""
+        meta = {
+            "primary_genre": str(primary_genre or canonical).strip(),
+            "canonical_genre": canonical,
+            "author_genre_label": str(author_genre_label or "").strip(),
+            "route_source": route_source,
             "genre_filter": genre_filter,
-            "default_query": str(matched.get("默认查询词") or "").strip(),
-            "source_trace": [{"table": "题材与调性推理", "id": matched.get("编号", ""), "reason": route_source}],
+            "recommended_base_tables": [],
+            "recommended_dynamic_tables": [],
+        }
+        return {
+            "meta": meta,
+            "core_tone": "",
+            "pacing_strategy": "",
+            "route_anti_patterns": [],
+            "recommended_base_tables": [],
+            "recommended_dynamic_tables": [],
+            "genre_filter": genre_filter,
+            "default_query": "",
+            "source_trace": [],
         }
 
     def _collect_tables(self, query: str, tables: List[str], genre: str, top_k: int) -> List[Dict[str, Any]]:
@@ -330,27 +321,6 @@ class StorySystemEngine:
                     parts.append(text)
         return " ".join(parts)
 
-    def _fallback_row_for_genre(self, rows: List[Dict[str, Any]], genre: str) -> Dict[str, Any] | None:
-        genre_texts = {
-            self._normalize_text(value)
-            for value in self._resolve_genre_values(genre)
-            if value
-        }
-        for row in rows:
-            candidates = (
-                self._split_genre_value(row.get("适用题材"))
-                + self._split_genre_value(row.get("题材/流派"))
-                + self._split_genre_value(row.get("canonical_genre"))
-            )
-            resolved_candidates = {
-                self._normalize_text(resolve_genre(candidate) or candidate)
-                for candidate in candidates
-                if candidate
-            }
-            if genre_texts.intersection(resolved_candidates):
-                return row
-        return None
-
     def _infer_genre_from_text(self, text: str) -> str:
         """Infer a canonical genre from plain query text before default routing."""
         raw_text = str(text or "")
@@ -366,32 +336,9 @@ class StorySystemEngine:
                 return canonical
         return ""
 
-    def _extract_route_anti_patterns(self, row: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return [
-            {"text": text, "source_table": "题材与调性推理", "source_id": row.get("编号", "")}
-            for text in self._split_multi_value(row.get("毒点"))
-        ]
-
     # ------------------------------------------------------------------
     # Reasoning / 裁决 layer
     # ------------------------------------------------------------------
-
-    def _load_reasoning(self, genre: str) -> Dict[str, Any]:
-        """Load matching row from 裁决规则.csv for *genre*."""
-        rows = self._load_csv_rows("裁决规则")
-        genre_norm = self._normalize_text(genre)
-        if not genre_norm:
-            return {}
-        for row in rows:
-            if self._normalize_text(row.get("题材")) == genre_norm:
-                return row
-            aliases = (
-                self._split_multi_value(row.get("关键词"))
-                + self._split_multi_value(row.get("意图与同义词"))
-            )
-            if any(genre_norm == self._normalize_text(a) for a in aliases):
-                return row
-        return {}
 
     def _apply_reasoning(
         self,
@@ -563,23 +510,3 @@ class StorySystemEngine:
                 return explicit
         cfg = CSV_CONFIG.get("裁决规则") or {}
         return str(cfg.get("contract_inject") or "")
-
-    def _routing_error(
-        self,
-        *,
-        query: str,
-        genre: Optional[str],
-        route_rows: List[Dict[str, Any]],
-    ) -> StorySystemRoutingError:
-        query_text = str(query or "").strip()
-        genre_text = str(genre or "").strip()
-        if not route_rows:
-            detail = "题材与调性推理.csv 没有可用路由行"
-        else:
-            detail = f"query={query_text!r}, genre={genre_text!r} 未命中任何路由行"
-        return StorySystemRoutingError(
-            f"无法匹配 story-system 题材路由：{detail}。"
-            "不会生成 .story-system contracts。"
-            "请使用中文题材/流派（例如：规则怪谈、玄幻、仙侠），"
-            "或先在 题材与调性推理.csv 添加路由行。"
-        )

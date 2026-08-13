@@ -134,7 +134,7 @@ Prompt: reference_title={reference_title}; reference_source={reference_source}; 
 
 canonical 题材集合（写入 `project_info.genre`）：都市、玄幻、仙侠、奇幻、科幻、历史、悬疑、游戏、古言、现言、幻言、年代、种田、快穿、衍生。
 
-可自由输入细分 preset / 套路 / 形式，初始化脚本会映射到 canonical 并按 taxonomy 加载模板（示例：修仙、系统流、规则怪谈、宫斗宅斗、电竞、末世）。优先让用户自由描述再二次结构化确认；卡住时给 2-4 个候选方向。
+可自由输入细分题材、套路或形式；初始化脚本只把它们映射到中性的 canonical 标签，不会默认加载题材模板或把套路写入设定真源。只有用户明确要求参考某个内置题材模板时，才追加 `--include-genre-templates`；模板会单独写入 `参考/题材模板.md`，不会进入设定集或 Story System canon。优先让用户自由描述再二次结构化确认；卡住时给 2-4 个候选方向。
 
 ### Step 3：角色骨架与关系冲突
 
@@ -209,6 +209,7 @@ python "${SCRIPTS_DIR}/webnovel.py" init \
   --world-scale "{world_scale}" --power-system-type "{power_system_type}" \
   --core-selling-points "{core_points}"
   # 其余字段（结构/感情线/反派/势力/货币/境界/原型/读者/平台等）按采集对象继续追加对应 --* 选项
+  # 仅当用户明确要内置题材参考时追加 --include-genre-templates
 ```
 
 ### 2) 写入 `idea_bank.json`

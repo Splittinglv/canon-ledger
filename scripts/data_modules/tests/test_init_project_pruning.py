@@ -76,7 +76,7 @@ def test_init_generates_conditional_protagonist_group_and_heroine(tmp_path, monk
     assert (project_root / "设定集" / "女主卡.md").is_file()
 
 
-def test_init_persists_canonical_genre_and_template_tags(tmp_path, monkeypatch):
+def test_init_persists_canonical_genre_without_injecting_templates(tmp_path, monkeypatch):
     import init_project as init_project_module
 
     monkeypatch.setattr(init_project_module, "is_git_available", lambda: False)
@@ -96,11 +96,100 @@ def test_init_persists_canonical_genre_and_template_tags(tmp_path, monkeypatch):
     assert project_info["genre_label"] == "知乎短篇风的规则怪谈"
     assert project_info["genre_tags"]["route"] == ["规则怪谈"]
     assert project_info["genre_tags"]["format"] == ["知乎短篇"]
-    assert project_info["genre_tags"]["templates"] == ["规则怪谈", "知乎短篇"]
+    assert project_info["genre_tags"]["templates"] == []
 
     worldview = (project_root / "设定集" / "世界观.md").read_text(encoding="utf-8")
-    assert "规则怪谈" in worldview
-    assert "知乎短篇" in worldview
+    assert "规则怪谈题材模板" not in worldview
+    assert "知乎短篇题材模板" not in worldview
+    assert not (project_root / "参考" / "题材模板.md").exists()
+
+
+def test_init_writes_explicit_genre_templates_to_advisory_file(tmp_path, monkeypatch):
+    import init_project as init_project_module
+
+    monkeypatch.setattr(init_project_module, "is_git_available", lambda: False)
+    project_root = tmp_path / "book"
+
+    init_project_module.init_project(
+        str(project_root),
+        title="测试书",
+        genre="知乎短篇风的规则怪谈",
+        protagonist_name="陆鸣",
+        target_chapters=50,
+        include_genre_templates=True,
+    )
+
+    state = json.loads((project_root / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    assert state["project_info"]["genre_tags"]["templates"] == ["规则怪谈", "知乎短篇"]
+
+    worldview = (project_root / "设定集" / "世界观.md").read_text(encoding="utf-8")
+    advisory = (project_root / "参考" / "题材模板.md").read_text(encoding="utf-8")
+    assert "规则怪谈题材模板" not in worldview
+    assert "知乎短篇题材模板" not in worldview
+    assert "不是设定真源" in advisory
+    assert "规则怪谈题材模板" in advisory
+    assert "知乎短篇题材模板" in advisory
+
+
+def test_init_does_not_manufacture_golden_finger_fact(tmp_path, monkeypatch):
+    import init_project as init_project_module
+    from extract_chapter_context import extract_state_summary
+
+    monkeypatch.setattr(init_project_module, "is_git_available", lambda: False)
+    project_root = tmp_path / "book"
+
+    init_project_module.init_project(
+        str(project_root),
+        title="测试书",
+        genre="历史",
+        protagonist_name="陆鸣",
+        target_chapters=50,
+    )
+
+    state = json.loads((project_root / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    golden_finger = state["protagonist_state"]["golden_finger"]
+    assert golden_finger["name"] == ""
+    assert golden_finger["level"] == 0
+    assert "金手指" not in extract_state_summary(project_root)
+
+
+def test_init_migrates_only_the_legacy_manufactured_golden_finger(tmp_path, monkeypatch):
+    import init_project as init_project_module
+
+    monkeypatch.setattr(init_project_module, "is_git_available", lambda: False)
+    project_root = tmp_path / "book"
+    state_path = project_root / ".webnovel" / "state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "project_info": {"golden_finger_name": ""},
+                "protagonist_state": {
+                    "golden_finger": {
+                        "name": "未命名金手指",
+                        "level": 1,
+                        "cooldown": 0,
+                        "skills": [],
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    init_project_module.init_project(
+        str(project_root),
+        title="测试书",
+        genre="历史",
+        protagonist_name="陆鸣",
+        target_chapters=50,
+    )
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    golden_finger = state["protagonist_state"]["golden_finger"]
+    assert golden_finger["name"] == ""
+    assert golden_finger["level"] == 0
 
 
 def test_init_rejects_english_profile_key_before_writing_state(tmp_path, monkeypatch):

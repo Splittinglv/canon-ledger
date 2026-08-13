@@ -84,7 +84,11 @@ def test_story_system_persist_writes_master_chapter_and_anti_patterns(tmp_path, 
     assert (story_root / "chapters" / "chapter_001.md").is_file()
 
     payload = json.loads((story_root / "MASTER_SETTING.json").read_text(encoding="utf-8"))
-    assert payload["route"]["primary_genre"] == "玄幻退婚流"
+    assert payload["route"]["primary_genre"] == "玄幻"
+    assert payload["route"]["route_source"] == "inferred_genre_neutral"
+    assert payload["route"]["recommended_base_tables"] == []
+    assert payload["route"]["recommended_dynamic_tables"] == []
+    assert payload["base_context"] == []
 
 
 def test_markdown_writer_preserves_manual_notes_outside_markers(tmp_path):
@@ -127,8 +131,12 @@ def test_story_system_default_csv_dir_routes_real_genre_seed(tmp_path, monkeypat
     main()
 
     payload = json.loads(capsys.readouterr().out)
-    assert payload["master_setting"]["route"]["primary_genre"] == "玄幻退婚流"
-    assert payload["master_setting"]["route"]["route_source"] != "empty_csv_fallback"
+    route = payload["master_setting"]["route"]
+    assert route["primary_genre"] == "玄幻"
+    assert route["canonical_genre"] == "玄幻"
+    assert route["route_source"] == "inferred_genre_neutral"
+    assert route["recommended_base_tables"] == []
+    assert route["recommended_dynamic_tables"] == []
 
 
 def test_story_system_warns_on_placeholder_query(tmp_path, monkeypatch, capsys):
@@ -157,14 +165,13 @@ def test_story_system_warns_on_placeholder_query(tmp_path, monkeypatch, capsys):
             "json",
         ],
     )
-    with pytest.raises(SystemExit) as exc:
-        main()
-
-    assert exc.value.code == 2
-
+    main()
     captured = capsys.readouterr()
     assert "placeholder" in captured.err
-    assert "无法匹配 story-system 题材路由" in captured.err
+    payload = json.loads(captured.out)
+    assert payload["master_setting"]["route"]["route_source"] == "unclassified"
+    assert payload["master_setting"]["route"]["primary_genre"] == ""
+    assert payload["chapter_brief"]["override_allowed"]["chapter_focus"] == ""
 
 
 def test_story_system_persist_unroutable_exits_without_contracts(tmp_path, monkeypatch, capsys):

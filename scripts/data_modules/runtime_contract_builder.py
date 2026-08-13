@@ -24,8 +24,9 @@ class RuntimeContractBuilder:
         volume_brief = VolumeBrief.model_validate(
             {
                 "meta": {"schema_version": "story-system/v1", "contract_type": "VOLUME_BRIEF"},
-                "volume_goal": {"summary": f"第{volume}卷延续 {master.route.get('primary_genre', '')} 的主冲突"},
-                "selected_tropes": [master.route.get("primary_genre", "")],
+                "volume_goal": {"summary": f"第{volume}卷延续作者已确认的主冲突"},
+                # 题材标签不是套路 preset；默认合同不替作者选择桥段或节奏。
+                "selected_tropes": [],
                 "selected_pacing": {},
                 "selected_scenes": list(plot.get("cpns") or []),
                 "anti_patterns": [row.get("text", "") for row in anti_patterns if row.get("text")],
@@ -38,7 +39,7 @@ class RuntimeContractBuilder:
                 "meta": {"schema_version": "story-system/v1", "contract_type": "REVIEW_CONTRACT"},
                 "must_check": list(plot.get("mandatory_nodes") or []),
                 "blocking_rules": list(plot.get("prohibitions") or []),
-                "genre_specific_risks": [master.route.get("primary_genre", "")] if master.route.get("primary_genre") else [],
+                "genre_specific_risks": [],
                 "anti_patterns": volume_brief["anti_patterns"],
                 "system_constraints": volume_brief["system_constraints"],
                 "review_thresholds": {"blocking_count": 0, "missed_nodes": 0},
