@@ -70,6 +70,12 @@ def cmd_get_open_loops(args: argparse.Namespace) -> None:
     _json_out([l.to_dict() for l in loops])
 
 
+def cmd_get_obligations(args: argparse.Namespace) -> None:
+    adapter = _adapter(args.project_root)
+    obligations = adapter.get_lifecycle_obligations(status=args.status or "active")
+    _json_out([item.to_dict() for item in obligations])
+
+
 def cmd_get_timeline(args: argparse.Namespace) -> None:
     adapter = _adapter(args.project_root)
     events = adapter.get_timeline(args.from_ch, args.to_ch)
@@ -96,6 +102,11 @@ def main() -> None:
     p_loops = sub.add_parser("get-open-loops", help="查询未闭合伏笔")
     p_loops.add_argument("--status", default="active", help="状态过滤")
 
+    p_obligations = sub.add_parser(
+        "get-obligations", help="查询可由闭环事件引用的稳定伏笔/承诺 ID"
+    )
+    p_obligations.add_argument("--status", default="active", help="状态过滤")
+
     p_timeline = sub.add_parser("get-timeline", help="查询时间线事件")
     p_timeline.add_argument("--from", type=int, required=True, dest="from_ch", help="起始章节")
     p_timeline.add_argument("--to", type=int, required=True, dest="to_ch", help="结束章节")
@@ -111,6 +122,7 @@ def main() -> None:
         "query-rules": cmd_query_rules,
         "read-summary": cmd_read_summary,
         "get-open-loops": cmd_get_open_loops,
+        "get-obligations": cmd_get_obligations,
         "get-timeline": cmd_get_timeline,
     }
     dispatch[args.command](args)

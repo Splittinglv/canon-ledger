@@ -215,6 +215,41 @@ def test_postcommit_gate_prefers_projection_log_failure(tmp_path):
     assert report["details"]["projection_source"] == "projection_log"
 
 
+def test_postcommit_gate_ignores_projection_log_for_replaced_commit(tmp_path):
+    _make_init_ready(tmp_path)
+    old_payload = {
+        "meta": {"chapter": 1, "status": "accepted"},
+        "projection_status": {"state": "done", "index": "failed:old"},
+    }
+    commit_path = tmp_path / ".story-system" / "commits" / "chapter_001.commit.json"
+    append_projection_run(
+        tmp_path,
+        old_payload,
+        {"index": {"status": "failed:old"}},
+        commit_path=commit_path,
+    )
+    current_payload = {
+        "meta": {"chapter": 1, "status": "accepted"},
+        "review_result": {"blocking_count": 0},
+        "fulfillment_result": {
+            "planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []
+        },
+        "disambiguation_result": {"pending": []},
+        "extraction_result": {
+            "accepted_events": [], "state_deltas": [], "entity_deltas": [], "summary_text": ""
+        },
+        "projection_status": {
+            "state": "done", "index": "skipped", "summary": "skipped",
+            "memory": "skipped", "vector": "skipped"
+        },
+    }
+    _write_json(commit_path, current_payload)
+
+    report = run_write_gate(tmp_path, chapter=1, stage="postcommit")
+    assert report["ok"] is True
+    assert report["details"]["projection_source"] == "commit"
+
+
 def test_postcommit_gate_requires_five_projection_statuses_from_projection_log(tmp_path):
     _make_init_ready(tmp_path)
     commit_payload = {

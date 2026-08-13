@@ -179,7 +179,7 @@ def test_event_log_store_recent_and_health_use_sqlite_mirror(tmp_path):
                 "chapter": 4,
                 "event_type": "promise_paid_off",
                 "subject": "救人承诺",
-                "payload": {"target": "小医仙"},
+                "payload": {"target": "小医仙", "promise_id": "evt-003"},
             }
         ],
     )
@@ -193,7 +193,7 @@ def test_event_log_store_recent_and_health_use_sqlite_mirror(tmp_path):
             "chapter": 3,
             "event_type": "promise_created",
             "subject": "救人承诺",
-            "payload": {"target": "小医仙"},
+            "payload": {"target": "小医仙", "promise_id": "evt-003"},
         }
     ]
 

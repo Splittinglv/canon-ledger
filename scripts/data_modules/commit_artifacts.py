@@ -11,6 +11,7 @@ EXTRACTION_FIELDS = (
     "entity_deltas",
     "entities_appeared",
     "scenes",
+    "timeline_events",
     "chapter_meta",
     "dominant_strand",
     "summary_text",

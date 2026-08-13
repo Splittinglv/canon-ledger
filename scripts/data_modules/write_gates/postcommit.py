@@ -8,7 +8,7 @@ from ..artifact_validator import validate_chapter_commit
 from ..artifact_validator import OK_PROJECTION_STATUSES, REQUIRED_PROJECTION_WRITERS
 from ..config import DataModulesConfig
 from ..project_phase import resolve_project_phase
-from ..projection_log import latest_projection_run, projection_status_from_run
+from ..projection_log import commit_hash, latest_projection_run, projection_status_from_run
 from . import gate_report, issue
 
 
@@ -23,7 +23,13 @@ def _projection_status_from_runtime(
 ) -> tuple[dict[str, str], str, dict]:
     try:
         latest_run = latest_projection_run(project_root, chapter=chapter)
-        logged_status = projection_status_from_run(latest_run)
+        if (
+            isinstance(latest_run, dict)
+            and str(latest_run.get("commit_hash") or "") == commit_hash(payload)
+        ):
+            logged_status = projection_status_from_run(latest_run)
+        else:
+            logged_status = {}
     except Exception:
         latest_run = None
         logged_status = {}

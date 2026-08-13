@@ -25,6 +25,10 @@ class MemoryWriter:
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
         return f"mem-{category}-{digest}"
 
+    def _stable_item_id(self, category: str, external_id: str) -> str:
+        """Map an event-level stable ID to a stable scratchpad item ID."""
+        return self._item_id(category, str(external_id or "").strip(), "identity", 0)
+
     def _upsert(self, item: MemoryItem, stats: Dict[str, Any]) -> None:
         result = self.store.upsert_item(item)
         stats["items_added"] += int(result.get("added", 0))
@@ -185,17 +189,30 @@ class MemoryWriter:
             event = str(row.get("event", "") or "").strip()
             if not event:
                 continue
-            source_chapter = int(row.get("chapter") or chapter)
+            try:
+                source_chapter = int(row.get("chapter") or chapter)
+            except (TypeError, ValueError):
+                source_chapter = int(chapter)
+            timeline_id = str(row.get("timeline_id") or "").strip()
+            if not timeline_id:
+                # Compatibility for the pre-commit timeline schema. New mainline
+                # rows are normalized before reaching this point.
+                timeline_id = f"legacy-{source_chapter}-{hashlib.sha1(event.encode('utf-8')).hexdigest()[:10]}"
             item = MemoryItem(
-                id=self._item_id("timeline", event, str(source_chapter), chapter),
+                id=self._stable_item_id("timeline", timeline_id),
                 layer="semantic",
                 category="timeline",
                 subject=event[:64],
                 field="event",
                 value=event,
-                payload={"time_hint": row.get("time_hint"), "event_type": row.get("event_type")},
+                payload={
+                    "timeline_id": timeline_id,
+                    "sequence": row.get("sequence"),
+                    "time_hint": row.get("time_hint"),
+                    "event_type": row.get("event_type"),
+                },
                 source_chapter=source_chapter,
-                evidence=[f"memory_facts:timeline:{chapter}"],
+                evidence=[f"chapter_commit:timeline:{chapter}"],
             )
             self._upsert(item, stats)
 
@@ -270,22 +287,213 @@ class MemoryWriter:
             )
             self._upsert(item, stats)
 
+    def _lifecycle_events(
+        self,
+        accepted_events: List[Dict[str, Any]],
+        chapter: int,
+    ) -> tuple[list[MemoryItem], list[dict[str, str]], list[str]]:
+        """Build lifecycle operations without any prose/subject matching."""
+        creations: list[MemoryItem] = []
+        resolutions: list[dict[str, str]] = []
+        errors: list[str] = []
+
+        for event in accepted_events:
+            if not isinstance(event, dict):
+                continue
+            event_type = str(event.get("event_type") or "").strip()
+            payload = dict(event.get("payload") or {})
+            event_id = str(event.get("event_id") or "").strip()
+            try:
+                source_chapter = int(event.get("chapter") or chapter)
+            except (TypeError, ValueError):
+                source_chapter = int(chapter)
+
+            if event_type == "open_loop_created":
+                lifecycle_id = str(payload.get("loop_id") or event_id or "").strip()
+                content = self._coerce_loop_content(payload, event)
+                if not lifecycle_id or not content:
+                    errors.append("invalid_open_loop_created")
+                    continue
+                creations.append(
+                    MemoryItem(
+                        id=self._stable_item_id("open_loop", lifecycle_id),
+                        layer="semantic",
+                        category="open_loop",
+                        subject=content,
+                        field="status",
+                        value=content,
+                        payload={
+                            "lifecycle_id": lifecycle_id,
+                            "legacy_item_id": self._item_id(
+                                "open_loop", content, "status", chapter
+                            ),
+                            "lifecycle_status": "active",
+                            "urgency": coerce_urgency(payload.get("urgency")),
+                            "planted_chapter": payload.get("planted_chapter") or source_chapter,
+                            "expected_payoff": payload.get("expected_payoff") or payload.get("loop_deadline"),
+                            "created_by": event_id,
+                        },
+                        source_chapter=source_chapter,
+                        evidence=[f"accepted_event:{event_id}"],
+                    )
+                )
+            elif event_type == "promise_created":
+                lifecycle_id = str(payload.get("promise_id") or event_id or "").strip()
+                content = str(
+                    payload.get("content")
+                    or payload.get("description")
+                    or event.get("subject")
+                    or ""
+                ).strip()
+                if not lifecycle_id or not content:
+                    errors.append("invalid_promise_created")
+                    continue
+                creations.append(
+                    MemoryItem(
+                        id=self._stable_item_id("reader_promise", lifecycle_id),
+                        layer="semantic",
+                        category="reader_promise",
+                        subject=content,
+                        field="promise",
+                        value=content,
+                        payload={
+                            "lifecycle_id": lifecycle_id,
+                            "legacy_item_id": self._item_id(
+                                "reader_promise", content, "promise", chapter
+                            ),
+                            "lifecycle_status": "active",
+                            "promise_type": payload.get("type") or "promise_created",
+                            "target": payload.get("target") or event.get("subject") or "",
+                            "created_by": event_id,
+                        },
+                        source_chapter=source_chapter,
+                        evidence=[f"accepted_event:{event_id}"],
+                    )
+                )
+            elif event_type == "open_loop_closed":
+                lifecycle_id = str(
+                    payload.get("loop_id")
+                    or payload.get("target_loop_id")
+                    or payload.get("open_loop_id")
+                    or payload.get("target_id")
+                    or payload.get("resolves_event_id")
+                    or ""
+                ).strip()
+                if not lifecycle_id:
+                    errors.append("missing_loop_id")
+                    continue
+                resolutions.append(
+                    {
+                        "category": "open_loop",
+                        "lifecycle_id": lifecycle_id,
+                        "chapter": str(source_chapter),
+                        "resolution": str(
+                            payload.get("resolution") or payload.get("description") or ""
+                        ).strip(),
+                        "event_id": event_id,
+                    }
+                )
+            elif event_type == "promise_paid_off":
+                lifecycle_id = str(
+                    payload.get("promise_id")
+                    or payload.get("target_promise_id")
+                    or payload.get("target_id")
+                    or payload.get("resolves_event_id")
+                    or ""
+                ).strip()
+                if not lifecycle_id:
+                    errors.append("missing_promise_id")
+                    continue
+                resolutions.append(
+                    {
+                        "category": "reader_promise",
+                        "lifecycle_id": lifecycle_id,
+                        "chapter": str(source_chapter),
+                        "resolution": str(
+                            payload.get("resolution") or payload.get("description") or ""
+                        ).strip(),
+                        "event_id": event_id,
+                    }
+                )
+        return creations, resolutions, errors
+
+    def _validate_lifecycle_targets(
+        self,
+        creations: list[MemoryItem],
+        resolutions: list[dict[str, str]],
+    ) -> list[str]:
+        known = {
+            "open_loop": self.store.lifecycle_sources("open_loop"),
+            "reader_promise": self.store.lifecycle_sources("reader_promise"),
+        }
+        for item in creations:
+            lifecycle_id = str((item.payload or {}).get("lifecycle_id") or "").strip()
+            if lifecycle_id:
+                known.setdefault(item.category, {})[lifecycle_id] = int(item.source_chapter or 0)
+
+        errors: list[str] = []
+        for resolution in resolutions:
+            category = resolution["category"]
+            lifecycle_id = resolution["lifecycle_id"]
+            category_sources = known.get(category, {})
+            if lifecycle_id not in category_sources:
+                errors.append(f"unmatched_{category}_id:{lifecycle_id}")
+                continue
+            created_chapter = int(category_sources.get(lifecycle_id) or 0)
+            resolved_chapter = int(resolution.get("chapter") or 0)
+            if created_chapter > 0 and resolved_chapter < created_chapter:
+                errors.append(
+                    f"lifecycle_resolution_before_creation:{lifecycle_id}:"
+                    f"{resolved_chapter}<{created_chapter}"
+                )
+        return errors
+
+    def validate_commit_projection(self, commit_payload: Dict[str, Any]) -> list[str]:
+        """Validate lifecycle operations before any derived writer mutates state."""
+        chapter = int((commit_payload.get("meta") or {}).get("chapter") or 0)
+        accepted_events = list(extraction_list(commit_payload, "accepted_events"))
+        creations, resolutions, errors = self._lifecycle_events(accepted_events, chapter)
+        errors.extend(self._validate_lifecycle_targets(creations, resolutions))
+        timeline_rows = [
+            row
+            for row in extraction_list(commit_payload, "timeline_events")
+            if isinstance(row, dict)
+        ]
+        for timeline_id in self.store.timeline_identity_conflicts(timeline_rows):
+            errors.append(f"timeline_id_conflict:{timeline_id}")
+        return errors
+
     def apply_commit_projection(self, commit_payload: Dict[str, Any]) -> Dict[str, Any]:
         chapter = int((commit_payload.get("meta") or {}).get("chapter") or 0)
         entity_deltas = list(extraction_list(commit_payload, "entity_deltas"))
         accepted_events = list(extraction_list(commit_payload, "accepted_events"))
+        creations, resolutions, lifecycle_errors = self._lifecycle_events(accepted_events, chapter)
+        lifecycle_errors.extend(self._validate_lifecycle_targets(creations, resolutions))
+        if lifecycle_errors:
+            return {
+                "chapter": chapter,
+                "items_added": 0,
+                "items_updated": 0,
+                "items_outdated": 0,
+                "items_resolved": 0,
+                "warnings": [],
+                "error": lifecycle_errors[0],
+            }
 
+        legacy_memory_facts = commit_payload.get("extraction_result", {}).get("memory_facts")
+        if not isinstance(legacy_memory_facts, dict):
+            legacy_memory_facts = {}
         memory_facts: Dict[str, Any] = {
-            "timeline_events": [],
-            "world_rules": [],
-            "open_loops": [],
-            "reader_promises": [],
+            "timeline_events": list(extraction_list(commit_payload, "timeline_events")),
+            "world_rules": list(legacy_memory_facts.get("world_rules") or []),
+            "open_loops": list(legacy_memory_facts.get("open_loops") or []),
+            "reader_promises": list(legacy_memory_facts.get("reader_promises") or []),
         }
         for event in accepted_events:
             if not isinstance(event, dict):
                 continue
             event_type = str(event.get("event_type") or "").strip()
-            payload = event.get("payload") or {}
+            payload = dict(event.get("payload") or {})
             if event_type in {"world_rule_revealed", "world_rule_broken"}:
                 rule_text = str(
                     payload.get("rule_content")
@@ -307,38 +515,6 @@ class MemoryWriter:
                                 or "global"
                             ),
                             "field": payload.get("field") or event_type,
-                        }
-                    )
-            elif event_type == "open_loop_created":
-                content = self._coerce_loop_content(payload, event)
-                if content:
-                    memory_facts["open_loops"].append(
-                        {
-                            "content": content,
-                            "status": payload.get("status") or "active",
-                            "urgency": coerce_urgency(payload.get("urgency")),
-                            "planted_chapter": (
-                                payload.get("planted_chapter") or event.get("chapter") or chapter
-                            ),
-                            "expected_payoff": (
-                                payload.get("expected_payoff")
-                                or payload.get("loop_deadline")
-                            ),
-                        }
-                    )
-            elif event_type in {"promise_created", "promise_paid_off"}:
-                content = str(
-                    payload.get("content")
-                    or payload.get("description")
-                    or event.get("subject")
-                    or ""
-                ).strip()
-                if content:
-                    memory_facts["reader_promises"].append(
-                        {
-                            "content": content,
-                            "type": payload.get("type") or event_type,
-                            "target": payload.get("target") or event.get("subject") or "",
                         }
                     )
 
@@ -374,5 +550,29 @@ class MemoryWriter:
             ],
             "memory_facts": memory_facts,
         }
-        return self.update_from_chapter_result(chapter, result)
+        stats = self.update_from_chapter_result(chapter, result)
+        stats["items_resolved"] = 0
+        stats["items_preserved"] = 0
 
+        # Apply all creations before closures so a deliberately same-chapter
+        # create/resolve pair is deterministic.  Existing items are preserved,
+        # which makes old creation retries unable to reopen later resolutions.
+        for item in creations:
+            outcome = self.store.upsert_lifecycle_item(item)
+            stats["items_added"] += int(outcome.get("added", 0))
+            stats["items_updated"] += int(outcome.get("updated", 0))
+            stats["items_outdated"] += int(outcome.get("outdated", 0))
+            stats["items_preserved"] += int(outcome.get("preserved", 0))
+
+        for resolution in resolutions:
+            outcome = self.store.resolve_lifecycle_item(
+                resolution["category"],
+                resolution["lifecycle_id"],
+                chapter=int(resolution["chapter"]),
+                resolution=resolution["resolution"],
+                resolved_by=resolution["event_id"],
+            )
+            # Target validation above prevents this from being a silent no-op.
+            stats["items_resolved"] += int(outcome.get("resolved", 0))
+            stats["items_preserved"] += int(outcome.get("already_resolved", 0))
+        return stats

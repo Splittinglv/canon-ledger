@@ -11,7 +11,10 @@ from typing import Any, Dict, List
 
 
 VALID_LAYERS = {"semantic", "episodic"}
-VALID_STATUSES = {"active", "outdated", "contradicted", "tentative"}
+# ``resolved`` is distinct from ``outdated``: a paid-off promise or closed
+# foreshadowing loop remains useful audit evidence, but must not be returned as
+# an active writing constraint.
+VALID_STATUSES = {"active", "outdated", "contradicted", "tentative", "resolved"}
 
 CATEGORY_TO_BUCKET: Dict[str, str] = {
     "character_state": "character_state",
@@ -29,9 +32,13 @@ CATEGORY_KEY_RULES: Dict[str, tuple[str, ...]] = {
     "relationship": ("subject", "field"),
     "world_rule": ("subject", "field"),
     "story_fact": ("subject", "field"),
-    "timeline": ("subject", "source_chapter"),
-    "open_loop": ("subject",),
-    "reader_promise": ("subject",),
+    # These facts have stable external IDs.  Content is intentionally not an
+    # identity key: two distinct promises can have identical prose, and a
+    # later retry must not reopen a resolved one merely because its text is
+    # replayed.
+    "timeline": ("id",),
+    "open_loop": ("id",),
+    "reader_promise": ("id",),
 }
 
 
@@ -157,4 +164,3 @@ class ScratchpadData:
         meta["total_items"] = self.count_items()
         result["meta"] = meta
         return result
-

@@ -21,13 +21,14 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" inde
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" index recent-appearances --limit 20
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" index get-aliases --entity "{entity_id}"
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" index get-by-alias --alias "{alias}"
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" memory-contract get-obligations
 ```
 
 chapter-commit 由写章主流程运行，data-agent 不在此执行（见 §5 边界）。
 
 ## 3. 流程
 
-**A 加载**：project_root 由调用方传入（已过 preflight），Read 正文 + 查实体索引和别名。
+**A 加载**：project_root 由调用方传入（已过 preflight），Read 正文 + 查实体索引和别名；调用 `memory-contract get-obligations` 取得当前可闭合伏笔/承诺的稳定 ID。
 
 **B 提取与消歧**：同一轮完成，不额外调 LLM。置信度>0.8 自动采用，0.5-0.8 采用+warning，<0.5 标记待人工。
 
@@ -76,17 +77,21 @@ hook_strength: "strong"
 
 - `fulfillment_result.json` 顶层四个数组：`planned_nodes`、`covered_nodes`、`missed_nodes`、`extra_nodes`。
 - `disambiguation_result.json` 顶层：`pending` 数组。
-- `extraction_result.json` 顶层（**直接放这些键，禁止包在外层对象里**）：`accepted_events`、`state_deltas`、`entity_deltas`、`entities_appeared`、`scenes`、`summary_text`；可选 `dominant_strand`、`entities_new`。
+- `extraction_result.json` 顶层（**直接放这些键，禁止包在外层对象里**）：`accepted_events`、`state_deltas`、`entity_deltas`、`entities_appeared`、`scenes`、`timeline_events`、`summary_text`；可选 `dominant_strand`、`entities_new`。
 
 ### 7.1 字段命名
 
 - **state_deltas 子项**：`entity_id` + `field` + `old` + `new`。简单字段直接写（`realm`），嵌套用点号（`power.realm`、`location.current`），投影器自动展开。
 - **entity_deltas 子项**：`entity_id` + `action` + `entity_type`（值为 `角色|组织|地点|物品|势力`，非默认 `"角色"`）+ `payload`；`is_protagonist: true` 标主角（同步到 `state.protagonist_state`）。
 - **accepted_events 子项**：每条必含 `event_id`（章内稳定 ID 如 `evt-ch100-001`）+ `chapter`（当前章号）+ `event_type`（枚举见下）+ `subject`（主体 entity_id，非中文名）+ `payload`。
+- **timeline_events 子项**：`timeline_id`（跨重投保持不变）+ `sequence`（章内顺序）+ `event`；可选 `time_hint`、`event_type`。只提取明确的时间推进/锚点，不确定时留空 `time_hint`。
 - **event_type 枚举**：`character_state_changed`、`power_breakthrough`、`relationship_changed`、`world_rule_revealed`、`world_rule_broken`、`open_loop_created`、`open_loop_closed`、`promise_created`、`promise_paid_off`、`artifact_obtained`。
 - **各 event_type payload 必备字段**：
   - `character_state_changed`：`field` + `old` + `new`（与 state_deltas 一致）。
-  - `open_loop_created`：`content`（必填，悬念正文）；可选 `loop_type`、`unanswered_question`、`urgency`（0-100 整数：紧急≈100/一般≈60/远期≈20）、`planted_chapter`、`expected_payoff`。
+  - `open_loop_created`：`loop_id`（稳定 ID）+ `content`（必填，悬念正文）；可选 `loop_type`、`unanswered_question`、`urgency`（0-100 整数：紧急≈100/一般≈60/远期≈20）、`planted_chapter`、`expected_payoff`。
+  - `open_loop_closed`：`loop_id`（指向已创建的伏笔）+ `resolution`。
+  - `promise_created`：`promise_id`（稳定 ID）+ `content`。
+  - `promise_paid_off`：`promise_id`（指向已创建的承诺）+ `resolution`。
   - `world_rule_revealed`：`rule_content`；可选 `rule_category`、`scope`。
   - `relationship_changed`：`to_entity` + `relationship_type`。
   - `artifact_obtained`：`artifact_id` + `name` + `owner`。
@@ -105,6 +110,8 @@ hook_strength: "strong"
 ```
 
 旧字段名（`field_path`、`new_value`、`type`、`description` 等）作为兼容输入仍可被投影，但首选上述规范名。
+
+闭合/兑现只能复制 `memory-contract get-obligations` 返回的对应 `id`；没有匹配目标时不要生成 close/payoff 事件，禁止按正文相似度猜 ID。
 
 ## 8. 错误处理
 

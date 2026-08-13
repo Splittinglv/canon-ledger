@@ -37,15 +37,18 @@ class IndexProjectionWriter:
         appearances_count = self._apply_appearances(manager, commit_payload)
         applied_count += appearances_count
 
-        state_changes_count = self._apply_state_changes(manager, commit_payload)
-        applied_count += state_changes_count
-
         entity_delta_count = 0
         for delta in self._collect_entity_deltas(commit_payload):
             result = manager.apply_entity_delta(delta)
             if result:
                 entity_delta_count += 1
                 applied_count += 1
+
+        # State deltas may introduce a current value for an entity that is
+        # declared in the same commit.  Materialize entities first, then
+        # replay the ordered state-change log into current_json.
+        state_changes_count = self._apply_state_changes(manager, commit_payload)
+        applied_count += state_changes_count
         return {
             "applied": applied_count > 0,
             "writer": "index",
@@ -151,12 +154,27 @@ class IndexProjectionWriter:
 
     def _apply_state_changes(self, manager: IndexManager, commit_payload: dict) -> int:
         applied = 0
+        affected_entities: set[str] = set()
         for change in self._collect_state_changes(commit_payload):
             entity_id = str(change.get("entity_id") or "").strip()
             field = str(change.get("field") or "").strip()
             chapter = self._safe_int(change.get("chapter") or commit_payload.get("meta", {}).get("chapter"))
             if not entity_id or not field or chapter <= 0:
                 continue
+
+            # A valid state delta is also enough to establish a minimal entity
+            # row.  Otherwise its latest state would be recorded only in the
+            # history table and never become available to context retrieval.
+            if manager.get_entity(entity_id) is None:
+                manager.apply_entity_delta(
+                    {
+                        "entity_id": entity_id,
+                        "entity_type": "角色",
+                        "chapter": chapter,
+                    }
+                )
+            affected_entities.add(entity_id)
+
             old_value = self._stringify(change.get("old"))
             new_value = self._stringify(change.get("new"))
             reason = str(change.get("reason") or "").strip()
@@ -173,6 +191,12 @@ class IndexProjectionWriter:
                 )
             )
             applied += 1
+
+        # Recompute after all inserts, not incrementally: an old commit can
+        # be retried after a newer one, while the authoritative ordering is
+        # still `(chapter, id)` in state_changes.
+        for entity_id in affected_entities:
+            manager.sync_entity_current_from_state_changes(entity_id)
         return applied
 
     def _collect_state_changes(self, commit_payload: dict) -> list[dict]:
@@ -233,7 +257,71 @@ class IndexProjectionWriter:
                     "chapter": chapter,
                 }
             )
+
+        # entity_deltas.current is another canonical way the data agent can
+        # publish current state.  Put it in the same ordered fact log as
+        # state_deltas so a delayed old retry cannot overwrite a newer entity
+        # snapshot that otherwise had no provenance.
+        for entity_delta in self._collect_entity_deltas(commit_payload):
+            if not isinstance(entity_delta, dict):
+                continue
+            entity_id = str(entity_delta.get("entity_id") or entity_delta.get("id") or "").strip()
+            chapter = self._safe_int(
+                entity_delta.get("chapter") or commit_payload.get("meta", {}).get("chapter")
+            )
+            if not entity_id or chapter <= 0:
+                continue
+
+            current = entity_delta.get("current")
+            if isinstance(current, dict):
+                for field, value in self._flatten_current(current):
+                    key = (entity_id, field, chapter)
+                    if not field or key in seen:
+                        continue
+                    seen.add(key)
+                    deltas.append(
+                        {
+                            "entity_id": entity_id,
+                            "field": field,
+                            "old": None,
+                            "new": value,
+                            "reason": "entity_delta_current",
+                            "chapter": chapter,
+                        }
+                    )
+
+            field = str(entity_delta.get("field") or entity_delta.get("field_path") or "").strip()
+            if field:
+                key = (entity_id, field, chapter)
+                if key not in seen:
+                    seen.add(key)
+                    new_value = (
+                        entity_delta.get("new")
+                        if "new" in entity_delta
+                        else entity_delta.get("new_value")
+                    )
+                    deltas.append(
+                        {
+                            "entity_id": entity_id,
+                            "field": field,
+                            "old": entity_delta.get("old") or entity_delta.get("old_value"),
+                            "new": new_value,
+                            "reason": "entity_delta_field",
+                            "chapter": chapter,
+                        }
+                    )
         return deltas
+
+    def _flatten_current(self, value: dict, prefix: str = "") -> list[tuple[str, Any]]:
+        flattened: list[tuple[str, Any]] = []
+        for key in sorted(value):
+            field = f"{prefix}.{key}" if prefix else str(key)
+            child = value[key]
+            if isinstance(child, dict):
+                flattened.extend(self._flatten_current(child, field))
+            else:
+                flattened.append((field, child))
+        return flattened
 
     def _normalize_state_delta(self, delta: dict) -> dict:
         result = dict(delta)
@@ -311,11 +399,12 @@ class IndexProjectionWriter:
         return len(text.strip())
 
     def _stringify(self, value: Any) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, (dict, list)):
-            return json.dumps(value, ensure_ascii=False, sort_keys=True)
-        return str(value)
+        # Encode every value, including strings and null, with an explicit
+        # marker.  The index may legitimately contain the text "3", "true"
+        # or "null"; shape-based JSON guessing corrupts those facts.
+        return "__webnovel_json_v1__:" + json.dumps(
+            value, ensure_ascii=False, sort_keys=True
+        )
 
     def _safe_int(self, value: object) -> int:
         try:
@@ -330,7 +419,14 @@ class IndexProjectionWriter:
             return default
 
     def _collect_entity_deltas(self, commit_payload: dict) -> list[dict]:
-        deltas = [dict(delta) for delta in extraction_list(commit_payload, "entity_deltas") if isinstance(delta, dict)]
+        default_chapter = int((commit_payload.get("meta") or {}).get("chapter") or 0)
+        deltas = []
+        for delta in extraction_list(commit_payload, "entity_deltas"):
+            if not isinstance(delta, dict):
+                continue
+            normalized = dict(delta)
+            normalized["chapter"] = int(normalized.get("chapter") or default_chapter)
+            deltas.append(normalized)
         for event in extraction_list(commit_payload, "accepted_events"):
             if not isinstance(event, dict):
                 continue

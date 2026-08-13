@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
     from scripts.chapter_outline_loader import volume_num_for_chapter_from_state
     from scripts.chapter_paths import find_chapter_file, volume_num_for_chapter
 
-from .projection_log import latest_projection_run, projection_status_from_run
+from .projection_log import commit_hash, latest_projection_run, projection_status_from_run
 
 
 PHASE_NO_PROJECT = "no_project"
@@ -190,7 +190,13 @@ def _scan_commits(project_root: Path) -> list[ChapterCommitInfo]:
         projection_source = "commit"
         try:
             latest_run = latest_projection_run(project_root, chapter=chapter)
-            logged_projection_status = projection_status_from_run(latest_run)
+            if (
+                isinstance(latest_run, dict)
+                and str(latest_run.get("commit_hash") or "") == commit_hash(payload)
+            ):
+                logged_projection_status = projection_status_from_run(latest_run)
+            else:
+                logged_projection_status = {}
         except Exception:
             logged_projection_status = {}
         if logged_projection_status:
@@ -308,7 +314,7 @@ def has_projection_blocker(commit: ChapterCommitInfo | None) -> bool:
     if commit is None:
         return False
     return any(
-        str(value).startswith("failed:") or str(value) == "pending"
+        str(value).startswith("failed:") or str(value) in {"failed", "pending"}
         for value in commit.projection_status.values()
     )
 

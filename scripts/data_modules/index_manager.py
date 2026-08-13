@@ -658,7 +658,10 @@ class IndexManager(IndexChapterMixin, IndexEntityMixin, IndexDebtMixin, IndexRea
         if not entity_id:
             return False
 
-        current = dict(delta.get("current") or {})
+        existing = self.get_entity(entity_id)
+
+        raw_current = delta.get("current")
+        current = dict(raw_current) if isinstance(raw_current, dict) else {}
         field = str(delta.get("field") or delta.get("field_path") or "").strip()
         if field:
             new_value = (
@@ -668,44 +671,61 @@ class IndexManager(IndexChapterMixin, IndexEntityMixin, IndexDebtMixin, IndexRea
                 if "new_value" in delta
                 else None
             )
-            if new_value is not None and field not in current:
-                current[field] = new_value
+            if new_value is not None:
+                self._set_current_path(current, field, new_value)
 
         payload = delta.get("payload") or {}
         canonical_name = str(
             delta.get("canonical_name")
             or delta.get("name")
             or payload.get("name")
+            or (existing or {}).get("canonical_name")
             or entity_id
         ).strip()
 
-        tier = str(delta.get("tier") or "装饰").strip() or "装饰"
-        is_protagonist = bool(delta.get("is_protagonist"))
+        tier = str(delta.get("tier") or (existing or {}).get("tier") or "装饰").strip() or "装饰"
+        is_protagonist = bool(
+            delta.get("is_protagonist")
+            if "is_protagonist" in delta
+            else (existing or {}).get("is_protagonist", False)
+        )
         # tier='主角' 视同 is_protagonist=True（LLM 实际输出常用 tier 标注）
         if not is_protagonist and tier == "主角":
             is_protagonist = True
         if "is_protagonist" not in delta and tier != "主角":
-            existing = self.get_entity(entity_id)
             if existing:
                 is_protagonist = bool(existing.get("is_protagonist"))
 
         entity_type = str(
             delta.get("type")
             or delta.get("entity_type")
+            or (existing or {}).get("type")
             or "角色"
         ).strip() or "角色"
+
+        description = str(
+            delta.get("desc")
+            or delta.get("description")
+            or (existing or {}).get("desc")
+            or ""
+        ).strip()
+        is_archived = bool(
+            delta.get("is_archived")
+            if "is_archived" in delta
+            else (existing or {}).get("is_archived", False)
+        )
 
         entity = EntityMeta(
             id=entity_id,
             type=entity_type,
             canonical_name=canonical_name,
             tier=tier,
-            desc=str(delta.get("desc") or delta.get("description") or "").strip(),
+            desc=description,
             current=current,
-            first_appearance=chapter,
+            first_appearance=int((existing or {}).get("first_appearance") or chapter),
             last_appearance=chapter,
             is_protagonist=is_protagonist,
-            is_archived=bool(delta.get("is_archived")),
+            is_archived=is_archived,
         )
         self.upsert_entity(entity, update_metadata=True)
         return True

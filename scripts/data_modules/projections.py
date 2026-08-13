@@ -46,7 +46,10 @@ def _projection_failed(payload: dict[str, Any]) -> bool:
     projection_status = payload.get("projection_status") or {}
     if not isinstance(projection_status, dict):
         return True
-    return any(str(value).startswith("failed:") or str(value) == "pending" for value in projection_status.values())
+    return any(
+        str(value) in {"failed", "pending"} or str(value).startswith("failed:")
+        for value in projection_status.values()
+    )
 
 
 def retry_projection(project_root: str | Path, *, chapter: int) -> dict[str, Any]:
@@ -66,7 +69,24 @@ def retry_projection(project_root: str | Path, *, chapter: int) -> dict[str, Any
             "latest_projection_run": None,
         }
 
-    projected = ChapterCommitService(root).apply_projection_writers(payload)
+    projection_status = payload.get("projection_status") or {}
+    retry_writers = {
+        name
+        for name in DEFAULT_PROJECTION_STATUS
+        if str(projection_status.get(name) or "") == "pending"
+        or str(projection_status.get(name) or "") == "failed"
+        or str(projection_status.get(name) or "").startswith("failed:")
+    }
+    if retry_writers:
+        projected = ChapterCommitService(root).apply_projection_writers(
+            payload,
+            only_writers=retry_writers,
+        )
+    else:
+        # A successful retry command is intentionally a no-op once every
+        # writer has completed.  Re-running all writers could replay an old
+        # chapter and regress a derived read model.
+        projected = payload
     latest_run = latest_projection_run(root, chapter=chapter)
     return {
         "schema_version": SCHEMA_VERSION,

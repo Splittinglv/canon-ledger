@@ -16,8 +16,69 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+_STATE_VALUE_PREFIX = "__webnovel_json_v1__:"
+
 
 class IndexEntityMixin:
+    @staticmethod
+    def _deep_merge_current(base: Dict[str, Any], updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge current-state dictionaries without flattening nested facts."""
+        merged = dict(base) if isinstance(base, dict) else {}
+        for key, value in (updates or {}).items():
+            previous = merged.get(key)
+            if isinstance(previous, dict) and isinstance(value, dict):
+                merged[key] = IndexEntityMixin._deep_merge_current(previous, value)
+            else:
+                merged[key] = value
+        return merged
+
+    @staticmethod
+    def _set_current_path(current: Dict[str, Any], field: str, value: Any) -> None:
+        """Set a dotted state field while keeping its parent object intact."""
+        if not isinstance(current, dict):
+            return
+        parts = [part for part in str(field or "").split(".") if part]
+        if not parts:
+            return
+        # Clean up values written by the pre-v6 shallow-merge projection.
+        if len(parts) > 1:
+            current.pop(field, None)
+        cursor = current
+        for part in parts[:-1]:
+            child = cursor.get(part)
+            if not isinstance(child, dict):
+                child = {}
+                cursor[part] = child
+            cursor = child
+        cursor[parts[-1]] = value
+
+    @staticmethod
+    def _decode_state_change_value(value: Any) -> Any:
+        """Restore values encoded by the versioned state-log envelope.
+
+        Legacy rows had no type marker.  They must remain strings: guessing
+        that user text such as ``"3"`` or ``"null"`` is JSON silently changes
+        story facts.
+        """
+        if not isinstance(value, str):
+            return value
+        if value.startswith(_STATE_VALUE_PREFIX):
+            try:
+                return json.loads(value[len(_STATE_VALUE_PREFIX):])
+            except json.JSONDecodeError:
+                pass
+        # Pre-envelope writers serialized only structured containers as JSON.
+        # Preserve those old rows while keeping ambiguous JSON scalars as text.
+        raw = value.strip()
+        if raw.startswith("{") or raw.startswith("["):
+            try:
+                decoded = json.loads(raw)
+                if isinstance(decoded, (dict, list)):
+                    return decoded
+            except json.JSONDecodeError:
+                pass
+        return value
+
     def _register_alias_with_cursor(
         self, cursor: sqlite3.Cursor, alias: str, entity_id: str, entity_type: str
     ) -> bool:
@@ -70,11 +131,20 @@ class IndexEntityMixin:
 
             # 检查是否存在
             cursor.execute(
-                "SELECT id, current_json FROM entities WHERE id = ?", (entity.id,)
+                "SELECT id, current_json, last_appearance FROM entities WHERE id = ?",
+                (entity.id,),
             )
             existing = cursor.fetchone()
 
             if existing:
+                existing_chapter = int(existing["last_appearance"] or 0)
+                incoming_chapter = int(entity.last_appearance or 0)
+                if incoming_chapter < existing_chapter:
+                    # Projection retries may arrive out of order.  Metadata
+                    # and direct current snapshots from an older chapter must
+                    # not replace a newer accepted entity snapshot; current
+                    # facts are subsequently materialized from state_changes.
+                    return False
                 # 已存在: 智能合并 current_json
                 old_current = {}
                 if existing["current_json"]:
@@ -86,8 +156,9 @@ class IndexEntityMixin:
                             exc,
                         )
 
-                # 合并 current (新值覆盖旧值)
-                merged_current = {**old_current, **entity.current}
+                # 合并 current (新值覆盖旧值)，但 dotted state projection
+                # 可能只更新嵌套对象中的一个字段，不能覆盖其同级数据。
+                merged_current = self._deep_merge_current(old_current, entity.current)
 
                 if update_metadata:
                     # 完整更新（包括元数据）
@@ -99,7 +170,7 @@ class IndexEntityMixin:
                             tier = ?,
                             desc = ?,
                             current_json = ?,
-                            last_appearance = ?,
+                            last_appearance = MAX(last_appearance, ?),
                             is_protagonist = ?,
                             is_archived = ?,
                             updated_at = CURRENT_TIMESTAMP
@@ -123,7 +194,7 @@ class IndexEntityMixin:
                         """
                         UPDATE entities SET
                             current_json = ?,
-                            last_appearance = ?,
+                            last_appearance = MAX(last_appearance, ?),
                             updated_at = CURRENT_TIMESTAMP
                         WHERE id = ?
                     """,
@@ -284,7 +355,7 @@ class IndexEntityMixin:
                         exc,
                     )
 
-            current.update(updates)
+            current = self._deep_merge_current(current, updates)
 
             cursor.execute(
                 """
@@ -293,6 +364,65 @@ class IndexEntityMixin:
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             """,
+                (json.dumps(current, ensure_ascii=False), entity_id),
+            )
+            conn.commit()
+            return True
+
+    def sync_entity_current_from_state_changes(self, entity_id: str) -> bool:
+        """Materialize an entity's current state from its ordered change log.
+
+        Projection retries can arrive out of chapter order.  Replaying the
+        durable ``state_changes`` rows in ``(chapter, id)`` order makes the
+        highest-chapter fact win, rather than letting a delayed old writer
+        overwrite ``entities.current_json``.
+        """
+        entity_id = str(entity_id or "").strip()
+        if not entity_id:
+            return False
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT current_json FROM entities WHERE id = ?", (entity_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False
+
+            current: Dict[str, Any] = {}
+            if row["current_json"]:
+                try:
+                    parsed = json.loads(row["current_json"])
+                    current = parsed if isinstance(parsed, dict) else {}
+                except json.JSONDecodeError as exc:
+                    logger.warning(
+                        "failed to parse JSON in sync_entity_current_from_state_changes: %s",
+                        exc,
+                    )
+
+            cursor.execute(
+                """
+                SELECT field, new_value
+                FROM state_changes
+                WHERE entity_id = ?
+                ORDER BY chapter ASC, id ASC
+                """,
+                (entity_id,),
+            )
+            for change in cursor.fetchall():
+                self._set_current_path(
+                    current,
+                    str(change["field"] or "").strip(),
+                    self._decode_state_change_value(change["new_value"]),
+                )
+
+            cursor.execute(
+                """
+                UPDATE entities SET
+                    current_json = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
                 (json.dumps(current, ensure_ascii=False), entity_id),
             )
             conn.commit()

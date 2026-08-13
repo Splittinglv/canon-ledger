@@ -12,6 +12,7 @@ from .chapter_commit_schema import (
     ExtractionResult,
     FulfillmentResult,
     ReviewResult,
+    normalize_timeline_events,
 )
 from .commit_artifacts import extraction_list
 from .config import DataModulesConfig
@@ -52,7 +53,21 @@ class ChapterCommitService:
         )
         extraction_payload = extraction.model_dump()
         extraction_payload["accepted_events"] = accepted_events
-        return {
+        # Pre-v1 data-agent artifacts nested timeline rows under memory_facts.
+        # Lift them into the canonical commit field so old projects remain
+        # replayable through the same router/writer path.
+        legacy_memory_facts = extraction_payload.get("memory_facts")
+        timeline_rows = extraction.timeline_events
+        if (
+            not timeline_rows
+            and isinstance(legacy_memory_facts, dict)
+            and isinstance(legacy_memory_facts.get("timeline_events"), list)
+        ):
+            timeline_rows = legacy_memory_facts["timeline_events"]
+        extraction_payload["timeline_events"] = normalize_timeline_events(
+            chapter, timeline_rows
+        )
+        commit_payload = {
             "meta": {
                 "schema_version": "story-system/v1",
                 "chapter": chapter,
@@ -87,6 +102,15 @@ class ChapterCommitService:
                 "vector": "pending",
             },
         }
+        if status == "accepted":
+            from .memory.writer import MemoryWriter
+
+            lifecycle_errors = MemoryWriter(
+                DataModulesConfig.from_project_root(self.project_root)
+            ).validate_commit_projection(commit_payload)
+            if lifecycle_errors:
+                raise ValueError(f"invalid_consistency_fact:{lifecycle_errors[0]}")
+        return commit_payload
 
     def persist_commit(self, payload: Dict[str, Any]) -> Path:
         target = self.project_root / ".story-system" / "commits"
@@ -120,7 +144,66 @@ class ChapterCommitService:
             return f"failed:{reason[6:] or 'writer_error'}"
         return "skipped"
 
-    def apply_projection_writers(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _persist_projection_run(
+        self,
+        payload: Dict[str, Any],
+        writer_results: dict[str, dict[str, Any]],
+    ) -> None:
+        commit_path = self.persist_commit(payload)
+        try:
+            from .projection_log import append_projection_run
+
+            append_projection_run(
+                self.project_root,
+                payload,
+                writer_results,
+                commit_path=commit_path,
+            )
+        except Exception:
+            pass
+
+    def _block_invalid_lifecycle(self, payload: Dict[str, Any]) -> bool:
+        """Fail before event-log/derived writes when a closure has no target."""
+        if str((payload.get("meta") or {}).get("status") or "") != "accepted":
+            return False
+
+        from .memory.writer import MemoryWriter
+
+        errors = MemoryWriter(
+            DataModulesConfig.from_project_root(self.project_root)
+        ).validate_commit_projection(payload)
+        if not errors:
+            return False
+
+        payload.setdefault("projection_status", {})
+        if not isinstance(payload["projection_status"], dict):
+            payload["projection_status"] = {}
+        error = errors[0]
+        payload["projection_status"]["memory"] = f"failed:{error}"
+        required = set(EventProjectionRouter().required_writers(payload))
+        writer_results: dict[str, dict[str, Any]] = {}
+        for name in required:
+            if name == "memory":
+                writer_results[name] = {
+                    "status": f"failed:{error}",
+                    "error": error,
+                    "reason": "lifecycle_validation_failed",
+                }
+            else:
+                payload["projection_status"].setdefault(name, "pending")
+                writer_results[name] = {
+                    "status": str(payload["projection_status"].get(name) or "pending"),
+                    "reason": "blocked_by_lifecycle_validation",
+                }
+        self._persist_projection_run(payload, writer_results)
+        return True
+
+    def apply_projection_writers(
+        self,
+        payload: Dict[str, Any],
+        *,
+        only_writers: set[str] | None = None,
+    ) -> Dict[str, Any]:
         status = str((payload.get("meta") or {}).get("status") or "")
         if status not in {"accepted", "rejected"}:
             return payload
@@ -129,10 +212,19 @@ class ChapterCommitService:
         if not isinstance(payload["projection_status"], dict):
             payload["projection_status"] = {}
 
+        if self._block_invalid_lifecycle(payload):
+            return payload
+
         writers = self._projection_writers()
         required_writers = set(EventProjectionRouter().required_writers(payload))
         writer_results: dict[str, dict[str, Any]] = {}
         for name, writer in writers.items():
+            if only_writers is not None and name not in only_writers:
+                writer_results[name] = {
+                    "status": str(payload["projection_status"].get(name) or "pending"),
+                    "reason": "not_selected",
+                }
+                continue
             if name not in required_writers:
                 payload["projection_status"][name] = "skipped"
                 writer_results[name] = {"status": "skipped", "reason": "not_required"}
@@ -147,18 +239,7 @@ class ChapterCommitService:
             except Exception as exc:
                 payload["projection_status"][name] = f"failed:{exc}"
                 writer_results[name] = {"status": "failed", "error": str(exc)}
-        commit_path = self.persist_commit(payload)
-        try:
-            from .projection_log import append_projection_run
-
-            append_projection_run(
-                self.project_root,
-                payload,
-                writer_results,
-                commit_path=commit_path,
-            )
-        except Exception:
-            pass
+        self._persist_projection_run(payload, writer_results)
         return payload
 
     def apply_projections(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -177,6 +258,8 @@ class ChapterCommitService:
             extraction["accepted_events"] = event_store.normalize_events(
                 chapter, accepted_events
             )
+            if self._block_invalid_lifecycle(payload):
+                return payload
             event_store.write_events(chapter, extraction["accepted_events"])
 
             proposals = AmendProposalTrigger().check(chapter, extraction["accepted_events"])

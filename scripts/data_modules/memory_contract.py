@@ -92,6 +92,21 @@ class TimelineEvent:
 
 
 @dataclass
+class LifecycleObligation:
+    """A stable, explicitly targetable open loop or reader promise."""
+    id: str
+    category: str
+    content: str
+    status: str = "active"
+    source_chapter: int = 0
+    expected_payoff: str = ""
+    urgency: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class ContextPack:
     """load_context 的返回值。sections 由调用者解释具体结构。"""
     chapter: int
@@ -135,6 +150,12 @@ class MemoryContract(Protocol):
 
     def get_open_loops(self, status: str = "active") -> List[OpenLoop]:
         """查询未闭合伏笔/悬念。"""
+        ...
+
+    def get_lifecycle_obligations(
+        self, status: str = "active"
+    ) -> List[LifecycleObligation]:
+        """查询可由 close/payoff 事件明确引用的稳定目标。"""
         ...
 
     def get_timeline(self, from_ch: int, to_ch: int) -> List[TimelineEvent]:

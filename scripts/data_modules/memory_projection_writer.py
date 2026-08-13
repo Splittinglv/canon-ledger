@@ -18,8 +18,20 @@ class MemoryProjectionWriter:
         result = MemoryWriter(DataModulesConfig.from_project_root(self.project_root)).apply_commit_projection(
             commit_payload
         )
+        if (result or {}).get("error"):
+            return {
+                "applied": False,
+                "writer": "memory",
+                "reason": f"error:{result['error']}",
+                **(result or {}),
+            }
         return {
-            "applied": bool((result or {}).get("items_added") or (result or {}).get("items_updated")),
+            "applied": bool(
+                (result or {}).get("items_added")
+                or (result or {}).get("items_updated")
+                or (result or {}).get("items_resolved")
+                or (result or {}).get("items_preserved")
+            ),
             "writer": "memory",
             **(result or {}),
         }

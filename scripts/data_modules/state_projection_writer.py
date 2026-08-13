@@ -71,6 +71,18 @@ class StateProjectionWriter:
             entity_state = state.setdefault("entity_state", {})
             progress = state.setdefault("progress", {})
             chapter_status = progress.setdefault("chapter_status", {})
+            state_versions = state.get("_projection_state_versions")
+            if not isinstance(state_versions, dict):
+                state_versions = {}
+                state["_projection_state_versions"] = state_versions
+            entity_versions = state_versions.get("entity_state")
+            if not isinstance(entity_versions, dict):
+                entity_versions = {}
+                state_versions["entity_state"] = entity_versions
+            protagonist_versions = state_versions.get("protagonist_state")
+            if not isinstance(protagonist_versions, dict):
+                protagonist_versions = {}
+                state_versions["protagonist_state"] = protagonist_versions
 
             protagonist_ids = self._collect_protagonist_ids(commit_payload, state)
 
@@ -82,9 +94,31 @@ class StateProjectionWriter:
                     continue
                 new_value = delta.get("new")
                 entity_bucket = entity_state.setdefault(entity_id, {})
+                version_bucket = entity_versions.setdefault(entity_id, {})
+                source_chapter = self._safe_int(delta.get("chapter")) or chapter
+                if not self._can_apply_field(
+                    entity_bucket,
+                    version_bucket,
+                    field,
+                    source_chapter,
+                    fallback_chapter=self._safe_int(progress.get("current_chapter")),
+                ):
+                    continue
+
                 self._set_path(entity_bucket, field, new_value)
+                version_bucket[field] = source_chapter
                 if entity_id in protagonist_ids:
-                    self._set_path(state.setdefault("protagonist_state", {}), field, new_value)
+                    protagonist_state = state.setdefault("protagonist_state", {})
+                    protagonist_version_bucket = protagonist_versions.setdefault(entity_id, {})
+                    if self._can_apply_field(
+                        protagonist_state,
+                        protagonist_version_bucket,
+                        field,
+                        source_chapter,
+                        fallback_chapter=self._safe_int(progress.get("current_chapter")),
+                    ):
+                        self._set_path(protagonist_state, field, new_value)
+                        protagonist_version_bucket[field] = source_chapter
                 applied_count += 1
 
             if chapter > 0:
@@ -121,11 +155,14 @@ class StateProjectionWriter:
         return _LockedState(self.state_path, self.lock_path)
 
     def _collect_state_deltas(self, commit_payload: dict) -> list[dict]:
-        deltas = [
-            self._normalize_state_delta(delta)
-            for delta in extraction_list(commit_payload, "state_deltas")
-            if isinstance(delta, dict)
-        ]
+        commit_chapter = self._safe_int((commit_payload.get("meta") or {}).get("chapter"))
+        deltas: list[dict] = []
+        for delta in extraction_list(commit_payload, "state_deltas"):
+            if not isinstance(delta, dict):
+                continue
+            normalized = self._normalize_state_delta(delta)
+            normalized["chapter"] = self._safe_int(normalized.get("chapter")) or commit_chapter
+            deltas.append(normalized)
         seen = {
             (str(delta.get("entity_id") or "").strip(), str(delta.get("field") or "").strip())
             for delta in deltas
@@ -177,6 +214,7 @@ class StateProjectionWriter:
                         if "new_value" in payload
                         else payload.get("new_state")
                     ),
+                    "chapter": self._safe_int(event.get("chapter")) or commit_chapter,
                 }
             )
         return deltas
@@ -210,6 +248,38 @@ class StateProjectionWriter:
                 cursor[part] = nxt
             cursor = nxt
         cursor[parts[-1]] = value
+
+    @staticmethod
+    def _path_exists(target: dict, path: str) -> bool:
+        if not isinstance(target, dict) or not path:
+            return False
+        cursor: Any = target
+        for part in path.split("."):
+            if not isinstance(cursor, dict) or part not in cursor:
+                return False
+            cursor = cursor[part]
+        return True
+
+    def _can_apply_field(
+        self,
+        target: dict,
+        version_bucket: dict,
+        field: str,
+        source_chapter: int,
+        *,
+        fallback_chapter: int,
+    ) -> bool:
+        """Prevent a delayed old commit from overwriting a newer field value.
+
+        The version map is intentionally per entity + dotted field.  For
+        projects created before this map existed, an already-present field is
+        conservatively treated as current through ``progress.current_chapter``
+        instead of allowing an old projection retry to roll it back.
+        """
+        stored_chapter = self._safe_int(version_bucket.get(field))
+        if stored_chapter <= 0 and self._path_exists(target, field):
+            stored_chapter = fallback_chapter
+        return source_chapter >= stored_chapter
 
     def _collect_protagonist_ids(self, commit_payload: dict, state: dict) -> set[str]:
         """聚合本次 commit + state.json 中已知的主角实体 ID。

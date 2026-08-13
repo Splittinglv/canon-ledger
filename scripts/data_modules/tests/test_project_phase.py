@@ -167,3 +167,44 @@ def test_project_phase_treats_projection_log_pending_as_blocking(tmp_path):
 
     assert snapshot.phase == PHASE_PROJECTION_FAILED
     assert "latest_commit_projection_incomplete" in snapshot.blocking
+
+
+def test_project_phase_ignores_projection_log_for_replaced_commit(tmp_path):
+    _make_init_ready(tmp_path)
+    commit_path = tmp_path / ".story-system" / "commits" / "chapter_001.commit.json"
+    old_payload = {
+        "meta": {"chapter": 1, "status": "accepted"},
+        "projection_status": {"state": "done", "index": "failed:old"},
+    }
+    append_projection_run(
+        tmp_path,
+        old_payload,
+        {"index": {"status": "failed:old"}},
+        commit_path=commit_path,
+    )
+    _write_json(
+        commit_path,
+        {
+            "meta": {"chapter": 1, "status": "accepted"},
+            "projection_status": {"state": "done", "index": "done"},
+        },
+    )
+
+    snapshot = resolve_project_phase(tmp_path)
+    assert snapshot.phase != PHASE_PROJECTION_FAILED
+    assert snapshot.latest_commit is not None
+    assert snapshot.latest_commit.projection_source == "commit"
+
+
+def test_project_phase_blocks_legacy_plain_failed_status(tmp_path):
+    _make_init_ready(tmp_path)
+    _write_json(
+        tmp_path / ".story-system" / "commits" / "chapter_001.commit.json",
+        {
+            "meta": {"chapter": 1, "status": "accepted"},
+            "projection_status": {"state": "done", "index": "failed"},
+        },
+    )
+    snapshot = resolve_project_phase(tmp_path)
+    assert snapshot.phase == PHASE_PROJECTION_FAILED
+    assert "latest_commit_projection_failed" in snapshot.blocking

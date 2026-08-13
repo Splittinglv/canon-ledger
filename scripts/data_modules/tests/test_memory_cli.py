@@ -153,6 +153,22 @@ def test_get_open_loops_empty(tmp_path, capsys):
     assert output == []
 
 
+def test_get_obligations_empty(tmp_path, capsys):
+    _ensure_scripts_on_path()
+    import memory_cli
+
+    project = _make_project(tmp_path)
+    old_argv = sys.argv
+    sys.argv = ["memory_cli", "--project-root", str(project), "get-obligations"]
+    try:
+        memory_cli.main()
+    finally:
+        sys.argv = old_argv
+
+    output = json.loads(capsys.readouterr().out)
+    assert output == []
+
+
 def test_get_timeline_empty(tmp_path, capsys):
     _ensure_scripts_on_path()
     import memory_cli

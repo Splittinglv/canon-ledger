@@ -24,6 +24,7 @@ EXTRACTION_LIST_FIELDS = (
     "entity_deltas",
     "entities_appeared",
     "scenes",
+    "timeline_events",
 )
 FULFILLMENT_LIST_FIELDS = (
     "planned_nodes",
@@ -153,6 +154,9 @@ class ExtractionResult(CommitArtifactModel):
     entity_deltas: list[dict[str, Any]]
     entities_appeared: list[dict[str, Any]] = Field(default_factory=list)
     scenes: list[dict[str, Any]] = Field(default_factory=list)
+    # 时间线是 chapter commit 的一等事实；不能再依赖旧 data-agent 输出中的
+    # memory_facts（该字段不属于 commit 主链 schema）。
+    timeline_events: list[dict[str, Any]] = Field(default_factory=list)
     chapter_meta: Any = Field(default_factory=dict)
     dominant_strand: Any = ""
     summary_text: str = ""
@@ -230,13 +234,84 @@ class AcceptedEventsInput(BaseModel):
                 event,
                 context={"chapter": chapter, "index": index},
             ).model_dump()
-            normalized.append(StoryEvent.model_validate(payload).model_dump())
+            normalized_event = StoryEvent.model_validate(payload).model_dump()
+            normalized.append(_normalize_lifecycle_event(normalized_event))
         return normalized
 
 
 def normalize_accepted_events(chapter: int, events: Any) -> list[dict[str, Any]]:
     accepted_events = AcceptedEventsInput.model_validate({"accepted_events": events})
     return accepted_events.normalize(chapter)
+
+
+def normalize_timeline_events(chapter: int, events: Any) -> list[dict[str, Any]]:
+    """Normalize timeline rows kept in the chapter commit extraction snapshot.
+
+    A timeline row gets a deterministic ID when a legacy producer does not
+    provide one.  New producers should always preserve ``timeline_id`` across
+    retries/amendments so projection can remain idempotent.
+    """
+    if not isinstance(events, list):
+        raise ValueError("timeline_events must be a list")
+
+    normalized: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    seen_sequences: set[tuple[int, int]] = set()
+    for index, raw in enumerate(events):
+        if not isinstance(raw, dict):
+            raise ValueError(f"timeline_events[{index}] must be a JSON object")
+        item = dict(raw)
+        event = str(item.get("event") or item.get("content") or item.get("description") or "").strip()
+        if not event:
+            raise ValueError(f"timeline_events[{index}].event must be a non-empty string")
+
+        try:
+            source_chapter = int(item.get("chapter") or chapter)
+        except (TypeError, ValueError):
+            source_chapter = int(chapter)
+        if source_chapter <= 0:
+            source_chapter = int(chapter)
+        if source_chapter != int(chapter):
+            raise ValueError(
+                f"timeline_events[{index}].chapter must match commit chapter {chapter}"
+            )
+
+        try:
+            sequence = int(item.get("sequence") or index + 1)
+        except (TypeError, ValueError):
+            sequence = index + 1
+        sequence = max(1, sequence)
+
+        timeline_id = str(item.get("timeline_id") or "").strip()
+        if not timeline_id:
+            stable_payload = {
+                key: value
+                for key, value in item.items()
+                if key not in {"timeline_id", "chapter", "sequence"}
+            }
+            raw_id = json.dumps(stable_payload, ensure_ascii=False, sort_keys=True)
+            digest = hashlib.sha1(raw_id.encode("utf-8")).hexdigest()[:10]
+            timeline_id = f"tl-ch{source_chapter:03d}-{sequence:03d}-{digest}"
+
+        if timeline_id in seen_ids:
+            raise ValueError(f"timeline_events[{index}].timeline_id is duplicated: {timeline_id}")
+        sequence_key = (source_chapter, sequence)
+        if sequence_key in seen_sequences:
+            raise ValueError(
+                f"timeline_events[{index}].sequence is duplicated in chapter "
+                f"{source_chapter}: {sequence}"
+            )
+        seen_ids.add(timeline_id)
+        seen_sequences.add(sequence_key)
+
+        item["timeline_id"] = timeline_id
+        item["chapter"] = source_chapter
+        item["sequence"] = sequence
+        item["event"] = event
+        item["time_hint"] = str(item.get("time_hint") or item.get("time_label") or "").strip()
+        item["event_type"] = str(item.get("event_type") or "").strip()
+        normalized.append(item)
+    return normalized
 
 
 def _event_context_index(info: ValidationInfo) -> int:
@@ -276,3 +351,48 @@ def _generated_event_id(chapter: int, index: int, payload: dict[str, Any]) -> st
     raw = json.dumps(stable_payload, ensure_ascii=False, sort_keys=True)
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
     return f"evt-ch{chapter:03d}-{index:03d}-{digest}"
+
+
+def _normalize_lifecycle_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Add canonical lifecycle IDs while preserving older accepted-event shapes.
+
+    Creation events can safely use their stable event_id as a compatibility
+    fallback.  Closing events are intentionally *not* matched by subject or
+    prose: without an explicit target ID the memory projection reports a
+    repairable error instead of closing an arbitrary similarly named promise.
+    """
+    payload = dict(event.get("payload") or {})
+    event_type = str(event.get("event_type") or "").strip()
+    event_id = str(event.get("event_id") or "").strip()
+
+    if event_type == "open_loop_created":
+        payload["loop_id"] = str(
+            payload.get("loop_id")
+            or payload.get("open_loop_id")
+            or event_id
+            or ""
+        ).strip()
+    elif event_type == "promise_created":
+        payload["promise_id"] = str(payload.get("promise_id") or event_id or "").strip()
+    elif event_type == "open_loop_closed":
+        target = (
+            payload.get("loop_id")
+            or payload.get("target_loop_id")
+            or payload.get("open_loop_id")
+            or payload.get("target_id")
+            or payload.get("resolves_event_id")
+        )
+        if target:
+            payload["loop_id"] = str(target).strip()
+    elif event_type == "promise_paid_off":
+        target = (
+            payload.get("promise_id")
+            or payload.get("target_promise_id")
+            or payload.get("target_id")
+            or payload.get("resolves_event_id")
+        )
+        if target:
+            payload["promise_id"] = str(target).strip()
+
+    event["payload"] = payload
+    return event

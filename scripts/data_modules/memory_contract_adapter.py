@@ -18,6 +18,7 @@ from .memory_contract import (
     CommitResult,
     ContextPack,
     EntitySnapshot,
+    LifecycleObligation,
     OpenLoop,
     Rule,
     TimelineEvent,
@@ -294,7 +295,7 @@ class MemoryContractAdapter:
             items = store.query(category="open_loop", status=status)
             return [
                 OpenLoop(
-                    id=item.id,
+                    id=str((item.payload or {}).get("lifecycle_id") or item.id),
                     content=item.value,
                     status=item.status,
                     planted_chapter=item.source_chapter,
@@ -307,22 +308,61 @@ class MemoryContractAdapter:
             logger.warning("get_open_loops failed: %s", e)
             return []
 
+    def get_lifecycle_obligations(
+        self, status: str = "active"
+    ) -> List[LifecycleObligation]:
+        try:
+            store = self._memory_store()
+            result: List[LifecycleObligation] = []
+            for category in ("open_loop", "reader_promise"):
+                for item in store.query(category=category, status=status):
+                    payload = item.payload or {}
+                    result.append(
+                        LifecycleObligation(
+                            id=str(payload.get("lifecycle_id") or item.id),
+                            category=category,
+                            content=item.value,
+                            status=item.status,
+                            source_chapter=item.source_chapter,
+                            expected_payoff=str(payload.get("expected_payoff") or ""),
+                            urgency=coerce_urgency(payload.get("urgency")),
+                        )
+                    )
+            result.sort(key=lambda item: (item.category, item.source_chapter, item.id))
+            return result
+        except Exception as e:
+            logger.warning("get_lifecycle_obligations failed: %s", e)
+            return []
+
     def get_timeline(self, from_ch: int, to_ch: int) -> List[TimelineEvent]:
         try:
             store = self._memory_store()
             items = store.query(category="timeline", status="active")
-            events = []
+            ordered_events = []
             for item in items:
                 ch = item.source_chapter
                 if from_ch <= ch <= to_ch:
-                    events.append(TimelineEvent(
-                        event=item.value,
-                        chapter=ch,
-                        time_hint=item.field,
-                        event_type=item.subject,
-                    ))
-            events.sort(key=lambda e: e.chapter)
-            return events
+                    payload = item.payload or {}
+                    try:
+                        sequence = int(payload.get("sequence") or 0)
+                    except (TypeError, ValueError):
+                        sequence = 0
+                    timeline_id = str(payload.get("timeline_id") or item.id)
+                    ordered_events.append(
+                        (
+                            ch,
+                            sequence,
+                            timeline_id,
+                            TimelineEvent(
+                                event=item.value,
+                                chapter=ch,
+                                time_hint=str(payload.get("time_hint") or "").strip(),
+                                event_type=str(payload.get("event_type") or item.subject).strip(),
+                            ),
+                        )
+                    )
+            ordered_events.sort(key=lambda row: (row[0], row[1], row[2]))
+            return [row[3] for row in ordered_events]
         except Exception as e:
             logger.warning("get_timeline failed: %s", e)
             return []

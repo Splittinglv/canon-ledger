@@ -93,6 +93,8 @@ class _FakeMemory:
         return ""
     def get_open_loops(self, status: str = "active"):
         return []
+    def get_lifecycle_obligations(self, status: str = "active"):
+        return []
     def get_timeline(self, from_ch: int, to_ch: int):
         return []
 
@@ -110,4 +112,5 @@ class TestProtocol:
         assert m.query_rules() == []
         assert m.read_summary(1) == ""
         assert m.get_open_loops() == []
+        assert m.get_lifecycle_obligations() == []
         assert m.get_timeline(1, 10) == []

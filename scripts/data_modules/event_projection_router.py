@@ -37,6 +37,8 @@ class EventProjectionRouter:
             writers.add("index")
         if extraction_text(commit_payload, "summary_text"):
             writers.add("summary")
+        if extraction_list(commit_payload, "timeline_events"):
+            writers.add("memory")
         for event in extraction_list(commit_payload, "accepted_events"):
             if not isinstance(event, dict):
                 continue
