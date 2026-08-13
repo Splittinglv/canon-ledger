@@ -30,7 +30,7 @@
 | webnovel-plan | Step 6 | always | `references/genre-profiles.md` | 区段 | 当前 genre 的单个 `### 2.x`；按需加 `## 一、Profile 字段说明` |
 | webnovel-plan | Step 6 | always | `references/shared/strand-weave-pattern.md` | 全文 | — |
 | webnovel-plan | 章纲拆分 | always | `references/outlining/plot-signal-vs-spoiler.md` | 全文 | — |
-| webnovel-plan | Step 6 | 需要爽点设计 | `references/shared/cool-points-guide.md` | 区段 | 所需爽点维度段；题材适配取 `## 九、题材适配` |
+| webnovel-plan | Step 6 | 用户明确要爽文/打脸节奏 | `references/shared/cool-points-guide.md` | 区段 | 所需爽点维度段；题材适配取 `## 九、题材适配`。不强制每章爽点 |
 | webnovel-plan | Step 6/7 | 需要冲突设计 | `skills/webnovel-plan/references/outlining/conflict-design.md` | 区段 | 对应冲突类型小节 |
 | webnovel-plan | Step 7 | 需要追读力分析 | `references/reading-power-taxonomy.md` | 区段 | 按需取 `## 一、钩子类型` / `## 二、爽点模式` / `## 三、即时满足/微兑现` |
 | webnovel-plan | Step 7 | 需要章纲细化 | `skills/webnovel-plan/references/outlining/chapter-planning.md` | 区段 | `## 10. 结构化节点规范（CBN/CPNs/CEN）`；需模板时加 `## 7. 章节规划模板` |
@@ -53,7 +53,7 @@
 |-------|------|------|----------|
 | webnovel-init | 角色/书名/势力设定 | 用户开始设定命名 | `--skill init --table 命名规则 --query "{命名对象} {题材}" --genre {题材}` |
 | webnovel-plan | 卷级规划 | always | `--skill plan --table 场景写法 --query "卷级结构 叙事功能"` |
-| webnovel-plan | 卷级规划 | 需要爽点/冲突设计 | `--skill plan --table 爽点与节奏 --query "{卷级核心冲突}" --genre "${GENRE}"` |
+| webnovel-plan | 卷级规划 | 用户明确要爽文/打脸节奏 | `--skill plan --table 爽点与节奏 --query "{卷级核心冲突}" --genre "${GENRE}"` |
 | webnovel-plan | 卷级规划 | 需要桥段模板 | `--skill plan --table 桥段套路 --query "{卷级核心冲突}" --genre "${GENRE}"` |
 | webnovel-plan | 章纲拆分 | 新增角色出现 | `--skill plan --table 命名规则 --query "角色命名" --genre {题材}` |
 | webnovel-write | Step 2 | 新角色首次出场 | `--skill write --table 命名规则 --query "角色命名" --genre {题材}` |

@@ -497,6 +497,16 @@ def test_context_agent_loads_fixed_guides_and_outputs_writer_brief():
     assert "怎么写更顺" not in text
 
 
+def test_webnovel_plan_does_not_require_per_chapter_cool_point():
+    text = (SKILLS_DIR / "webnovel-plan" / "SKILL.md").read_text(encoding="utf-8")
+    assert "爽点不是必填" in text
+    assert "禁止把「本章无爽点」当成规划失败" in text
+    required_line = next(
+        line for line in text.splitlines() if line.startswith("每章必须包含：")
+    )
+    assert "爽点" not in required_line
+
+
 def test_webnovel_write_skill_skips_style_pipeline():
     text = (SKILLS_DIR / "webnovel-write" / "SKILL.md").read_text(encoding="utf-8")
     assert "设定集/文风提示词.md" in text

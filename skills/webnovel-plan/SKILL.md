@@ -70,18 +70,18 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" pla
 | Step 6 always | 区段 | `${SKILL_ROOT}/../../references/genre-profiles.md`（仅当前 genre 的 `### 2.x` 段） |
 | Step 6 always | 全文 | `${SKILL_ROOT}/../../references/shared/strand-weave-pattern.md` |
 | 章纲拆分 always | 区段 | `${SKILL_ROOT}/../../references/outlining/plot-signal-vs-spoiler.md` |
-| Step 6 需要爽点 | 区段 | `${SKILL_ROOT}/../../references/shared/cool-points-guide.md` |
+| Step 6 用户明确要爽文/打脸节奏 | 区段 | `${SKILL_ROOT}/../../references/shared/cool-points-guide.md` |
 | Step 6/7 需要冲突 | 区段 | `${SKILL_ROOT}/references/outlining/conflict-design.md` |
 | Step 6/7 特定节奏 | 区段 | `${SKILL_ROOT}/references/outlining/genre-volume-pacing.md` |
 | Step 7 追读力分析 | 区段 | `${SKILL_ROOT}/../../references/reading-power-taxonomy.md` |
 | Step 7 章纲细化 + 节点规范 | 区段 | `${SKILL_ROOT}/references/outlining/chapter-planning.md` |
 
-CSV 创作参考用检索读，不 `cat` 整表：
+CSV 创作参考用检索读，不 `cat` 整表。默认只检索桥段与命名；**不要**为了凑每章爽点去查 `爽点与节奏`。仅当用户明确要爽文/打脸节奏，或题材本身是高密度爽文时才加第三行：
 
 ```bash
-python -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill plan --table 爽点与节奏 --query "{卷级核心冲突}" --genre "${GENRE}"
 python -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill plan --table 桥段套路 --query "{卷级核心冲突}" --genre "${GENRE}"
 python -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill plan --table 命名规则 --query "角色命名" --genre "${GENRE}"
+# 可选：python -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill plan --table 爽点与节奏 --query "{卷级核心冲突}" --genre "${GENRE}"
 ```
 
 ## 执行流程
@@ -146,9 +146,9 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" mem
 
 ### Step 6：生成卷纲骨架
 
-必读 `${SKILL_ROOT}/../../references/genre-profiles.md` 与 `${SKILL_ROOT}/../../references/shared/strand-weave-pattern.md`；按需读取爽点 / 冲突 / 节奏 reference（见读取策略表）。
+必读 `${SKILL_ROOT}/../../references/genre-profiles.md` 与 `${SKILL_ROOT}/../../references/shared/strand-weave-pattern.md`；冲突 / 节奏 reference 按需读取。`cool-points-guide.md` 仅当用户明确要爽文/打脸节奏时读取。
 
-卷纲必须明确：卷摘要、关键人物与反派层级、Strand 分布、爽点密度规划、伏笔规划、约束触发规划。
+卷纲必须明确：卷摘要、关键人物与反派层级、Strand 分布、伏笔规划、约束触发规划。**爽点密度规划可选**：有则写，没有不补、不因此失败。
 
 跨卷一致性检查（非首卷必须执行）：
 
@@ -162,7 +162,9 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" mem
 
 按需读取 `${SKILL_ROOT}/../../references/reading-power-taxonomy.md` 与 `${SKILL_ROOT}/references/outlining/chapter-planning.md`。
 
-每章必须包含：目标、阻力、代价、时间锚点、章内时间跨度、与上章时间差、倒计时状态、爽点、Strand、反派层级、视角/主角、关键实体、本章变化、章末未闭合问题、钩子，以及结构化节点 `CBN`、`CPNs`、`CEN`、`必须覆盖节点`、`本章禁区`。
+每章必须包含：目标、阻力、代价、时间锚点、章内时间跨度、与上章时间差、倒计时状态、Strand、反派层级、视角/主角、关键实体、本章变化、章末未闭合问题、钩子，以及结构化节点 `CBN`、`CPNs`、`CEN`、`必须覆盖节点`、`本章禁区`。
+
+**爽点不是必填。** 字段可写 `无`。禁止为了凑密度给每章编一个打脸/装逼点；禁止把「本章无爽点」当成规划失败。
 
 #### 结构化节点
 
