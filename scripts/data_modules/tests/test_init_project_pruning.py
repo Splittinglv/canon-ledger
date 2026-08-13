@@ -22,6 +22,9 @@ def test_init_skips_dead_templates_and_empty_libraries_for_single_protagonist(tm
     )
 
     assert (project_root / "设定集" / "主角卡.md").is_file()
+    assert (project_root / ".webnovel" / "subagent-models.json").is_file()
+    models = json.loads((project_root / ".webnovel" / "subagent-models.json").read_text(encoding="utf-8"))
+    assert models["agents"]["data-agent"] == "inherit"
     assert not (project_root / "设定集" / "主角组.md").exists()
     assert not (project_root / "设定集" / "女主卡.md").exists()
     assert not (project_root / "设定集" / "金手指设计.md").exists()

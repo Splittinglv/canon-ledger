@@ -48,7 +48,7 @@ purpose: 每次章节写作前加载，确保三大定律执行
 
 ### Style（本分支写章不加载）
 
-plot-facts-only 分支的 `/webnovel-write` 与 `/webnovel-review` 忽略本节。文风只看书项目 `设定集/文风提示词.md`。
+本插件的 `/webnovel-write` 与 `/webnovel-review` 忽略本节。文风只看书项目 `设定集/文风提示词.md`。
 
 - 对话尽量带意图（试探/回避/施压/诱导），减少纯说明句。
 - 避免连续大段纯解释；若必须解释，建议切分为”信息 + 行动/反应”。
@@ -56,7 +56,7 @@ plot-facts-only 分支的 `/webnovel-write` 与 `/webnovel-review` 忽略本节�
 
 ### Anti-AI（本分支写章不加载）
 
-plot-facts-only 分支禁止把本节当起草/润色清单，也不再要求 `anti_ai_force_check`。
+本插件禁止把本节当起草/润色清单，也不再要求 `anti_ai_force_check`。
 
 - 禁止连续 3 段以上使用相同句式结构。
 - 情绪描写必须通过行为/生理暗示，禁止直接标签（”他感到X”）。

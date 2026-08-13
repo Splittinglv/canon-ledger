@@ -381,6 +381,20 @@ def cmd_run_log(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_subagent_models(args: argparse.Namespace) -> int:
+    from .subagent_models import format_subagent_models, resolve_subagent_models
+
+    root: Optional[Path] = None
+    try:
+        root = _resolve_root(args.project_root)
+    except FileNotFoundError:
+        root = None
+
+    report = resolve_subagent_models(root, agent=args.agent or None)
+    print(format_subagent_models(report, args.format))
+    return 0
+
+
 def cmd_use(args: argparse.Namespace) -> int:
     project_root = normalize_windows_path(args.project_root).expanduser()
     try:
@@ -492,6 +506,11 @@ def main() -> None:
     p_run_log.add_argument("--append", action="store_true", help="追加而不是覆盖 run_last.log")
     p_run_log.add_argument("--format", choices=["json", "text"], default="json", help="输出格式")
     p_run_log.set_defaults(func=cmd_run_log)
+
+    p_subagent_models = sub.add_parser("subagent-models", help="读取可选的子代理 Task 模型配置")
+    p_subagent_models.add_argument("--agent", default="", help="只输出某一个子代理，例如 data-agent")
+    p_subagent_models.add_argument("--format", choices=["json", "text"], default="json", help="输出格式")
+    p_subagent_models.set_defaults(func=cmd_subagent_models)
 
     p_use = sub.add_parser("use", help="绑定当前工作区使用的书项目（写入指针/registry）")
     p_use.add_argument("project_root", help="书项目根目录（必须包含 .webnovel/state.json）")

@@ -1227,3 +1227,55 @@ def test_webnovel_skill_flow_runs_story_contract_context_and_review_pipeline_wit
     assert metrics_out.is_file()
     metrics_payload = json.loads(metrics_out.read_text(encoding="utf-8"))
     assert metrics_payload["issues_count"] == 1
+
+
+def test_subagent_models_cli_reads_project_file(monkeypatch, tmp_path, capsys):
+    module = _load_webnovel_module()
+    book_root = tmp_path / "book"
+    _make_cli_init_ready_project(book_root)
+    (book_root / ".webnovel" / "subagent-models.json").write_text(
+        json.dumps({"agents": {"data-agent": "kimi-k3-max"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CURSOR_HOME", str(tmp_path / "cursor-home"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "webnovel",
+            "--project-root",
+            str(book_root),
+            "subagent-models",
+            "--agent",
+            "data-agent",
+            "--format",
+            "json",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+
+    assert int(exc.value.code or 0) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["agents"]["data-agent"]["model"] == "kimi-k3-max"
+    assert payload["agents"]["data-agent"]["pass_to_task"] is True
+
+
+def test_subagent_models_cli_without_book_still_succeeds(monkeypatch, tmp_path, capsys):
+    module = _load_webnovel_module()
+    monkeypatch.setenv("CURSOR_HOME", str(tmp_path / "cursor-home"))
+
+    def _missing(_explicit_project_root=None):
+        raise FileNotFoundError("no book")
+
+    monkeypatch.setattr(module, "_resolve_root", _missing)
+    monkeypatch.setattr(sys, "argv", ["webnovel", "subagent-models", "--format", "json"])
+
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+
+    assert int(exc.value.code or 0) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["agents"]["data-agent"]["model"] == "inherit"
+    assert payload["agents"]["data-agent"]["pass_to_task"] is False

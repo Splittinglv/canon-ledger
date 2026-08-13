@@ -77,7 +77,10 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" p
 export PROJECT_ROOT="$(python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" where)"
 
 python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" placeholder-scan --format text
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" subagent-models --format json
 ```
+
+子代理模型是可选配置。读取 JSON 里每个 `agents.<name>`：`pass_to_task=true` 时，调用对应 Task **必须**传入该 `model` slug；`inherit` / `pass_to_task=false` 则**不要**传 Task 的 `model`（跟当前聊天同一个模型）。本轮用户点名的模型优先于配置文件。slug 必须是 Cursor Task 当前允许的模型 id，不要用展示名或中文。配置文件：书项目 `.webnovel/subagent-models.json`，其次 `~/.cursor/webnovel-writer/subagent-models.json`。没有配置文件就全部 inherit。
 
 ### 准备：刷新合同树
 
@@ -108,7 +111,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
 
 必须使用 `Task` 工具调用 `context-agent`，不得由主流程自行整理任务书。
 
-Use the Task tool to run the plugin agent `context-agent`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/context-agent.md`, then execute that spec.
+Use the Task tool to run the plugin agent `context-agent`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/context-agent.md`, then execute that spec. Pass Task `model` only when `subagent-models` says `agents["context-agent"].pass_to_task` is true.
 
 Task:
 - chapter={chapter_num}
@@ -149,7 +152,7 @@ Task:
 
 必须使用 `Task` 工具调用 `reviewer`，不得由主流程伪造审查 JSON。
 
-Use the Task tool to run the plugin agent `reviewer`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/reviewer.md`, then execute that spec.
+Use the Task tool to run the plugin agent `reviewer`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/reviewer.md`, then execute that spec. Pass Task `model` only when `subagent-models` says `agents["reviewer"].pass_to_task` is true.
 
 Task:
 - chapter={chapter_num}
@@ -209,7 +212,7 @@ python -X utf8 -c "import json,os; from pathlib import Path; root=Path(os.enviro
 
 必须使用 `Task` 工具调用 `data-agent`，产出 fulfillment_result / disambiguation_result / extraction_result 三份 JSON，并复用 Step 3 的 review_results。
 
-Use the Task tool to run the plugin agent `data-agent`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/data-agent.md`, then execute that spec.
+Use the Task tool to run the plugin agent `data-agent`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/data-agent.md`, then execute that spec. Pass Task `model` only when `subagent-models` says `agents["data-agent"].pass_to_task` is true.
 
 Task:
 - chapter={chapter_num}

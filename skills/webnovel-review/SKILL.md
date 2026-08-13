@@ -50,7 +50,10 @@ fi
 eval "$_EXPORT"
 export SKILL_ROOT="${WEBNOVEL_PLUGIN_ROOT}/skills/webnovel-review"
 export PROJECT_ROOT="$(python "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" where)"
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" subagent-models --format json
 ```
+
+调用 `reviewer` 前必须读取上面的 JSON。`agents["reviewer"].pass_to_task=true` 时，Task 必须传入该 `model` slug；否则不要传 `model`（跟当前聊天同一个模型）。本轮用户点名优先于 `.webnovel/subagent-models.json` 和 `~/.cursor/webnovel-writer/subagent-models.json`。
 
 `PROJECT_ROOT` 必须包含 `.webnovel/state.json`，否则阻断。
 
@@ -89,7 +92,7 @@ cat "${PROJECT_ROOT}/.webnovel/state.json"
 必须通过 `Task` 工具调用 `reviewer`。审查方法与维度细则由 reviewer 自带，本 Skill 不展开。
 
 ```text
-Use the Task tool to run the plugin agent `reviewer`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/reviewer.md`, then execute that spec.
+Use the Task tool to run the plugin agent `reviewer`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/reviewer.md`, then execute that spec. Pass Task `model` only when `subagent-models` says `agents["reviewer"].pass_to_task` is true.
 
 Prompt: chapter={chapter_num}; chapter_file={chapter_file}; project_root=${PROJECT_ROOT}; scripts_dir=${SCRIPTS_DIR}。严格输出 reviewer schema JSON，不评分，不口头总结。
 ```

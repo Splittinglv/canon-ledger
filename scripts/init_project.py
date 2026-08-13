@@ -396,6 +396,7 @@ def init_project(
     output_outline = _read_text_if_exists(output_templates_dir / "大纲-总纲.md")
     output_antagonist = _read_text_if_exists(output_templates_dir / "设定集-反派设计.md")
     output_style_prompt = _read_text_if_exists(output_templates_dir / "设定集-文风提示词.md")
+    output_subagent_models = _read_text_if_exists(output_templates_dir / "subagent-models.json")
 
     # 基础文件（只在缺失时生成，避免覆盖已有内容）
     now = datetime.now().strftime("%Y-%m-%d")
@@ -614,6 +615,27 @@ def init_project(
         )
     _write_text_if_missing(project_path / "设定集" / "文风提示词.md", style_prompt.rstrip() + "\n")
 
+    subagent_models = output_subagent_models.strip() if output_subagent_models else ""
+    if not subagent_models:
+        subagent_models = json.dumps(
+            {
+                "_comment": "可选。留 inherit 则子代理跟当前聊天用同一个模型。",
+                "default": "inherit",
+                "agents": {
+                    "context-agent": "inherit",
+                    "reviewer": "inherit",
+                    "data-agent": "inherit",
+                    "deconstruction-agent": "inherit",
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    _write_text_if_missing(
+        project_path / ".webnovel" / "subagent-models.json",
+        subagent_models.rstrip() + "\n",
+    )
+
     outline_content = output_outline.strip() if output_outline else ""
     if outline_content:
         outline_content = _inject_volume_rows(outline_content, int(target_chapters)).rstrip() + "\n"
@@ -710,6 +732,7 @@ __pycache__/
     print(f"\nProject initialized at: {project_path}")
     print("Key files:")
     print(" - .webnovel/state.json")
+    print(" - .webnovel/subagent-models.json")
     print(" - 设定集/世界观.md")
     print(" - 设定集/力量体系.md")
     print(" - 设定集/主角卡.md")

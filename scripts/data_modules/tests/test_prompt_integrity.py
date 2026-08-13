@@ -57,6 +57,7 @@ REGISTERED_CLI_SUBCOMMANDS = {
     "init", "extract-context", "memory-contract", "project-memory", "review-pipeline",
     "placeholder-scan", "master-outline-sync",
     "story-system", "chapter-commit", "story-events", "knowledge",
+    "subagent-models",
 }
 
 
@@ -505,6 +506,13 @@ def test_webnovel_plan_does_not_require_per_chapter_cool_point():
         line for line in text.splitlines() if line.startswith("每章必须包含：")
     )
     assert "爽点" not in required_line
+
+
+def test_write_review_init_skills_honor_subagent_model_config():
+    for skill_name in ("webnovel-write", "webnovel-review", "webnovel-init"):
+        text = _read_text(SKILLS_DIR / skill_name / "SKILL.md")
+        assert "subagent-models" in text, f"{skill_name} 未读取子代理模型配置"
+        assert "pass_to_task" in text, f"{skill_name} 未说明何时把 model 传给 Task"
 
 
 def test_webnovel_write_skill_skips_style_pipeline():

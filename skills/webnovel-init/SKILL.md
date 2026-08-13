@@ -72,7 +72,10 @@ if [ -z "$_EXPORT" ]; then
 fi
 eval "$_EXPORT"
 export SKILL_ROOT="${WEBNOVEL_PLUGIN_ROOT}/skills/webnovel-init"
+python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" subagent-models --format json
 ```
+
+拆书子代理模型可选。读取 JSON 里 `agents["deconstruction-agent"]`：`pass_to_task=true` 时，调用 Task 必须传入该 `model` slug；否则不要传 `model`。本轮用户点名优先于配置文件。新书尚未创建时，这条命令仍可用（回退到 `~/.cursor/webnovel-writer/subagent-models.json` 或 inherit）。
 
 必须做：
 - 确认当前目录可写；确认入口脚本 `${SCRIPTS_DIR}/webnovel.py` 存在（仅支持插件目录）。
@@ -97,7 +100,7 @@ export SKILL_ROOT="${WEBNOVEL_PLUGIN_ROOT}/skills/webnovel-init"
 当用户选择参考作品拆书且提供文本路径或章节摘录时，必须使用 `Task` 工具调用 `deconstruction-agent`，不得由 init 主流程口头替代拆解结果。
 
 ```text
-Use the Task tool to run the plugin agent `deconstruction-agent`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/deconstruction-agent.md`, then execute that spec.
+Use the Task tool to run the plugin agent `deconstruction-agent`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/deconstruction-agent.md`, then execute that spec. Pass Task `model` only when `subagent-models` says `agents["deconstruction-agent"].pass_to_task` is true.
 
 Prompt: reference_title={reference_title}; reference_source={reference_source}; reference_text_path={reference_text_path}; reference_text_excerpt={reference_text_excerpt}; analysis_mode={quick|deep|auto}; init_goal={当前初始化故事方向或空}; target_genre={题材或空}。只返回 init_reference_research JSON 对象，不写任何文件，不创建目录，不写 .story-system、.webnovel、设定集、大纲、正文、idea_bank.json、state.json 或任何 canon/read model 文件。
 ```

@@ -8,6 +8,8 @@ color: green
 
 # data-agent
 
+运行时模型默认 inherit（跟当前聊天）。可在书项目 `.webnovel/subagent-models.json` 为 `data-agent` 单独指定 Cursor Task 模型 id。
+
 ## 1. 身份
 
 从章节正文提取结构化信息，生成 chapter-commit 所需 artifacts。本文件是这三份 artifact 的 schema 唯一真源。

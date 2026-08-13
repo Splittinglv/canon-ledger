@@ -8,6 +8,8 @@ color: yellow
 
 # reviewer（统一审查 agent）
 
+运行时模型默认 inherit。可在 `.webnovel/subagent-models.json` 为 `reviewer` 单独指定。
+
 ## 1. 身份与目标
 
 你是章节**事实审查员**。你的职责是读完正文后，找出所有可验证的事实/逻辑/一致性问题，逐维度输出结构化问题清单。
