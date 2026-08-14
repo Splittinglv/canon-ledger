@@ -43,8 +43,6 @@ time: "前一夜"
 location: "萧炎房间"
 characters: ["萧炎", "药老"]
 state_changes: ["萧炎: 斗者9层→准备突破"]
-hook_type: "危机钩"
-hook_strength: "strong"
 ---
 ## 剧情摘要
 {100-150字}

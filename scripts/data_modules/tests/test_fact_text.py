@@ -47,6 +47,9 @@ def test_setting_canon_keeps_legitimate_chinese_and_skips_craft(tmp_path):
                 "- 修炼：用三年时间炼成金丹。",
                 "- 视角：主角以限知视角经历宗门大比。",
                 "- 本书题材是仙侠修真。",
+                "- 潮汐：北境战争节奏由月相决定。",
+                "- 禁地：常年笼罩死寂氛围。",
+                "- 血契：契约反转会反噬立约者。",
                 "- 硬约束：每章必须展示一次潮汐变化。",
                 "- 核心卖点：用冷峻短句制造悬念。",
             ]
@@ -59,6 +62,9 @@ def test_setting_canon_keeps_legitimate_chinese_and_skips_craft(tmp_path):
     assert "用三年时间炼成金丹。" in values
     assert "主角以限知视角经历宗门大比。" in values
     assert "本书题材是仙侠修真。" in values
+    assert "北境战争节奏由月相决定。" in values
+    assert "常年笼罩死寂氛围。" in values
+    assert "契约反转会反噬立约者。" in values
     assert "每章必须展示一次潮汐变化。" not in values
     assert "用冷峻短句制造悬念。" not in values
     assert "冷峻短句，减少修饰。" not in values

@@ -462,12 +462,9 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
                     c.word_count,
                     c.characters,
                     c.summary,
-                    rp.hook_type,
-                    rp.hook_strength,
                     rp.is_transition,
                     rp.override_count,
                     rp.debt_balance,
-                    rm.overall_score AS review_score,
                     rm.severity_counts
                 FROM selected_chapters c
                 LEFT JOIN chapter_reading_power rp ON rp.chapter = c.chapter
@@ -477,11 +474,9 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
                 (limit, offset),
             )
 
-        hook_strength_value = {"weak": 1, "medium": 3, "strong": 5}
         items = []
         for row in rows:
             chapter = int(row.get("chapter") or 0)
-            hook_strength = str(row.get("hook_strength") or "").strip().lower()
             items.append(
                 {
                     "chapter": chapter,
@@ -490,11 +485,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
                     "word_count": int(row.get("word_count") or 0),
                     "characters": _parse_json_value(row.get("characters"), []),
                     "summary": row.get("summary") or "",
-                    "review_score": row.get("review_score"),
                     "review_severity_counts": _parse_json_value(row.get("severity_counts"), {}),
-                    "hook_type": row.get("hook_type") or "",
-                    "hook_strength": hook_strength,
-                    "hook_strength_value": hook_strength_value.get(hook_strength, 0),
                     "is_transition": bool(row.get("is_transition")),
                     "override_count": int(row.get("override_count") or 0),
                     "debt_balance": float(row.get("debt_balance") or 0.0),

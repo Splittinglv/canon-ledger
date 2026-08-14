@@ -163,7 +163,10 @@ def test_story_system_persist_preserves_complete_outline_directive(
         "- 硬约束：潮汐退去前，雾港城门不得开启。\n"
         "- 修炼：用三年时间炼成金丹。\n"
         "- 视角：主角以限知视角经历宗门大比。\n"
-        "- 本书题材是仙侠修真。\n\n"
+        "- 本书题材是仙侠修真。\n"
+        "- 潮汐：北境战争节奏由月相决定。\n"
+        "- 禁地：常年笼罩死寂氛围。\n"
+        "- 血契：契约反转会反噬立约者。\n\n"
         "## 反馈节奏\n"
         "- 关键反馈节点：每章必须展示一次潮汐变化。\n\n"
         "## 镜像对抗\n"
@@ -269,6 +272,9 @@ def test_story_system_persist_preserves_complete_outline_directive(
     assert "用三年时间炼成金丹。" in setting_values
     assert "主角以限知视角经历宗门大比。" in setting_values
     assert "本书题材是仙侠修真。" in setting_values
+    assert "北境战争节奏由月相决定。" in setting_values
+    assert "常年笼罩死寂氛围。" in setting_values
+    assert "契约反转会反噬立约者。" in setting_values
     assert "每章必须展示一次潮汐变化。" not in setting_values
     assert "每章结尾安排一次反转。" not in setting_values
     assert "用冷峻短句制造悬念。" not in setting_values

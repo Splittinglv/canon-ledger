@@ -8,7 +8,7 @@
 
 ## 直接 Read 的 md/template
 
-> 「读取方式」：**区段** = 先 `Grep` 匹配 `^#{1,4} ` 定位真实标题锚点行号，再 `Read` offset/limit 取段（七个靶心大文件，锚点见末列）；**全文** = 短文件整体读。锚点用文件里的真实标题原文（含中文顿号「、」），不是计划简写。靶心文件与锚点出处见 `docs/architecture/phase0-slimming-and-read-audit-2026-06-06.md` §A.1。
+> 「读取方式」：**区段** = 先 `Grep` 匹配 `^#{1,4} ` 定位真实标题锚点行号，再 `Read` offset/limit 取段；**全文** = 短文件整体读。锚点用文件里的真实标题原文（含中文顿号「、」），不是计划简写。
 
 | Skill | 阶段 | 触发 | Reference | 读取方式 | 区段锚点（区段读时匹配此真实标题） |
 |-------|------|------|-----------|---------|-----------|
@@ -22,7 +22,6 @@
 | canon-ledger-plan | Step 4 | always | `templates/output/大纲-卷节拍表.md` | 全文 | — |
 | canon-ledger-plan | Step 5 | always | `templates/output/大纲-卷时间线.md` | 全文 | — |
 | canon-ledger-plan | 章纲拆分 | always | `references/outlining/plot-signal-vs-spoiler.md` | 全文 | — |
-| canon-ledger-plan | Step 6/7 | 需要冲突设计 | `skills/canon-ledger-plan/references/outlining/conflict-design.md` | 区段 | 对应冲突类型小节 |
 | canon-ledger-write | Step 2 | 仅当作者已手写 | `设定集/文风提示词.md`（书项目内，非插件 reference） | 全文 | 只取「作者提示词」正文 |
 | canon-ledger-review | Step 2 | always | `references/review-schema.md` | 全文 | — |
 | canon-ledger-review | Step 6 | blocking issue 需用户决策 | `references/review/blocking-override-guidelines.md` | 全文 | — |
@@ -73,4 +72,5 @@
 | 文件 | 现状 |
 |------|------|
 | 原 `optional/canon-ledger-craft/` 下写法/追读力/Anti-AI/润色 md | 已从插件删除；部分条目仍在 CSV `场景写法` / `写作技法` / `桥段套路` / `爽点与节奏`，默认写章不加载 |
+| `skills/canon-ledger-plan/references/outlining/conflict-design.md` | 文件仍在，但 plan skill 明确不加载冲突设计教程 |
 | `skills/canon-ledger-review/references/common-mistakes.md` | 未在当前 review 流程中直接加载 |

@@ -405,9 +405,11 @@ def test_dashboard_chapter_trend_endpoint_returns_recent_window(monkeypatch, tmp
     assert payload["total"] == 3
     assert payload["latest_chapter"] == 3
     assert [item["chapter"] for item in payload["items"]] == [2, 3]
-    assert payload["items"][0]["review_score"] == 83
-    assert payload["items"][0]["hook_strength"] == "medium"
-    assert payload["items"][0]["hook_strength_value"] == 3
+    assert "hook_strength" not in payload["items"][0]
+    assert "hook_strength_value" not in payload["items"][0]
+    assert "hook_type" not in payload["items"][0]
+    assert "review_score" not in payload["items"][0]
+    assert payload["items"][0]["review_severity_counts"] == {"medium": 1}
     assert payload["items"][0]["strand"] == "fire"
     assert payload["items"][0]["volume"] == 1
     assert payload["items"][1]["volume"] == 2

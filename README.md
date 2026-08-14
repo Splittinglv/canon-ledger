@@ -1,7 +1,7 @@
 # 叙典 CanonLedger
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-7.0.1-brightgreen.svg)](.cursor-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-7.0.2-brightgreen.svg)](.cursor-plugin/plugin.json)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 
 记住故事事实，不替你决定文风。
@@ -245,7 +245,8 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" --project-root "<PROJECT
 
 | 版本 | 说明 |
 |------|------|
-| **v7.0.1 (当前)** | 仓库更名为 Splittinglv/canon-ledger，并明确生成式 AI 辅助开发说明。 |
+| **v7.0.2 (当前)** | 收口残留的写法口径，保住含节奏/氛围/反转的设定事实。 |
+| **v7.0.1** | 仓库更名为 Splittinglv/canon-ledger，并明确生成式 AI 辅助开发说明。 |
 | **v7.0.0** | 更名为叙典 CanonLedger，启用独立命令、运行目录与产品身份。 |
 | **v6.2.2** | 长期一致性真源可重建、设定写回可验证；文风仍由作者或模型决定。 |
 | **v6.2.1** | 上游引擎 v6.2.1 的 Cursor 本地插件。只守事实一致性；文风只读 `设定集/文风提示词.md` 或按模型默认写。未上架官方商店。 |

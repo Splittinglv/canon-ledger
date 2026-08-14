@@ -269,6 +269,16 @@ def test_query_skill_describes_current_contracts():
     assert "forbidden_zones" in text
 
 
+def test_reference_loading_map_matches_current_skills():
+    """加载表不得把 plan 写成会读冲突设计教程，也不得指向已删除的 architecture 文档。"""
+    text = _read_text(REFERENCES_DIR / "index" / "reference-loading-map.md")
+    plan_text = _read_text(SKILLS_DIR / "canon-ledger-plan" / "SKILL.md")
+    assert "不加载冲突设计" in plan_text
+    assert "需要冲突设计" not in text
+    assert "docs/architecture" not in text
+    assert "phase0-slimming" not in text
+
+
 def test_reviewer_consumes_chapter_contract_obligations():
     reviewer_text = _read_text(AGENTS_DIR / "reviewer.md")
     write_text = _read_text(SKILLS_DIR / "canon-ledger-write" / "SKILL.md")
@@ -661,6 +671,8 @@ def test_data_agent_is_described_as_extraction_only_not_direct_write_mainline():
     assert "event_id" in text
     assert "event_type" in text
     assert "subject" in text
+    assert "hook_type" not in text
+    assert "hook_strength" not in text
     assert "直接写入 index.db 和 state.json" not in text
     for forbidden in (
         "RAG 向量索引",
