@@ -144,7 +144,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" cha
 ```text
 Use the Task tool to run the plugin agent `reviewer`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/reviewer.md`, then execute that spec. Pass Task `model` only when `subagent-models` says `agents["reviewer"].pass_to_task` is true.
 
-Prompt: chapter={chapter_num}; chapter_file={chapter_file}; chapter_binding_file=${PROJECT_ROOT}/.webnovel/tmp/chapter_binding.json; project_root=${PROJECT_ROOT}; scripts_dir=${SCRIPTS_DIR}。读取 binding 后将完整对象原样放入输出 JSON 顶层 `chapter_binding`；严格输出 reviewer schema JSON，不评分，不口头总结。
+Prompt: chapter={chapter_num}; chapter_file={chapter_file}; chapter_contract_file=${PROJECT_ROOT}/.story-system/chapters/chapter_{NNN}.json; review_contract_file=${PROJECT_ROOT}/.story-system/reviews/chapter_{NNN}.review.json; chapter_binding_file=${PROJECT_ROOT}/.webnovel/tmp/chapter_binding.json; project_root=${PROJECT_ROOT}; scripts_dir=${SCRIPTS_DIR}。先逐项核对章合同 must-cover 节点与 forbidden zones；读取 binding 后将完整对象原样放入输出 JSON 顶层 `chapter_binding`；严格输出 reviewer schema JSON，不评分，不口头总结。
 ```
 
 reviewer 返回后，主流程把严格 JSON 写入 `${PROJECT_ROOT}/.webnovel/tmp/review_results.json`（reviewer 不持 Write，是这份 artifact 的非写入方）。`review-pipeline` 必须把同一路径覆盖为标准 review_result artifact（含 `blocking_count`）。

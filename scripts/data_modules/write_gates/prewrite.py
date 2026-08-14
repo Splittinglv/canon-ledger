@@ -13,6 +13,7 @@ from ..project_phase import (
     resolve_project_phase,
 )
 from ..story_runtime_sources import load_runtime_sources
+from ..outline_fulfillment import merged_planned_nodes
 from . import gate_report, issue
 
 
@@ -27,14 +28,15 @@ def _plot_structure(chapter_contract: dict[str, Any], review_contract: dict[str,
     directive = chapter_contract.get("chapter_directive") if isinstance(chapter_contract, dict) else {}
     if not isinstance(directive, dict):
         directive = {}
-    return {
-        "mandatory_nodes": list(
-            directive.get("must_cover_nodes")
-            or directive.get("mandatory_nodes")
-            or review_contract.get("must_cover_nodes")
+    planned_nodes = merged_planned_nodes(directive)
+    if not planned_nodes:
+        planned_nodes = list(
+            review_contract.get("must_cover_nodes")
             or review_contract.get("mandatory_nodes")
             or []
-        ),
+        )
+    return {
+        "mandatory_nodes": planned_nodes,
         "prohibitions": list(
             directive.get("forbidden_zones")
             or directive.get("prohibitions")

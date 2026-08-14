@@ -48,7 +48,7 @@ load-context 已含（不要重复查）：`story_contracts`（MASTER/volume/cha
 
 ## 3. 执行流程
 
-1. `load-context --chapter {NNNN}` 取基础包；`Read` 章纲原文（load-context 的 outline 可能截断）。
+1. `load-context --chapter {NNNN}` 取基础包；先完整读取 `story_contracts.chapter.chapter_directive` 的全部字段，包括目标、阻力、代价、时间、跨章时间差、本章变化、核心冲突、视角、关键实体、Strand、反派层级、CBN/CPNs/CEN、必须节点、禁区、未闭合问题与钩子，再按需 `Read` 章纲原文（load-context 的 outline 可能截断，但结构化 directive 不得因此遗漏）。
 2. 确定卷号：优先 runtime contracts / latest commit；必要时兼容读取 `state.json` 投影。
 3. 先检查顶层 `completeness`，再逐条核对 `hard_constraints`：世界规则不得违反；所有未闭合伏笔和读者承诺必须保留其未完成状态；所有 active 关系必须进入相关人物的事实边界。某类当前为零是合法状态；只有 source error、结构损坏、`omitted_hard_ids` 非空或声明 overflow/blocker 时才返回 blocker。
 4. 按需深查：配角 → `query-entity`；规则 → `query-rules`；伏笔/承诺 ID → `get-obligations`；时间跨度 → `get-timeline` 或读时间线文件。补查用于解释硬项，不得用查询的前 N 条替换完整集合。时间规则：跨夜须过渡、倒计时不跳跃、不回跳。

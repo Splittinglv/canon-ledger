@@ -23,6 +23,7 @@ from typing import Any
 
 from .commit_artifacts import retrieval_source_marker
 from .chapter_content_binding import verify_commit_content_binding
+from .consistency_context import sanitize_chapter_directive_text
 from .config import DataModulesConfig
 from .fact_text import sanitize_fact_text
 
@@ -62,7 +63,7 @@ def chapter_goal_from_contract(chapter_contract: Mapping[str, Any] | None) -> st
     raw_goal = _normalize_outline_text(
         str(directive.get("goal") or override_allowed.get("chapter_focus") or "")
     )
-    return sanitize_fact_text(raw_goal, max_chars=600)
+    return sanitize_chapter_directive_text(raw_goal)
 
 
 def build_rag_query(

@@ -91,6 +91,134 @@ def test_story_system_persist_writes_master_chapter_and_anti_patterns(tmp_path, 
     assert payload["base_context"] == []
 
 
+def test_story_system_persist_preserves_complete_outline_directive(
+    tmp_path, monkeypatch, capsys
+):
+    project_root = tmp_path / "book"
+    (project_root / ".webnovel").mkdir(parents=True)
+    (project_root / ".webnovel" / "state.json").write_text(
+        json.dumps(
+            {
+                "progress": {
+                    "current_chapter": 2,
+                    "volumes_planned": [
+                        {"volume": 1, "chapters_range": "1-50"}
+                    ],
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    outline_dir = project_root / "大纲"
+    outline_dir.mkdir()
+    (outline_dir / "第3章-红铜账簿.md").write_text(
+        "\n".join(
+            [
+                "### 第三章：红铜账簿",
+                "- 目标：让林川在子时前拿到账簿",
+                "- 阻力：账房已经封门",
+                "- 代价：暴露林川会辨认封蜡",
+                "- 时间锚点：大历三年九月十七日亥时",
+                "- 章内时间跨度：两个时辰",
+                "- 与上章间隔：紧接上章",
+                "- 倒计时状态：距秘密处决一个时辰",
+                "- 本章变化：林川确认账簿封蜡被替换",
+                "- 核心冲突：保住同伴与查清真相不可兼得",
+                "- 视角：林川限知",
+                "- Strand：账簿调查",
+                "- 反派层级：小反派",
+                "- 关键实体：林川、红铜账簿、王家库房",
+                "- CBN：林川在亥时收到假账簿",
+                "- CPNs：核对封蜡；追查送信人",
+                "- CEN：林川确认内鬼来自账房",
+                "- 必须覆盖节点：识别封蜡缺口；记下账房暗号",
+                "- 本章禁区：不要提前揭露掌柜身份",
+                "- 章末未闭合问题：真正的账簿藏在哪里？",
+                "- 钩子：账簿夹层露出第二枚官印",
+                "- 钩子类型：信息钩",
+                "- 钩子强度：中",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    csv_dir = tmp_path / "csv"
+    csv_dir.mkdir()
+
+    from story_system import main
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "story_system",
+            "让林川在子时前拿到账簿",
+            "--genre",
+            "悬疑",
+            "--project-root",
+            str(project_root),
+            "--chapter",
+            "3",
+            "--persist",
+            "--emit-runtime-contracts",
+            "--csv-dir",
+            str(csv_dir),
+            "--format",
+            "json",
+        ],
+    )
+    main()
+
+    stdout_payload = json.loads(capsys.readouterr().out)
+    expected = stdout_payload["chapter_brief"]["chapter_directive"]
+    chapter_path = (
+        project_root / ".story-system" / "chapters" / "chapter_003.json"
+    )
+    persisted = json.loads(chapter_path.read_text(encoding="utf-8"))
+    review = json.loads(
+        (
+            project_root
+            / ".story-system"
+            / "reviews"
+            / "chapter_003.review.json"
+        ).read_text(encoding="utf-8")
+    )
+    markdown = chapter_path.with_suffix(".md").read_text(encoding="utf-8")
+
+    assert persisted["chapter_directive"] == expected
+    assert persisted["chapter_directive"]["goal"] == "让林川在子时前拿到账簿"
+    assert persisted["chapter_directive"]["previous_chapter_gap"] == "紧接上章"
+    assert (
+        persisted["chapter_directive"]["chapter_change"]
+        == "林川确认账簿封蜡被替换"
+    )
+    assert (
+        persisted["chapter_directive"]["core_conflict"]
+        == "保住同伴与查清真相不可兼得"
+    )
+    assert persisted["chapter_directive"]["viewpoint"] == "林川限知"
+    assert persisted["chapter_directive"]["cpns"] == ["核对封蜡", "追查送信人"]
+    assert persisted["chapter_directive"]["must_cover_nodes"] == [
+        "识别封蜡缺口",
+        "记下账房暗号",
+    ]
+    assert persisted["chapter_directive"]["forbidden_zones"] == [
+        "不要提前揭露掌柜身份"
+    ]
+    assert (
+        persisted["chapter_directive"]["chapter_end_open_question"]
+        == "真正的账簿藏在哪里？"
+    )
+    assert (
+        persisted["chapter_directive"]["hook"]
+        == "账簿夹层露出第二枚官印"
+    )
+    assert persisted["override_allowed"]["chapter_focus"] == expected["goal"]
+    assert review["must_check"] == ["识别封蜡缺口", "记下账房暗号"]
+    assert review["blocking_rules"] == ["不要提前揭露掌柜身份"]
+    assert "章节焦点：让林川在子时前拿到账簿" in markdown
+
+
 def test_markdown_writer_preserves_manual_notes_outside_markers(tmp_path):
     from data_modules.story_contracts import write_marked_markdown
 

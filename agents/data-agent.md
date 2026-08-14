@@ -28,7 +28,7 @@ chapter-commit 由写章主流程运行，data-agent 不在此执行（见 §5 �
 
 ## 3. 流程
 
-**A 加载**：project_root 由调用方传入（已过 preflight），Read 正文 + 查实体索引和别名；调用 `memory-contract get-obligations` 取得当前可闭合伏笔/承诺的稳定 ID。
+**A 加载**：project_root 由调用方传入（已过 preflight），Read 正文和 `chapter_contract_file` + 查实体索引和别名；调用 `memory-contract get-obligations` 取得当前可闭合伏笔/承诺的稳定 ID。将章合同 `chapter_directive.must_cover_nodes` 按原顺序复制，再追加旧字段 `mandatory_nodes` 中尚未出现的节点，合并结果完整写为 `planned_nodes`；两个字段都不存在时才使用空数组。
 
 **B 提取与消歧**：同一轮完成，不额外调 LLM。置信度>0.8 自动采用，0.5-0.8 采用+warning，<0.5 标记待人工。
 
@@ -59,7 +59,7 @@ hook_strength: "strong"
 ## 4. 输入
 
 ```json
-{"chapter": 100, "chapter_file": "正文/第0100章-标题.md", "chapter_binding_file": ".webnovel/tmp/chapter_binding.json", "project_root": "D:/wk/斗破苍穹"}
+{"chapter": 100, "chapter_file": "正文/第0100章-标题.md", "chapter_contract_file": ".story-system/chapters/chapter_100.json", "chapter_binding_file": ".webnovel/tmp/chapter_binding.json", "project_root": "D:/wk/斗破苍穹"}
 ```
 
 ## 5. 边界
@@ -70,14 +70,14 @@ hook_strength: "strong"
 
 ## 6. 校验清单
 
-实体识别完整、三份 artifact 已生成且 schema 合格、`summary_text` 已填写、`scenes` 已作为 artifact 字段填写；所有长期记忆文本均为事实陈述且不含创作指令。
+实体识别完整、三份 artifact 已生成且 schema 合格、`summary_text` 已填写、`scenes` 已作为 artifact 字段填写；`planned_nodes` 必须与章合同权威节点完全一致，每个计划节点必须且只能进入 `covered_nodes` 或 `missed_nodes`，正文出现但章纲未要求的节点只进 `extra_nodes`；所有长期记忆文本均为事实陈述且不含创作指令。
 
 ## 7. 输出 schema（唯一真源）
 
 三份 artifact 的顶层结构如下。投影器只认规范字段名，必须严格遵守。
 
 - 三份 artifact 都必须有顶层 `chapter_binding`，且与 `chapter_binding_file` 字节级对应的对象完全一致。
-- `fulfillment_result.json` 顶层：`chapter_binding` + 四个数组 `planned_nodes`、`covered_nodes`、`missed_nodes`、`extra_nodes`。
+- `fulfillment_result.json` 顶层：`chapter_binding` + 四个数组 `planned_nodes`、`covered_nodes`、`missed_nodes`、`extra_nodes`。`planned_nodes` 必须逐项、按顺序等于章合同中的权威 must-cover 列表；`covered_nodes` 与 `missed_nodes` 必须无重叠地完整划分它，禁止用空列表跳过章纲节点。
 - `disambiguation_result.json` 顶层：`chapter_binding` + `pending` 数组。
 - `extraction_result.json` 顶层（**直接放这些键，禁止包在外层对象里**）：`chapter_binding`、`accepted_events`、`state_deltas`、`entity_deltas`、`entities_appeared`、`scenes`、`timeline_events`、`summary_text`；可选 `dominant_strand`、`entities_new`。
 

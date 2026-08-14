@@ -352,6 +352,76 @@ class TestLoadContext:
         assert pack.sections["runtime_status"]["primary_write_source"] == "chapter_commit"
         assert pack.sections["latest_commit"]["meta"]["status"] == "accepted"
 
+    def test_load_context_keeps_chapter_directive_when_soft_outline_is_omitted(
+        self, tmp_path, monkeypatch
+    ):
+        cfg = _make_project(tmp_path)
+        outline_dir = tmp_path / "大纲"
+        outline_dir.mkdir()
+        (outline_dir / "第7章-账簿.md").write_text(
+            "### 第七章：账簿\n" + ("这是一段仅用于挤占软预算的补充说明。" * 300),
+            encoding="utf-8",
+        )
+        directive = {
+            "goal": "让林川在子时前拿到账簿",
+            "obstacles": "账房已经封门",
+            "cost": "暴露林川会辨认封蜡",
+            "time_anchor": "大历三年九月十七日亥时",
+            "chapter_span": "两个时辰",
+            "previous_chapter_gap": "紧接上章",
+            "countdown": "距秘密处决一个时辰",
+            "chapter_change": "林川确认账簿封蜡被替换",
+            "core_conflict": "保住同伴与查清真相不可兼得",
+            "viewpoint": "林川限知",
+            "strand": "账簿调查",
+            "antagonist_tier": "小反派",
+            "key_entities": ["林川", "红铜账簿", "王家库房"],
+            "cbn": "林川在亥时收到假账簿",
+            "cpns": ["核对封蜡", "追查送信人"],
+            "cen": "林川确认内鬼来自账房",
+            "must_cover_nodes": ["识别封蜡缺口", "记下账房暗号"],
+            "forbidden_zones": ["不要提前揭露掌柜身份"],
+            "chapter_end_open_question": "真正的账簿藏在哪里？",
+            "hook": "账簿夹层露出第二枚官印",
+            "hook_type": "信息钩",
+            "hook_strength": "中",
+            "source": "chapter_outline",
+        }
+        runtime = SimpleNamespace(
+            chapter=7,
+            contracts={
+                "chapter": {
+                    "meta": {"contract_type": "CHAPTER_BRIEF", "chapter": 7},
+                    "chapter_directive": directive,
+                    "override_allowed": {"chapter_focus": directive["goal"]},
+                }
+            },
+            fallback_sources=[],
+            primary_write_source="chapter_commit",
+            latest_commit=None,
+            latest_accepted_commit=None,
+        )
+        monkeypatch.setitem(
+            MemoryContractAdapter.load_context.__globals__,
+            "load_runtime_sources",
+            lambda *_args: runtime,
+        )
+
+        roomy = MemoryContractAdapter(cfg).load_context(7, budget_tokens=20_000)
+        target_budget = int(roomy.budget["mandatory_tokens"]) + 64
+        pack = MemoryContractAdapter(cfg).load_context(
+            7, budget_tokens=target_budget
+        )
+
+        assert pack.budget["hard_over_budget"] is False
+        assert pack.completeness["status"] == "complete"
+        assert "outline" not in pack.sections
+        assert "outline" in pack.budget["omitted_soft_sections"]
+        assert (
+            pack.sections["story_contracts"]["chapter"]["chapter_directive"]
+            == directive
+        )
+
     def test_load_context_genre_profile_fallback_reads_project_info(self, tmp_path):
         cfg = _make_project(tmp_path)
         (cfg.webnovel_dir / "state.json").write_text(

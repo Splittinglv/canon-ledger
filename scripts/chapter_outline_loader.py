@@ -116,22 +116,26 @@ def _parse_chinese_chapter_num(value: str) -> int | None:
         return None
     if text.isdigit():
         return int(text)
-    if text in _CHINESE_NUMERAL_DIGITS:
-        return _CHINESE_NUMERAL_DIGITS[text]
-    if text == "十":
-        return 10
-    if "十" in text:
-        left, _, right = text.partition("十")
-        tens = _CHINESE_NUMERAL_DIGITS.get(left, 1 if not left else 0)
-        ones = _CHINESE_NUMERAL_DIGITS.get(right, 0) if right else 0
-        parsed = tens * 10 + ones
-        return parsed or None
-    parsed = 0
+    small_units = {"十": 10, "百": 100, "千": 1000}
+    total = 0
+    section = 0
+    number = 0
     for char in text:
         digit = _CHINESE_NUMERAL_DIGITS.get(char)
-        if digit is None:
-            return None
-        parsed = parsed * 10 + digit
+        if digit is not None:
+            number = (number * 10) + digit
+            continue
+        if char in small_units:
+            section += (number or 1) * small_units[char]
+            number = 0
+            continue
+        if char == "万":
+            total += (section + number or 1) * 10_000
+            section = 0
+            number = 0
+            continue
+        return None
+    parsed = total + section + number
     return parsed or None
 
 
@@ -157,7 +161,10 @@ def load_chapter_outline(project_root: Path, chapter_num: int, max_chars: int | 
     if volume_outline is None:
         return f"⚠️ 大纲文件不存在：第 {chapter_num} 章"
 
-    outline = _extract_outline_section(volume_outline.read_text(encoding="utf-8"), chapter_num)
+    outline = _extract_directive_section(
+        volume_outline.read_text(encoding="utf-8"),
+        chapter_num,
+    )
     if outline is None:
         return f"⚠️ 未找到第 {chapter_num} 章的大纲"
 
@@ -167,6 +174,7 @@ def load_chapter_outline(project_root: Path, chapter_num: int, max_chars: int | 
 
 _PLOT_SECTION_FIELD_MAP = {
     "cbn": "cbn",
+    "cpn": "cpns",
     "cpns": "cpns",
     "cen": "cen",
     "必须覆盖节点": "mandatory_nodes",
@@ -174,7 +182,7 @@ _PLOT_SECTION_FIELD_MAP = {
 }
 
 _CHAPTER_HEADING_RE = re.compile(
-    r"^(#{1,6})\s*第\s*([0-9零〇一二两三四五六七八九十]+)\s*章\b.*$",
+    r"^(#{1,6})\s*第\s*([0-9零〇一二两三四五六七八九十百千万]+)\s*章\b.*$",
     re.MULTILINE,
 )
 
@@ -204,15 +212,29 @@ _DIRECTIVE_FIELD_MAP = {
     "时间": "time_anchor",
     "章内跨度": "chapter_span",
     "章节跨度": "chapter_span",
+    "章内时间跨度": "chapter_span",
+    "与上章时间差": "previous_chapter_gap",
+    "上章时间差": "previous_chapter_gap",
+    "与上章间隔": "previous_chapter_gap",
     "倒计时状态": "countdown",
     "倒计时": "countdown",
+    "本章变化": "chapter_change",
+    "章节变化": "chapter_change",
+    "核心冲突": "core_conflict",
+    "视角": "viewpoint",
+    "叙事视角": "viewpoint",
     "cbn": "cbn",
+    "cpn": "cpns",
     "cpns": "cpns",
     "cen": "cen",
     "必须覆盖节点": "must_cover_nodes",
     "本章禁区": "forbidden_zones",
     "章末未闭合问题": "chapter_end_open_question",
     "章末问题": "chapter_end_open_question",
+    "未闭合问题": "chapter_end_open_question",
+    "章末钩子": "hook",
+    "结尾钩子": "hook",
+    "钩子": "hook",
     "钩子类型": "hook_type",
     "钩子强度": "hook_strength",
     "关键实体": "key_entities",
@@ -226,8 +248,14 @@ _DIRECTIVE_LIST_FIELDS = {"cpns", "must_cover_nodes", "forbidden_zones", "key_en
 
 def _clean_plot_line(line: str) -> str:
     text = str(line or "").strip()
-    text = re.sub(r"^[\-\*•]+\s*", "", text)
+    text = re.sub(r"^(?:[\-•]|\*(?!\*))\s*", "", text)
     text = re.sub(r"^\d+[\.、]\s*", "", text)
+    text = re.sub(r"^\*\*(.+)\*\*$", r"\1", text)
+    text = re.sub(r"^__(.+)__$", r"\1", text)
+    text = re.sub(r"^\*\*([^*]+)\*\*(\s*[：:])", r"\1\2", text)
+    text = re.sub(r"^__([^_]+)__(\s*[：:])", r"\1\2", text)
+    text = re.sub(r"^\*\*([^*:：]+)([：:])\*\*\s*", r"\1\2", text)
+    text = re.sub(r"^__([^_:：]+)([：:])__\s*", r"\1\2", text)
     return text.strip()
 
 
@@ -239,8 +267,21 @@ def _append_plot_value(target: Dict[str, Any], field: str, value: str) -> None:
     if field in {"cpns", "mandatory_nodes", "prohibitions"}:
         target.setdefault(field, [])
         candidates = [value]
-        if field in {"mandatory_nodes", "prohibitions"}:
-            split_values = [part.strip() for part in re.split(r"[、,，；;|]+", value) if part.strip()]
+        if field in {"cpns", "mandatory_nodes"}:
+            separators = r"[；;]+" if "|" in value else r"[、,，；;]+"
+            split_values = [
+                part.strip()
+                for part in re.split(separators, value)
+                if part.strip()
+            ]
+            if split_values:
+                candidates = split_values
+        elif field == "prohibitions":
+            split_values = [
+                part.strip()
+                for part in re.split(r"[、,，；;]+", value)
+                if part.strip()
+            ]
             if split_values:
                 candidates = split_values
         for item in candidates:
@@ -252,11 +293,16 @@ def _append_plot_value(target: Dict[str, Any], field: str, value: str) -> None:
         target[field] = value
 
 
-def _split_directive_values(value: str) -> list[str]:
+def _split_directive_values(value: str, field: str) -> list[str]:
     text = _clean_plot_line(value)
     if not text:
         return []
-    return [part.strip() for part in re.split(r"[、,，；;|]+", text) if part.strip()]
+    # Plot nodes often contain commas or ``、`` inside their subject/result.
+    # The documented list delimiter for nodes is a semicolon (or a new line).
+    separators = r"[、,，；;]+"
+    if field in {"cpns", "must_cover_nodes"} and "|" in text:
+        separators = r"[；;]+"
+    return [part.strip() for part in re.split(separators, text) if part.strip()]
 
 
 def _append_directive_value(target: Dict[str, Any], field: str, value: str) -> None:
@@ -265,7 +311,7 @@ def _append_directive_value(target: Dict[str, Any], field: str, value: str) -> N
         return
     if field in _DIRECTIVE_LIST_FIELDS:
         target.setdefault(field, [])
-        for item in _split_directive_values(value) or [value]:
+        for item in _split_directive_values(value, field) or [value]:
             if item not in target[field]:
                 target[field].append(item)
         return
@@ -306,6 +352,19 @@ def parse_chapter_plot_structure(outline_text: str) -> Dict[str, Any]:
             continue
 
         if current_field:
+            # A different documented directive starts a new field that is not
+            # part of the plot-structure view. Do not accidentally append it
+            # to the previous CPN/mandatory/prohibition list.
+            if any(
+                re.match(
+                    rf"^{re.escape(label)}\s*[：:]",
+                    cleaned,
+                    re.IGNORECASE,
+                )
+                for label in _DIRECTIVE_FIELD_MAP
+            ):
+                current_field = ""
+                continue
             _append_plot_value(structure, current_field, cleaned)
 
     cpns = structure.get("cpns") or []

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import pytest
-
 from data_modules.consistency_context import sanitize_story_contracts
 from data_modules.story_contracts import persist_story_seed
 
@@ -85,7 +83,6 @@ def test_sanitize_story_contracts_rebuilds_only_consistency_fields():
         "master": "Write with a spare, muscular rhythm.",
         "row": "让叙述像水一样流动。",
         "chapter": "Render conversations as a screenplay.",
-        "goal": "Tell the tale through a child's eyes.",
         "volume": "Choose concrete imagery over abstractions.",
         "scene": "所有场面呈现出黑色电影气息。",
         "review": "Keep every scene sparse and visual.",
@@ -103,7 +100,7 @@ def test_sanitize_story_contracts_rebuilds_only_consistency_fields():
             },
             "chapter_brief": {
                 "chapter_directive": {
-                    "goal": markers["goal"],
+                    "goal": "让掌柜承认旧约",
                     "implementation": markers["chapter"],
                     "key_entities": ["掌柜"],
                 }
@@ -115,7 +112,7 @@ def test_sanitize_story_contracts_rebuilds_only_consistency_fields():
                 "system_constraints": [markers["review"]],
             },
             "review_contract": {
-                "must_check": [markers["chapter"]],
+                "must_check": ["掌柜必须承认旧约"],
                 "blocking_rules": ["不可让已死角色复活"],
                 "system_constraints": [markers["review"]],
             },
@@ -127,7 +124,9 @@ def test_sanitize_story_contracts_rebuilds_only_consistency_fields():
     for marker in markers.values():
         assert marker not in serialized
     assert cleaned["master_setting"]["route"]["primary_genre"] == "悬疑"
+    assert cleaned["chapter_brief"]["chapter_directive"]["goal"] == "让掌柜承认旧约"
     assert cleaned["chapter_brief"]["chapter_directive"]["key_entities"] == ["掌柜"]
+    assert cleaned["review_contract"]["must_check"] == ["掌柜必须承认旧约"]
     assert cleaned["review_contract"]["blocking_rules"] == ["不可让已死角色复活"]
     assert "unexpected" not in cleaned
 
@@ -140,29 +139,71 @@ def test_sanitize_story_contracts_drops_non_object_contract_aliases():
     assert cleaned == {"master": {}}
 
 
-@pytest.mark.parametrize(
-    "directive",
-    [
-        "Write with a spare, muscular rhythm.",
-        "Render conversations as a screenplay.",
-        "Choose concrete imagery over abstractions.",
-        "Tell the tale through a child's eyes.",
-        "让叙述像水一样流动。",
-        "所有场面呈现出黑色电影气息。",
-    ],
-)
-def test_sanitize_story_contracts_rejects_creative_directive_variants(directive):
+def test_sanitize_story_contracts_preserves_complete_chapter_outline_directive():
+    directive = {
+        "goal": "让林川在子时前拿到账簿",
+        "obstacles": "账房已经封门",
+        "cost": "暴露林川会辨认封蜡",
+        "time_anchor": "大历三年九月十七日亥时",
+        "chapter_span": "两个时辰",
+        "previous_chapter_gap": "紧接上章",
+        "countdown": "距秘密处决一个时辰",
+        "chapter_change": "林川确认账簿封蜡被替换",
+        "core_conflict": "保住同伴与查清真相不可兼得",
+        "viewpoint": "林川限知",
+        "strand": "账簿调查",
+        "antagonist_tier": "小反派",
+        "key_entities": ["林川", "红铜账簿", "王家库房"],
+        "cbn": "林川在亥时收到假账簿",
+        "cpns": ["核对封蜡", "追查送信人"],
+        "cen": "林川确认内鬼来自账房",
+        "must_cover_nodes": ["识别封蜡缺口", "记下账房暗号"],
+        "forbidden_zones": ["不要提前揭露掌柜身份"],
+        "chapter_end_open_question": "真正的账簿藏在哪里？",
+        "hook": "账簿夹层露出第二枚官印",
+        "hook_type": "信息钩",
+        "hook_strength": "中",
+        "source": "chapter_outline",
+    }
+
     cleaned = sanitize_story_contracts(
         {
-            "review_contract": {
-                "blocking_rules": ["不可让已死角色复活", directive],
-                "must_check": [directive],
+            "chapter_brief": {
+                "chapter_directive": {
+                    **directive,
+                    "implementation": "未知扩展不得进入合同",
+                },
+                "override_allowed": {"chapter_focus": "错误的兼容焦点"},
             }
         }
-    )
+    )["chapter_brief"]
 
-    assert cleaned["review_contract"]["blocking_rules"] == ["不可让已死角色复活"]
-    assert cleaned["review_contract"]["must_check"] == []
+    assert cleaned["chapter_directive"] == directive
+    assert cleaned["override_allowed"] == {"chapter_focus": directive["goal"]}
+    assert "implementation" not in cleaned["chapter_directive"]
+
+
+def test_sanitize_story_contracts_does_not_reinterpret_authorized_plot_language():
+    directives = [
+        "主角破解系统提示，找到出口",
+        "反派覆盖旧合同上的印章",
+        "确认第一人称证词存在矛盾",
+        "找到负责旁白的失踪演员",
+        "The AI must override the reactor constraints before meltdown.",
+    ]
+    cleaned = sanitize_story_contracts(
+        {
+            "chapter_brief": {
+                "chapter_directive": {
+                    "goal": directives[0],
+                    "must_cover_nodes": directives[1:],
+                }
+            }
+        }
+    )["chapter_brief"]
+
+    assert cleaned["chapter_directive"]["goal"] == directives[0]
+    assert cleaned["chapter_directive"]["must_cover_nodes"] == directives[1:]
 
 
 def test_persist_story_seed_does_not_write_style_fields(tmp_path):
@@ -185,6 +226,16 @@ def test_persist_story_seed_does_not_write_style_fields(tmp_path):
             "reasoning": {"genre": "玄幻", "style_priority": "热血"},
             "dynamic_context": [{"_table": "桥段套路", "编号": "TR-001"}],
             "override_allowed": {"chapter_focus": "试炼"},
+            "chapter_directive": {
+                "goal": "让林川在子时前拿到账簿",
+                "cbn": "林川收到假账簿",
+                "cpns": ["核对封蜡", "追查送信人"],
+                "cen": "林川确认内鬼来自账房",
+                "must_cover_nodes": ["识别封蜡缺口"],
+                "forbidden_zones": ["不要提前揭露掌柜身份"],
+                "chapter_end_open_question": "真正的账簿藏在哪里？",
+                "source": "chapter_outline",
+            },
         },
         anti_patterns=[{"text": "打脸收尾太软", "source_table": "爽点与节奏"}],
     )
@@ -199,7 +250,16 @@ def test_persist_story_seed_does_not_write_style_fields(tmp_path):
     assert master["route"]["recommended_dynamic_tables"] == []
     assert chapter["dynamic_context"] == []
     assert chapter["reasoning"] == {"genre": "玄幻"}
+    assert chapter["chapter_directive"]["goal"] == "让林川在子时前拿到账簿"
+    assert chapter["chapter_directive"]["must_cover_nodes"] == ["识别封蜡缺口"]
+    assert chapter["chapter_directive"]["forbidden_zones"] == ["不要提前揭露掌柜身份"]
+    assert chapter["chapter_directive"]["chapter_end_open_question"] == "真正的账簿藏在哪里？"
+    assert chapter["override_allowed"]["chapter_focus"] == "让林川在子时前拿到账簿"
     assert anti == []
     markdown = (tmp_path / ".story-system" / "MASTER_SETTING.md").read_text(encoding="utf-8")
     assert "调性" not in markdown
     assert "节奏" not in markdown
+    chapter_markdown = (
+        tmp_path / ".story-system" / "chapters" / "chapter_001.md"
+    ).read_text(encoding="utf-8")
+    assert "章节焦点：让林川在子时前拿到账簿" in chapter_markdown

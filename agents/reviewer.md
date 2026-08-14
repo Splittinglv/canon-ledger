@@ -36,11 +36,18 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 
 - `chapter`：章节号
 - `chapter_file`：正文文件路径
+- `chapter_contract_file`：本章已净化的章合同；读取 `chapter_directive` 的必须节点与禁区
+- `review_contract_file`：本章已净化的审查合同；读取 `must_check` / `blocking_rules`
 - `chapter_binding`：调用方在审查开始前生成的正文内容绑定；输出时必须原样回传
 - `project_root`：项目根目录
 - `scripts_dir`：脚本目录
 
 ## 4. 执行流程（按顺序执行）
+
+### 0. 加载章纲硬约束
+- 先读取 `chapter_contract_file` 与 `review_contract_file`；缺失、损坏或章号不符时，输出 blocking 的 `setting` issue，禁止把合同不可读当作“没有约束”。
+- 权威必须节点按 `chapter_directive.must_cover_nodes` 顺序，再追加旧字段 `mandatory_nodes` 中未重复项；禁区同理读取 `forbidden_zones` / `prohibitions`。审查合同的 `must_check` / `blocking_rules` 只作补充。
+- 对每个必须节点逐项核对正文：未发生则输出 blocking 的 `continuity` issue。对每个禁区逐项核对：正文违反则输出 blocking 的 `logic` issue。不要把合同里的口吻、句式、文风或写法建议当成约束。
 
 ### 1. 设定一致性（category: setting）
 - 角色能力是否与当前境界匹配
@@ -92,6 +99,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 - [ ] severity 分级合理（critical 仅用于确定的事实矛盾）
 - [ ] category 归类正确
 - [ ] blocking 字段只在 critical 或确认阻断时为 true
+- [ ] 章合同每个 must-cover 节点均有发生/未发生结论，每个 forbidden zone 均已核对
 - [ ] `dimension_results` 覆盖全部 5 个维度（无问题也输出 pass）
 
 ## 7. 输出格式

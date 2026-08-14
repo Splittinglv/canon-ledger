@@ -229,6 +229,23 @@ def test_review_schema_consistency():
     assert "issues_count" in reviewer_text
 
 
+def test_reviewer_consumes_chapter_contract_obligations():
+    reviewer_text = _read_text(AGENTS_DIR / "reviewer.md")
+    write_text = _read_text(SKILLS_DIR / "webnovel-write" / "SKILL.md")
+    review_text = _read_text(SKILLS_DIR / "webnovel-review" / "SKILL.md")
+
+    for marker in (
+        "chapter_contract_file",
+        "review_contract_file",
+        "must_cover_nodes",
+        "forbidden_zones",
+    ):
+        assert marker in reviewer_text
+    for text in (write_text, review_text):
+        assert "chapter_contract_file" in text
+        assert "review_contract_file" in text
+
+
 # ---------------------------------------------------------------------------
 # 6. 无残留引用（已删文件）
 # ---------------------------------------------------------------------------

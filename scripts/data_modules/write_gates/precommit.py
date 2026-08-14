@@ -12,6 +12,10 @@ except ImportError:  # pragma: no cover
 
 from ..artifact_validator import validate_commit_artifact_files
 from ..chapter_content_binding import verify_chapter_binding
+from ..outline_fulfillment import (
+    fulfillment_node_errors,
+    load_authoritative_planned_nodes,
+)
 from ..project_phase import (
     COMMIT_ARTIFACT_FILES,
     PHASE_INIT_READY,
@@ -159,6 +163,57 @@ def run_precommit_gate(project_root: Path, chapter: int) -> dict:
             )
             if binding_issue is not None:
                 errors.append(binding_issue)
+
+    fulfillment_path = paths["fulfillment_result"]
+    contract_error = ""
+    try:
+        fulfillment_payload = json.loads(
+            fulfillment_path.read_text(encoding="utf-8")
+        )
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        # Missing/malformed artifacts are reported by the authoritative
+        # artifact validator above.
+        node_errors = []
+    else:
+        try:
+            authoritative_nodes = load_authoritative_planned_nodes(
+                project_root,
+                chapter,
+            )
+        except ValueError as exc:
+            authoritative_nodes = None
+            contract_error = str(exc)
+        node_errors = fulfillment_node_errors(
+            fulfillment_payload,
+            authoritative_nodes,
+        )
+    if contract_error:
+        errors.append(
+            issue(
+                "chapter_contract.must_cover_nodes_invalid",
+                message=f"chapter must-cover nodes are invalid: {contract_error}",
+                path=str(
+                    project_root
+                    / ".story-system"
+                    / "chapters"
+                    / f"chapter_{chapter:03d}.json"
+                ),
+                impact="损坏的章合同可能把必达节点静默降为空列表。",
+                repair="修复 chapter_directive.must_cover_nodes，使其为非空字符串数组后重跑 data-agent。",
+                details={"validation_code": contract_error},
+            )
+        )
+    for code in node_errors:
+        errors.append(
+            issue(
+                f"artifact.{code}",
+                message="fulfillment_result does not match chapter must-cover nodes",
+                path=str(fulfillment_path),
+                impact="章纲必达节点可能被空列表或不完整分类绕过。",
+                repair="重新运行 data-agent，并将章合同 must_cover_nodes 原样复制到 planned_nodes；每项必须归入 covered_nodes 或 missed_nodes。",
+                details={"validation_code": code},
+            )
+        )
 
     return gate_report(
         stage="precommit",

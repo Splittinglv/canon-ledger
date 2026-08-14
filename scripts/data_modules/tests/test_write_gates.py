@@ -94,6 +94,27 @@ def test_prewrite_gate_allows_contract_ready_project_with_warning(tmp_path):
     assert report["details"]["prewrite_validation"]["blocking"] is False
 
 
+def test_prewrite_gate_merges_canonical_and_legacy_must_cover_nodes(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_contracts(tmp_path, chapter=1)
+    _write_json(
+        tmp_path / ".story-system" / "chapters" / "chapter_001.json",
+        {
+            "meta": {"chapter": 1},
+            "chapter_directive": {
+                "must_cover_nodes": ["识别封蜡缺口"],
+                "mandatory_nodes": ["识别封蜡缺口", "记下账房暗号"],
+            },
+        },
+    )
+
+    report = run_write_gate(tmp_path, chapter=1, stage="prewrite")
+
+    assert report["details"]["prewrite_validation"]["fulfillment_seed"][
+        "planned_nodes"
+    ] == ["识别封蜡缺口", "记下账房暗号"]
+
+
 def test_prewrite_gate_wraps_existing_prewrite_validator_blocking(tmp_path):
     _make_init_ready(tmp_path)
     _make_contracts(tmp_path, chapter=1)
@@ -130,6 +151,74 @@ def test_precommit_gate_accepts_valid_artifacts(tmp_path):
 
     assert report["ok"] is True
     assert report["details"]["artifact_report"]["ok"] is True
+
+
+def test_precommit_gate_rejects_empty_fulfillment_for_authoritative_nodes(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_contracts(tmp_path, chapter=1)
+    _write_json(
+        tmp_path / ".story-system" / "chapters" / "chapter_001.json",
+        {
+            "meta": {"chapter": 1},
+            "chapter_directive": {
+                "must_cover_nodes": ["识别封蜡缺口"]
+            },
+        },
+    )
+    (tmp_path / "正文" / "第0001章.md").write_text("正文\n", encoding="utf-8")
+    _write_valid_artifacts(tmp_path)
+
+    report = run_write_gate(tmp_path, chapter=1, stage="precommit")
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "artifact.fulfillment_planned_nodes_mismatch"
+        for item in report["errors"]
+    )
+
+
+def test_precommit_gate_rejects_malformed_authoritative_nodes(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_contracts(tmp_path, chapter=1)
+    _write_json(
+        tmp_path / ".story-system" / "chapters" / "chapter_001.json",
+        {
+            "meta": {"chapter": 1},
+            "chapter_directive": {"must_cover_nodes": "识别封蜡缺口"},
+        },
+    )
+    (tmp_path / "正文" / "第0001章.md").write_text("正文\n", encoding="utf-8")
+    _write_valid_artifacts(tmp_path)
+
+    report = run_write_gate(tmp_path, chapter=1, stage="precommit")
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "chapter_contract.must_cover_nodes_invalid"
+        for item in report["errors"]
+    )
+
+
+def test_precommit_gate_rejects_outline_nodes_dropped_from_contract(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_contracts(tmp_path, chapter=1)
+    (tmp_path / "大纲").mkdir(exist_ok=True)
+    (tmp_path / "大纲" / "第1章-账簿.md").write_text(
+        "### 第一章：账簿\n- 必须覆盖节点：识别封蜡缺口",
+        encoding="utf-8",
+    )
+    (tmp_path / "正文" / "第0001章.md").write_text("正文\n", encoding="utf-8")
+    _write_valid_artifacts(tmp_path)
+
+    report = run_write_gate(tmp_path, chapter=1, stage="precommit")
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "chapter_contract.must_cover_nodes_invalid"
+        and item["details"]["validation_code"]
+        == "chapter_contract_missing_must_cover_nodes"
+        for item in report["errors"]
+    )
 
 
 def test_precommit_gate_rejects_artifacts_after_manuscript_changed(tmp_path):

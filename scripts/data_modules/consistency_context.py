@@ -30,13 +30,48 @@ _ROUTE_FIELDS = frozenset(
         "recommended_dynamic_tables",
     }
 )
-_CHAPTER_DIRECTIVE_FIELDS = frozenset(
+_CHAPTER_DIRECTIVE_TEXT_FIELDS = frozenset(
+    {
+        "goal",
+        "obstacles",
+        "cost",
+        "cbn",
+        "cen",
+        "chapter_end_open_question",
+        "hook",
+        "previous_chapter_gap",
+        "chapter_change",
+        "core_conflict",
+    }
+)
+_CHAPTER_DIRECTIVE_LIST_FIELDS = frozenset(
+    {
+        "cpns",
+        "must_cover_nodes",
+        "forbidden_zones",
+        # Read old contracts without losing the pre-canonical field names.
+        "mandatory_nodes",
+        "prohibitions",
+        "key_entities",
+    }
+)
+_CHAPTER_DIRECTIVE_ATOM_FIELDS = frozenset(
     {
         "time_anchor",
         "chapter_span",
         "countdown",
-        "key_entities",
+        "hook_type",
+        "hook_strength",
+        "strand",
+        "antagonist_tier",
+        "viewpoint",
     }
+)
+_CHAPTER_DIRECTIVE_FIELDS = (
+    _CHAPTER_DIRECTIVE_TEXT_FIELDS
+    | _CHAPTER_DIRECTIVE_LIST_FIELDS
+    | _CHAPTER_DIRECTIVE_ATOM_FIELDS
+    | {"source"}
 )
 _BASE_ROW_FIELDS = frozenset(
     {
@@ -116,21 +151,63 @@ def _safe_fact_list(value: Any) -> List[str]:
     return result
 
 
+def sanitize_chapter_directive_text(value: Any) -> str:
+    """Normalize an author-owned, schema-approved chapter directive.
+
+    The outline is an authorized user/planning-model input, ranked above
+    generated runtime contracts.  A content blacklist cannot distinguish a
+    prompt from legitimate plots such as ``破解系统提示`` or ``覆盖合同印章``.
+    The security and product boundary is therefore the closed field/type
+    schema: plugin-provided craft tables and unknown fields are omitted, while
+    the user's value is never silently rewritten or dropped.
+    """
+    if not isinstance(value, str):
+        return ""
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", value)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _safe_outline_atom(value: Any, *, max_chars: int) -> str:
+    cleaned = sanitize_chapter_directive_text(value)
+    if not cleaned or len(cleaned) > max(1, int(max_chars)):
+        return ""
+    return cleaned
+
+
+def _safe_outline_list(value: Any) -> List[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    items = [
+        cleaned
+        for item in value
+        for cleaned in [sanitize_chapter_directive_text(item)]
+        if cleaned
+    ]
+    return list(dict.fromkeys(items))
+
+
 def _safe_directive_value(key: str, value: Any) -> Any:
-    """Normalize only the documented outline-derived directive shapes."""
-    if key in {"key_entities"}:
+    """Normalize every documented chapter-outline directive shape."""
+    if key == "source":
+        return "chapter_outline" if value == "chapter_outline" else _DROP
+    if key in _CHAPTER_DIRECTIVE_LIST_FIELDS:
         if not isinstance(value, (list, tuple)):
             return _DROP
-        atoms = [
-            atom
-            for item in value
-            for atom in [_safe_atom(item, max_chars=120)]
-            if atom
-        ]
-        return list(dict.fromkeys(atoms))
-    if not isinstance(value, str):
+        if key == "key_entities":
+            atoms = [
+                atom
+                for item in value
+                for atom in [_safe_outline_atom(item, max_chars=160)]
+                if atom
+            ]
+            return list(dict.fromkeys(atoms))
+        return _safe_outline_list(value)
+    if key in _CHAPTER_DIRECTIVE_ATOM_FIELDS:
+        cleaned = _safe_outline_atom(value, max_chars=240)
+        return cleaned if cleaned else _DROP
+    if key not in _CHAPTER_DIRECTIVE_TEXT_FIELDS:
         return _DROP
-    cleaned = _safe_atom(value, max_chars=160)
+    cleaned = sanitize_chapter_directive_text(value)
     return cleaned if cleaned else _DROP
 
 
@@ -296,9 +373,15 @@ def _sanitize_chapter(chapter: Dict[str, Any]) -> Dict[str, Any]:
             if value is not _DROP:
                 directive[key] = value
 
+    focus = str(directive.get("goal") or "").strip()
+    if not focus:
+        raw_override = chapter.get("override_allowed")
+        if isinstance(raw_override, dict):
+            focus = sanitize_chapter_directive_text(raw_override.get("chapter_focus"))
+
     cleaned = {
         "meta": _sanitize_meta(chapter.get("meta")),
-        "override_allowed": {},
+        "override_allowed": ({"chapter_focus": focus} if focus else {}),
         "chapter_directive": directive,
         # Retrieved CSV rows are optional soft craft material and never part of
         # the default long-term-consistency contract.
@@ -324,7 +407,10 @@ def _sanitize_volume(volume: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _sanitize_review(review: Dict[str, Any]) -> Dict[str, Any]:
+def _sanitize_review(
+    review: Dict[str, Any],
+    chapter_directive: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     cleaned: Dict[str, Any] = {
         "meta": _sanitize_meta(review.get("meta")),
         "genre_specific_risks": [],
@@ -341,6 +427,29 @@ def _sanitize_review(review: Dict[str, Any]) -> Dict[str, Any]:
         "prohibitions",
     ):
         cleaned[key] = _safe_fact_list(review.get(key))
+    directive = chapter_directive or {}
+    trusted_nodes = list(
+        dict.fromkeys(
+            [
+                *list(directive.get("must_cover_nodes") or []),
+                *list(directive.get("mandatory_nodes") or []),
+            ]
+        )
+    )
+    trusted_forbidden = list(
+        dict.fromkeys(
+            [
+                *list(directive.get("forbidden_zones") or []),
+                *list(directive.get("prohibitions") or []),
+            ]
+        )
+    )
+    cleaned["must_check"] = list(
+        dict.fromkeys([*trusted_nodes, *cleaned["must_check"]])
+    )
+    cleaned["blocking_rules"] = list(
+        dict.fromkeys([*trusted_forbidden, *cleaned["blocking_rules"]])
+    )
     thresholds: Dict[str, Any] = {}
     raw_thresholds = review.get("review_thresholds")
     if isinstance(raw_thresholds, dict):
@@ -384,7 +493,18 @@ def sanitize_story_contracts(contracts: Dict[str, Any] | None) -> Dict[str, Any]
     _set_aliases(result, payload, "master", "master_setting", _sanitize_master)
     _set_aliases(result, payload, "chapter", "chapter_brief", _sanitize_chapter)
     _set_aliases(result, payload, "volume", "volume_brief", _sanitize_volume)
-    _set_aliases(result, payload, "review", "review_contract", _sanitize_review)
+    chapter = result.get("chapter") or result.get("chapter_brief") or {}
+    directive = chapter.get("chapter_directive") if isinstance(chapter, dict) else {}
+    _set_aliases(
+        result,
+        payload,
+        "review",
+        "review_contract",
+        lambda review: _sanitize_review(
+            review,
+            directive if isinstance(directive, dict) else {},
+        ),
+    )
     if "anti_patterns" in payload:
         result["anti_patterns"] = _sanitize_anti_patterns(payload.get("anti_patterns"))
     return result

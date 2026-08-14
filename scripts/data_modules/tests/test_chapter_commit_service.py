@@ -84,6 +84,77 @@ def test_commit_service_accepts_when_all_checks_pass(tmp_path):
     assert "entity_deltas" not in payload
 
 
+def test_commit_service_rejects_empty_fulfillment_for_authoritative_nodes(tmp_path):
+    contract_path = tmp_path / ".story-system" / "chapters" / "chapter_003.json"
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(
+        json.dumps(
+            {
+                "meta": {"chapter": 3},
+                "chapter_directive": {
+                    "must_cover_nodes": ["识别封蜡缺口"]
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    service = ChapterCommitService(tmp_path)
+
+    with pytest.raises(ValueError, match="fulfillment_planned_nodes_mismatch"):
+        _build_commit(
+            service,
+            tmp_path,
+            chapter=3,
+            review_result={"blocking_count": 0},
+            fulfillment_result={
+                "planned_nodes": [],
+                "covered_nodes": [],
+                "missed_nodes": [],
+                "extra_nodes": [],
+            },
+            disambiguation_result={"pending": []},
+            extraction_result={
+                "state_deltas": [],
+                "entity_deltas": [],
+                "accepted_events": [],
+            },
+        )
+
+
+def test_commit_service_rejects_outline_nodes_missing_from_contract(tmp_path):
+    outline_path = tmp_path / "大纲" / "第3章-账簿.md"
+    outline_path.parent.mkdir(parents=True, exist_ok=True)
+    outline_path.write_text(
+        "### 第三章：账簿\n- 必须覆盖节点：识别封蜡缺口",
+        encoding="utf-8",
+    )
+    service = ChapterCommitService(tmp_path)
+
+    with pytest.raises(
+        ValueError,
+        match="chapter_contract_missing_must_cover_nodes",
+    ):
+        _build_commit(
+            service,
+            tmp_path,
+            chapter=3,
+            review_result={"blocking_count": 0},
+            fulfillment_result={
+                "planned_nodes": [],
+                "covered_nodes": [],
+                "missed_nodes": [],
+                "extra_nodes": [],
+            },
+            disambiguation_result={"pending": []},
+            extraction_result={
+                "state_deltas": [],
+                "entity_deltas": [],
+                "accepted_events": [],
+            },
+        )
+
+
 def test_commit_service_includes_volume_ref_and_write_fact_provenance(tmp_path):
     service = ChapterCommitService(tmp_path)
     payload = _build_commit(service, tmp_path,

@@ -162,7 +162,10 @@ def render_anti_patterns_markdown(anti_patterns: List[Dict[str, Any]]) -> str:
 
 
 def render_chapter_markdown(chapter_payload: Dict[str, Any]) -> str:
-    focus = (chapter_payload.get("override_allowed") or {}).get("chapter_focus", "")
+    directive = chapter_payload.get("chapter_directive") or {}
+    focus = directive.get("goal") or (
+        chapter_payload.get("override_allowed") or {}
+    ).get("chapter_focus", "")
     return "\n".join(
         [
             f"# CHAPTER_{int(chapter_payload['meta']['chapter']):03d}",
@@ -212,15 +215,17 @@ def persist_runtime_contracts(
     volume_brief: Dict[str, Any],
     review_contract: Dict[str, Any],
 ) -> None:
+    paths = StoryContractPaths.from_project_root(project_root)
+    chapter_brief = read_json_if_exists(paths.chapter_json(chapter)) or {}
     cleaned = sanitize_story_contracts(
         {
+            "chapter_brief": chapter_brief,
             "volume_brief": volume_brief,
             "review_contract": review_contract,
         }
     )
     volume_brief = cleaned.get("volume_brief") or volume_brief
     review_contract = cleaned.get("review_contract") or review_contract
-    paths = StoryContractPaths.from_project_root(project_root)
     volume = volume_num_for_chapter_from_state(paths.project_root, chapter) or 1
     paths.volumes_dir.mkdir(parents=True, exist_ok=True)
     paths.reviews_dir.mkdir(parents=True, exist_ok=True)

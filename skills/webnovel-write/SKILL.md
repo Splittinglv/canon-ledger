@@ -141,7 +141,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
 `chapter_{NNN}.json` 必须优先检查顶层 `chapter_directive`。`chapter_focus` 只能来自 `chapter_directive.goal` 或真实 query，不得从 `dynamic_context` 的参考摘要继承。
 
 写作任务书排序必须固定为：
-1. 本章硬性约束：`chapter_directive.goal/time_anchor/chapter_span/countdown/chapter_end_open_question`
+1. 本章硬性约束：完整消费 `chapter_directive`；必查 `goal/obstacles/cost/time_anchor/chapter_span/previous_chapter_gap/countdown/key_entities/chapter_change/core_conflict/viewpoint/chapter_end_open_question`，并携带已有的 `strand/antagonist_tier/hook/hook_type/hook_strength`
 2. 章纲节点（若有 CBN/CPNs/CEN / `must_cover_nodes`）
 3. 本章禁区：`forbidden_zones`，违反即不通过
 4. 剧情/人物事实：上章钩子、伏笔、能力边界、OOC 事实警戒、剧情向 anti_patterns
@@ -206,6 +206,8 @@ Use the Task tool to run the plugin agent `reviewer`. If Task cannot target a na
 Task:
 - chapter={chapter_num}
 - chapter_file=${CHAPTER_FILE}
+- chapter_contract_file=${PROJECT_ROOT}/.story-system/chapters/chapter_{NNN}.json
+- review_contract_file=${PROJECT_ROOT}/.story-system/reviews/chapter_{NNN}.review.json
 - chapter_binding_file=${PROJECT_ROOT}/.webnovel/tmp/chapter_binding.json（读取后将完整对象原样写入输出 JSON 顶层 `chapter_binding`）
 - project_root=${PROJECT_ROOT}
 - scripts_dir=${SCRIPTS_DIR}
@@ -266,6 +268,7 @@ Use the Task tool to run the plugin agent `data-agent`. If Task cannot target a 
 Task:
 - chapter={chapter_num}
 - chapter_file=${CHAPTER_FILE}
+- chapter_contract_file=${PROJECT_ROOT}/.story-system/chapters/chapter_{NNN}.json（权威 `must_cover_nodes` 来源）
 - chapter_binding_file=${PROJECT_ROOT}/.webnovel/tmp/chapter_binding.json（必须原样复制到三份 artifact 顶层）
 - project_root=${PROJECT_ROOT}
 - scripts_dir=${SCRIPTS_DIR}

@@ -604,7 +604,7 @@ def test_load_context_exposes_rag_assist_and_uses_runtime_directive_goal(monkeyp
     runtime = SimpleNamespace(
         contracts={
             "chapter": {
-                "chapter_directive": {"goal": "确认掌柜是否遵守旧约"},
+                "chapter_directive": {"goal": "让掌柜承认旧约"},
                 "override_allowed": {"chapter_focus": "不应覆盖 directive goal"},
             }
         },
@@ -623,9 +623,13 @@ def test_load_context_exposes_rag_assist_and_uses_runtime_directive_goal(monkeyp
 
     assert pack.sections["rag_assist"]["reason"] == "no_hit"
     assert captured["chapter"] == 7
-    # Raw chapter goals are untyped prose and are not copied into the default
-    # consistency/RAG context. The authoritative outline remains the query.
-    assert captured["chapter_goal"] == ""
+    # The typed chapter directive is the authoritative plan. It must survive
+    # persistence/context sanitization and lead the factual retrieval query.
+    assert captured["chapter_goal"] == "让掌柜承认旧约"
+    assert (
+        pack.sections["story_contracts"]["chapter"]["chapter_directive"]["goal"]
+        == "让掌柜承认旧约"
+    )
 
 
 def test_extract_context_delegates_to_the_same_helper_and_goal_key(monkeypatch, tmp_path):

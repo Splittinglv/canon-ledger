@@ -33,6 +33,10 @@ from .override_ledger_service import (
     ensure_override_ledger_columns,
     persist_amend_proposals,
 )
+from .outline_fulfillment import (
+    fulfillment_node_errors,
+    load_authoritative_planned_nodes,
+)
 
 
 class ChapterCommitService:
@@ -84,6 +88,16 @@ class ChapterCommitService:
                     "chapter_content_hash_mismatch",
                     f"{artifact_name}.chapter_binding is stale",
                 )
+        authoritative_nodes = load_authoritative_planned_nodes(
+            self.project_root,
+            chapter,
+        )
+        fulfillment_errors = fulfillment_node_errors(
+            fulfillment,
+            authoritative_nodes,
+        )
+        if fulfillment_errors:
+            raise ValueError(fulfillment_errors[0])
         rejected = bool(review.blocking_count) or bool(
             fulfillment.missed_nodes
         ) or bool(disambiguation.pending)
