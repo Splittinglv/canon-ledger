@@ -18,6 +18,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from cursor_paths import resolve_workspace_root  # noqa: E402
+from python_runtime import resolve_python_executable  # noqa: E402
 
 
 SCHEMA_VERSION = "webnovel-cursor-env/v1"
@@ -57,6 +58,7 @@ def _trusted_plugin_root() -> Path:
 def build_payload() -> dict[str, object]:
     plugin_root = _trusted_plugin_root()
     workspace = resolve_workspace_root()
+    python_executable = resolve_python_executable(plugin_root)
     environment = {
         "WEBNOVEL_PLUGIN_ROOT": str(plugin_root),
         "CURSOR_PLUGIN_ROOT": str(plugin_root),
@@ -68,6 +70,7 @@ def build_payload() -> dict[str, object]:
     return {
         "schema_version": SCHEMA_VERSION,
         "environment": environment,
+        "python_executable": str(python_executable),
     }
 
 
@@ -77,7 +80,7 @@ def main() -> int:
     parser.parse_args()
     try:
         payload = build_payload()
-    except (FileNotFoundError, ValueError) as exc:
+    except (FileNotFoundError, RuntimeError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))

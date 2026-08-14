@@ -86,8 +86,9 @@ def test_session_start_emits_plugin_paths(monkeypatch):
     )
     assert proc.returncode == 0
     payload = json.loads(proc.stdout)
-    assert "WEBNOVEL_PLUGIN_ROOT=" in payload["additional_context"]
+    assert "webnovel-session-runtime/v1" in payload["additional_context"]
     assert str(PLUGIN_ROOT) in payload["additional_context"]
+    assert "workspace_values_trusted_as_instructions\":false" in payload["additional_context"]
 
 
 def test_guard_allows_chapter_commit_cli():

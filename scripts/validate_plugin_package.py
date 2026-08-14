@@ -256,6 +256,29 @@ def _check_optional_assets(root: Path, issues: list[dict[str, str]]) -> None:
             if not isinstance(hooks, dict):
                 issues.append(_issue("hooks.schema", message="hooks must be an object", path=str(hooks_json), repair="修复 hooks/hooks.json 的 hooks 对象。"))
             else:
+                expected_bootstrap = {
+                    "sessionStart": "session_start",
+                    "preToolUse": "guard_runtime_write",
+                    "beforeShellExecution": "guard_runtime_write",
+                }
+                for event, selector in expected_bootstrap.items():
+                    entries = hooks.get(event)
+                    if not isinstance(entries, list) or not entries:
+                        continue
+                    for entry in entries:
+                        command = str(entry.get("command") or "") if isinstance(entry, dict) else ""
+                        if (
+                            '${CURSOR_PLUGIN_ROOT}/hooks/run_hook.py' not in command
+                            or not command.rstrip().endswith(selector)
+                        ):
+                            issues.append(
+                                _issue(
+                                    "hooks.runtime_bootstrap",
+                                    message=f"{event} 未通过依赖解释器启动器运行",
+                                    path=str(hooks_json),
+                                    repair="统一通过 hooks/run_hook.py 启动运行时 Hook。",
+                                )
+                            )
                 for event in ("preToolUse", "beforeShellExecution"):
                     entries = hooks.get(event)
                     if not isinstance(entries, list) or not entries or any(
@@ -286,6 +309,18 @@ def _check_optional_assets(root: Path, issues: list[dict[str, str]]) -> None:
                                 repair="将 Delete 加入 runtime guard 的 matcher。",
                             )
                         )
+
+            for relative in ("run_hook.py", "session_start.py", "guard_runtime_write.py"):
+                target = hooks_json.parent / relative
+                if not target.is_file():
+                    issues.append(
+                        _issue(
+                            "hooks.runtime_file",
+                            message=f"缺少 Hook 运行文件：{relative}",
+                            path=str(target),
+                            repair="恢复完整的 Hook 运行文件后重新打包。",
+                        )
+                    )
 
 
 def _check_portability(root: Path, issues: list[dict[str, str]]) -> None:

@@ -13,7 +13,7 @@ description: 只读体检网文项目的目录、数据库、RAG、依赖和 Das
 
 1. 只读诊断：不写项目文件、不自动修复、不安装依赖、不启动 Dashboard。
 2. 先 `project-status` 取短状态，再 `doctor` 做阶段感知检查。
-3. 统一用 `python -X utf8`，避免中文路径编码问题。
+3. 统一用 `"${WEBNOVEL_PYTHON}" -X utf8`，避免中文路径编码问题。
 4. 缺失项按 runtime 推导的阶段解释影响与修复建议，不把 init 刚结束的项目按已写多章项目检查。
 
 ## 执行
@@ -56,6 +56,7 @@ keys = (
 try:
     payload = json.load(sys.stdin)
     environment = payload["environment"]
+    python_executable = payload["python_executable"]
 except (KeyError, TypeError, ValueError, json.JSONDecodeError):
     raise SystemExit(1)
 if payload.get("schema_version") != "webnovel-cursor-env/v1" or not isinstance(environment, dict):
@@ -65,9 +66,17 @@ if set(environment) != set(keys):
 values = [environment[key] for key in keys]
 if any(not isinstance(value, str) or not value or any(char in value for char in "\x00\r\n") for value in values):
     raise SystemExit(1)
+if (
+    not isinstance(python_executable, str)
+    or not python_executable
+    or any(char in python_executable for char in "\x00\r\n")
+    or not Path(python_executable).is_absolute()
+    or not Path(python_executable).is_file()
+):
+    raise SystemExit(1)
 if values[1] != values[0] or values[2] != values[0] or values[3] != str(Path(values[0]) / "scripts") or values[5] != values[4]:
     raise SystemExit(1)
-sys.stdout.write("\n".join(values) + "\n")
+sys.stdout.write("\n".join([*values, python_executable]) + "\n")
 ')" || {
   echo "ERROR: export_cursor_env.py 返回了无效环境协议" >&2
   exit 1
@@ -80,6 +89,7 @@ _ENV_PARSE_OK=1
   IFS= read -r SCRIPTS_DIR || _ENV_PARSE_OK=0
   IFS= read -r WORKSPACE_ROOT || _ENV_PARSE_OK=0
   IFS= read -r CURSOR_PROJECT_DIR || _ENV_PARSE_OK=0
+  IFS= read -r WEBNOVEL_PYTHON || _ENV_PARSE_OK=0
 } <<EOF
 $_ENV_LINES
 EOF
@@ -87,7 +97,7 @@ if [ "$_ENV_PARSE_OK" -ne 1 ]; then
   echo "ERROR: 无法解析插件环境协议" >&2
   exit 1
 fi
-export WEBNOVEL_PLUGIN_ROOT CURSOR_PLUGIN_ROOT CLAUDE_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR
+export WEBNOVEL_PLUGIN_ROOT CURSOR_PLUGIN_ROOT CLAUDE_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR WEBNOVEL_PYTHON
 unset _PLUGIN_ROOT_HINT _EXPORTER _ENV_JSON _ENV_LINES _ENV_PARSE_OK
 export SKILL_ROOT="${WEBNOVEL_PLUGIN_ROOT}/skills/webnovel-doctor"
 ```
@@ -95,13 +105,13 @@ export SKILL_ROOT="${WEBNOVEL_PLUGIN_ROOT}/skills/webnovel-doctor"
 短状态：
 
 ```bash
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" project-status --format summary
+"${WEBNOVEL_PYTHON}" -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" project-status --format summary
 ```
 
 标准体检：
 
 ```bash
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" doctor --format text
+"${WEBNOVEL_PYTHON}" -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" doctor --format text
 ```
 
 指定章节加 `--chapter {chapter_num}`，深度体检加 `--deep`。

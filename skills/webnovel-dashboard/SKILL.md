@@ -51,6 +51,7 @@ keys = (
 try:
     payload = json.load(sys.stdin)
     environment = payload["environment"]
+    python_executable = payload["python_executable"]
 except (KeyError, TypeError, ValueError, json.JSONDecodeError):
     raise SystemExit(1)
 if payload.get("schema_version") != "webnovel-cursor-env/v1" or not isinstance(environment, dict):
@@ -60,9 +61,17 @@ if set(environment) != set(keys):
 values = [environment[key] for key in keys]
 if any(not isinstance(value, str) or not value or any(char in value for char in "\x00\r\n") for value in values):
     raise SystemExit(1)
+if (
+    not isinstance(python_executable, str)
+    or not python_executable
+    or any(char in python_executable for char in "\x00\r\n")
+    or not Path(python_executable).is_absolute()
+    or not Path(python_executable).is_file()
+):
+    raise SystemExit(1)
 if values[1] != values[0] or values[2] != values[0] or values[3] != str(Path(values[0]) / "scripts") or values[5] != values[4]:
     raise SystemExit(1)
-sys.stdout.write("\n".join(values) + "\n")
+sys.stdout.write("\n".join([*values, python_executable]) + "\n")
 ')" || {
   echo "ERROR: export_cursor_env.py 返回了无效环境协议" >&2
   exit 1
@@ -75,6 +84,7 @@ _ENV_PARSE_OK=1
   IFS= read -r SCRIPTS_DIR || _ENV_PARSE_OK=0
   IFS= read -r WORKSPACE_ROOT || _ENV_PARSE_OK=0
   IFS= read -r CURSOR_PROJECT_DIR || _ENV_PARSE_OK=0
+  IFS= read -r WEBNOVEL_PYTHON || _ENV_PARSE_OK=0
 } <<EOF
 $_ENV_LINES
 EOF
@@ -82,7 +92,7 @@ if [ "$_ENV_PARSE_OK" -ne 1 ]; then
   echo "ERROR: 无法解析插件环境协议" >&2
   exit 1
 fi
-export WEBNOVEL_PLUGIN_ROOT CURSOR_PLUGIN_ROOT CLAUDE_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR
+export WEBNOVEL_PLUGIN_ROOT CURSOR_PLUGIN_ROOT CLAUDE_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR WEBNOVEL_PYTHON
 unset _PLUGIN_ROOT_HINT _EXPORTER _ENV_JSON _ENV_LINES _ENV_PARSE_OK
 export SKILL_ROOT="${WEBNOVEL_PLUGIN_ROOT}/skills/webnovel-dashboard"
 export DASHBOARD_DIR="${WEBNOVEL_PLUGIN_ROOT}/dashboard"
@@ -95,7 +105,7 @@ fi
 ### Step 2：解析项目根目录
 
 ```bash
-export PROJECT_ROOT="$(python "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" where)"
+export PROJECT_ROOT="$("${WEBNOVEL_PYTHON}" "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" where)"
 echo "项目路径: ${PROJECT_ROOT}"
 ```
 
@@ -119,13 +129,13 @@ fi
 不默认安装依赖。仅当 Step 4 因缺依赖启动失败时，提示用户手动执行：
 
 ```bash
-python -m pip install -r "${DASHBOARD_DIR}/requirements.txt"
+"${WEBNOVEL_PYTHON}" -m pip install -r "${DASHBOARD_DIR}/requirements.txt"
 ```
 
 ### Step 4：启动 Dashboard
 
 ```bash
-python -m dashboard.server --project-root "${PROJECT_ROOT}"
+"${WEBNOVEL_PYTHON}" -m dashboard.server --project-root "${PROJECT_ROOT}"
 ```
 
 不自动打开浏览器时加 `--no-browser`；自定义端口加 `--port 9000`。

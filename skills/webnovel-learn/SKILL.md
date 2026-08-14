@@ -46,6 +46,7 @@ keys = (
 try:
     payload = json.load(sys.stdin)
     environment = payload["environment"]
+    python_executable = payload["python_executable"]
 except (KeyError, TypeError, ValueError, json.JSONDecodeError):
     raise SystemExit(1)
 if payload.get("schema_version") != "webnovel-cursor-env/v1" or not isinstance(environment, dict):
@@ -55,9 +56,17 @@ if set(environment) != set(keys):
 values = [environment[key] for key in keys]
 if any(not isinstance(value, str) or not value or any(char in value for char in "\x00\r\n") for value in values):
     raise SystemExit(1)
+if (
+    not isinstance(python_executable, str)
+    or not python_executable
+    or any(char in python_executable for char in "\x00\r\n")
+    or not Path(python_executable).is_absolute()
+    or not Path(python_executable).is_file()
+):
+    raise SystemExit(1)
 if values[1] != values[0] or values[2] != values[0] or values[3] != str(Path(values[0]) / "scripts") or values[5] != values[4]:
     raise SystemExit(1)
-sys.stdout.write("\n".join(values) + "\n")
+sys.stdout.write("\n".join([*values, python_executable]) + "\n")
 ')" || {
   echo "ERROR: export_cursor_env.py 返回了无效环境协议" >&2
   exit 1
@@ -70,6 +79,7 @@ _ENV_PARSE_OK=1
   IFS= read -r SCRIPTS_DIR || _ENV_PARSE_OK=0
   IFS= read -r WORKSPACE_ROOT || _ENV_PARSE_OK=0
   IFS= read -r CURSOR_PROJECT_DIR || _ENV_PARSE_OK=0
+  IFS= read -r WEBNOVEL_PYTHON || _ENV_PARSE_OK=0
 } <<EOF
 $_ENV_LINES
 EOF
@@ -77,24 +87,24 @@ if [ "$_ENV_PARSE_OK" -ne 1 ]; then
   echo "ERROR: 无法解析插件环境协议" >&2
   exit 1
 fi
-export WEBNOVEL_PLUGIN_ROOT CURSOR_PLUGIN_ROOT CLAUDE_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR
+export WEBNOVEL_PLUGIN_ROOT CURSOR_PLUGIN_ROOT CLAUDE_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR WEBNOVEL_PYTHON
 unset _PLUGIN_ROOT_HINT _EXPORTER _ENV_JSON _ENV_LINES _ENV_PARSE_OK
 export SKILL_ROOT="${WEBNOVEL_PLUGIN_ROOT}/skills/webnovel-learn"
-export PROJECT_ROOT="$(python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" where)"
+export PROJECT_ROOT="$("${WEBNOVEL_PYTHON}" -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" where)"
 ```
 
 ## 目标
 
-提取可复用的跨章事实处理方式（伏笔回收、时间线衔接、设定执行），追加到 `.webnovel/project_memory.json`。口吻、句式、文笔偏好请写进 `设定集/文风提示词.md`，不要当作项目记忆。
+提取可复用的跨章事实处理方式（伏笔回收、时间线衔接、设定执行、人物一致性），通过统一命令写成 `.webnovel/memory_scratchpad.json` 中可被默认上下文实际读取的结构化规则。口吻、句式、文笔偏好请写进 `设定集/文风提示词.md`，不要当作项目记忆。
 
 ## 执行流程
 
-1. 读取 `"$PROJECT_ROOT/.webnovel/state.json"` 的 `progress.current_chapter` 作为当前章节号；缺失则用 `source_chapter: null`，不阻断。
-2. 解析用户输入（`/webnovel-learn` 后的经验文本；为空则取本次对话中用户认可的写法），归类 `pattern_type`（foreshadow/timeline/setting/character/other，无法归类用 `other`）。对话/口吻/节奏类内容改写入文风提示词，不进 project_memory。
+1. 读取 `"$PROJECT_ROOT/.webnovel/state.json"` 的 `progress.current_chapter` 作为当前章节号；缺失时由统一命令按全局规则处理。
+2. 解析用户输入（`/webnovel-learn` 后的经验文本；为空则取本次对话中用户明确认可的事实处理方式），归类 `pattern_type`（仅允许 `foreshadow` / `timeline` / `setting` / `character`）。无法归类就停止并请用户明确，不得塞进 `other`。对话、口吻、节奏、桥段和文笔内容改写入文风提示词，不进长期一致性记忆。
 3. 调用 `project-memory add-pattern` 写入，不得手写或拼接 JSON：
 
 ```bash
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" project-memory add-pattern \
+"${WEBNOVEL_PYTHON}" -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" project-memory add-pattern \
   --pattern-type "{pattern_type}" \
   --description "{用户输入或提炼后的完整描述}" \
   --category "{分类，可空}" \
@@ -103,19 +113,19 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" pro
 
 ## 约束
 
-- 不删除旧记录，仅追加。
-- 追加前扫描已有 `patterns`；`pattern_type` + `description` 完全相同则跳过并告知用户，部分相似不去重。
-- 禁止使用 `Write` 或手工编辑 `.webnovel/project_memory.json`。
+- 不删除旧规则，仅追加；同一 `pattern_type` + `description` 会稳定去重。
+- 命令会拒绝文风、文笔、句式、桥段和模型控制文本；不得为了通过校验改写用户原意。
+- 禁止使用 `Write` 或手工编辑 `.webnovel/memory_scratchpad.json`。
 
 ## 成功标准
 
-- `project_memory.json` 存在且格式合法，新 pattern 已追加到 `patterns` 数组。
-- 输出包含 `status: success` 和完整 `learned` 对象。
+- `memory_scratchpad.json` 中存在对应的 active `world_rule`，下一章 `memory-contract load-context` 能读到它。
+- 输出包含 `status: success` 和完整 `learned` 对象；重复规则返回 `status: skipped`。
 
 ## 失败恢复
 
 | 故障 | 恢复方式 |
 |------|---------|
-| `project_memory.json` 不存在 | 脚本自动初始化 `{"patterns": []}` 后继续 |
-| JSON 解析失败 | 不写入脏数据，告知用户文件损坏并建议手动修复 |
-| `state.json` 缺失无法取章节号 | 用 `source_chapter: null`，不阻断 |
+| 旧 `project_memory.json` 存在 | 不再把其中自由文本注入写作上下文；需要的事实由用户重新确认后写入结构化规则 |
+| 长期记忆 JSON 损坏 | fail closed，不写入并建议运行 `/webnovel-doctor` |
+| 输入属于文风或无法归类 | 停止；文风写入 `设定集/文风提示词.md`，事实请用户明确类型 |

@@ -1,16 +1,16 @@
 {
   "version": 1,
-  "description": "Cursor runtime guardrails: inject plugin/workspace paths on session start and block direct writes to Story System/read-model files.",
+  "description": "Cursor 运行时保护：会话开始时注入插件与工作区路径，并阻止直接写入 Story System 和读模型文件。",
   "hooks": {
     "sessionStart": [
       {
-        "command": "python3 -X utf8 \"${CURSOR_PLUGIN_ROOT}/hooks/session_start.py\"",
+        "command": "python3 -X utf8 \"${CURSOR_PLUGIN_ROOT}/hooks/run_hook.py\" session_start",
         "timeout": 5
       }
     ],
     "preToolUse": [
       {
-        "command": "python3 -X utf8 \"${CURSOR_PLUGIN_ROOT}/hooks/guard_runtime_write.py\"",
+        "command": "python3 -X utf8 \"${CURSOR_PLUGIN_ROOT}/hooks/run_hook.py\" guard_runtime_write",
         "matcher": "Write|StrReplace|Edit|Delete",
         "timeout": 5,
         "failClosed": true
@@ -18,7 +18,7 @@
     ],
     "beforeShellExecution": [
       {
-        "command": "python3 -X utf8 \"${CURSOR_PLUGIN_ROOT}/hooks/guard_runtime_write.py\"",
+        "command": "python3 -X utf8 \"${CURSOR_PLUGIN_ROOT}/hooks/run_hook.py\" guard_runtime_write",
         "timeout": 5,
         "failClosed": true
       }

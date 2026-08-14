@@ -185,6 +185,40 @@ def test_validate_plugin_package_rejects_fail_open_runtime_hooks(tmp_path):
     assert "hooks.delete_matcher" in codes
 
 
+def test_validate_plugin_package_rejects_unbootstrapped_runtime_hooks(tmp_path):
+    _write_minimal_package(tmp_path)
+    hooks = tmp_path / "webnovel-writer" / "hooks" / "hooks.json"
+    _write_json(
+        hooks,
+        {
+            "version": 1,
+            "description": "运行时防护",
+            "hooks": {
+                "sessionStart": [{"command": "python3 hooks/session_start.py"}],
+                "preToolUse": [
+                    {
+                        "command": "python3 hooks/guard_runtime_write.py",
+                        "matcher": "Write|StrReplace|Edit|Delete",
+                        "failClosed": True,
+                    }
+                ],
+                "beforeShellExecution": [
+                    {
+                        "command": "python3 hooks/guard_runtime_write.py",
+                        "failClosed": True,
+                    }
+                ],
+            },
+        },
+    )
+
+    report = validate_package(tmp_path)
+
+    codes = {item["code"] for item in report["issues"]}
+    assert "hooks.runtime_bootstrap" in codes
+    assert "hooks.runtime_file" in codes
+
+
 def test_validate_plugin_package_rejects_executable_skill_exports(tmp_path):
     _write_minimal_package(tmp_path)
     skill = tmp_path / "webnovel-writer" / "skills" / "demo" / "SKILL.md"

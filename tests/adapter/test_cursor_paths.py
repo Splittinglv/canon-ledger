@@ -45,6 +45,19 @@ def test_cursor_marketplace_manifest_lists_root_plugin():
     assert (PLUGIN_ROOT / ".cursor-plugin" / "plugin.json").is_file()
 
 
+def test_cursor_plugin_identity_points_to_this_fork_and_rules_are_scoped():
+    manifest = json.loads(
+        (PLUGIN_ROOT / ".cursor-plugin" / "plugin.json").read_text(encoding="utf-8")
+    )
+    assert manifest["homepage"] == "https://github.com/Splittinglv/webnovel-writer-cursor"
+    assert manifest["repository"] == "https://github.com/Splittinglv/webnovel-writer-cursor"
+
+    rule = (PLUGIN_ROOT / "rules" / "webnovel-canon.mdc").read_text(encoding="utf-8")
+    assert "alwaysApply: false" in rule
+    assert "**/.webnovel/state.json" in rule
+    assert "alwaysApply: true" not in rule
+
+
 def test_style_prompt_template_exists_and_is_author_owned():
     path = PLUGIN_ROOT / "templates" / "output" / "设定集-文风提示词.md"
     text = path.read_text(encoding="utf-8")
@@ -110,6 +123,7 @@ def test_export_cursor_env_prints_json_data(monkeypatch, tmp_path):
     assert proc.returncode == 0
     payload = json.loads(proc.stdout)
     assert payload["schema_version"] == "webnovel-cursor-env/v1"
+    assert Path(payload["python_executable"]).is_file()
     assert payload["environment"] == {
         "WEBNOVEL_PLUGIN_ROOT": str(PLUGIN_ROOT),
         "CURSOR_PLUGIN_ROOT": str(PLUGIN_ROOT),
@@ -128,6 +142,10 @@ def test_all_skills_parse_cursor_environment_as_data_without_cache_discovery():
     for skill_file in skill_files:
         text = skill_file.read_text(encoding="utf-8")
         assert "webnovel-cursor-env/v1" in text, skill_file
+        assert 'payload["python_executable"]' in text, skill_file
+        assert 'WEBNOVEL_PYTHON' in text, skill_file
+        assert '"${WEBNOVEL_PYTHON}"' in text, skill_file
+        assert "python -X utf8" not in text, skill_file
         assert 'eval "$_EXPORT"' not in text, skill_file
         assert ".rglob(" not in text, skill_file
         assert "Invoke-Expression" not in text, skill_file

@@ -1,6 +1,7 @@
 ---
-description: 长篇网文防幻觉与真源保护。打开书项目或使用 /webnovel-* 时始终适用。
-alwaysApply: true
+description: 长篇小说项目的防幻觉与真源保护；仅在书项目文件命中时加载。
+globs: "**/.webnovel/state.json,**/.story-system/**,**/大纲/**/*.md,**/设定集/**/*.md"
+alwaysApply: false
 ---
 
 # Webnovel canon

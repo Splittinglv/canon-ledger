@@ -27,7 +27,7 @@ description: 深度初始化网文项目：分阶段收集书名、题材、主�
 | 题材公式 | 用户明确要题材套路参考 | `references/genre-tropes.md`（只读当前题材段） |
 | 角色卡顿 | 人物扁平 | `references/worldbuilding/character-design.md` |
 | 世界观/力量 | 按需 | `references/worldbuilding/faction-systems.md`、`references/worldbuilding/power-systems.md`、`references/worldbuilding/world-rules.md`、`references/worldbuilding/setting-consistency.md` |
-| 命名 | 开始命名 | `python -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill init --table 命名规则 --query "{命名对象} {题材}" --genre {题材}` |
+| 命名 | 开始命名 | `"${WEBNOVEL_PYTHON}" -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill init --table 命名规则 --query "{命名对象} {题材}" --genre {题材}` |
 
 按需读取世界观设计指南。不加载卖点公式、反套路库或追读力配置。
 
@@ -80,6 +80,7 @@ keys = (
 try:
     payload = json.load(sys.stdin)
     environment = payload["environment"]
+    python_executable = payload["python_executable"]
 except (KeyError, TypeError, ValueError, json.JSONDecodeError):
     raise SystemExit(1)
 if payload.get("schema_version") != "webnovel-cursor-env/v1" or not isinstance(environment, dict):
@@ -89,9 +90,17 @@ if set(environment) != set(keys):
 values = [environment[key] for key in keys]
 if any(not isinstance(value, str) or not value or any(char in value for char in "\x00\r\n") for value in values):
     raise SystemExit(1)
+if (
+    not isinstance(python_executable, str)
+    or not python_executable
+    or any(char in python_executable for char in "\x00\r\n")
+    or not Path(python_executable).is_absolute()
+    or not Path(python_executable).is_file()
+):
+    raise SystemExit(1)
 if values[1] != values[0] or values[2] != values[0] or values[3] != str(Path(values[0]) / "scripts") or values[5] != values[4]:
     raise SystemExit(1)
-sys.stdout.write("\n".join(values) + "\n")
+sys.stdout.write("\n".join([*values, python_executable]) + "\n")
 ')" || {
   echo "ERROR: export_cursor_env.py 返回了无效环境协议" >&2
   exit 1
@@ -104,6 +113,7 @@ _ENV_PARSE_OK=1
   IFS= read -r SCRIPTS_DIR || _ENV_PARSE_OK=0
   IFS= read -r WORKSPACE_ROOT || _ENV_PARSE_OK=0
   IFS= read -r CURSOR_PROJECT_DIR || _ENV_PARSE_OK=0
+  IFS= read -r WEBNOVEL_PYTHON || _ENV_PARSE_OK=0
 } <<EOF
 $_ENV_LINES
 EOF
@@ -111,10 +121,10 @@ if [ "$_ENV_PARSE_OK" -ne 1 ]; then
   echo "ERROR: 无法解析插件环境协议" >&2
   exit 1
 fi
-export WEBNOVEL_PLUGIN_ROOT CURSOR_PLUGIN_ROOT CLAUDE_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR
+export WEBNOVEL_PLUGIN_ROOT CURSOR_PLUGIN_ROOT CLAUDE_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR WEBNOVEL_PYTHON
 unset _PLUGIN_ROOT_HINT _EXPORTER _ENV_JSON _ENV_LINES _ENV_PARSE_OK
 export SKILL_ROOT="${WEBNOVEL_PLUGIN_ROOT}/skills/webnovel-init"
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" subagent-models --format json
+"${WEBNOVEL_PYTHON}" -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${WORKSPACE_ROOT}" subagent-models --format json
 ```
 
 拆书子代理模型可选。读取 JSON 里 `agents["deconstruction-agent"]`：`pass_to_task=true` 时，调用 Task 必须传入该 `model` slug；否则不要传 `model`。本轮用户点名优先于配置文件。新书尚未创建时，这条命令仍可用（回退到 `~/.cursor/webnovel-writer/subagent-models.json` 或 inherit）。
@@ -179,9 +189,9 @@ canonical 题材集合（写入 `project_info.genre`）：都市、玄幻、仙�
 
 可自由输入细分题材、套路或形式；初始化脚本只把它们映射到中性的 canonical 标签，不会默认加载题材模板或把套路写入设定真源。只有用户明确要求参考某个内置题材模板时，才追加 `--include-genre-templates`；模板会单独写入 `参考/题材模板.md`，不会进入设定集或 Story System canon。优先让用户自由描述再二次结构化确认；卡住时给 2-4 个候选方向。
 
-### Step 3：角色骨架与关系冲突
+### Step 3：角色骨架与关系事实
 
-必收：主角姓名、主角欲望、主角缺陷（会害他付代价）、主角结构（单/多主角）、感情线配置（无/单女主/多女主）、反派分层（小/中/大）与镜像对抗一句话。可选：主角原型标签、多主角分工。
+必收：主角姓名、主角欲望、主角缺陷（会害他付代价）、主角结构（单/多主角）、感情线配置（无/单女主/多女主）。对立角色、组织、环境或规则压力均为可选；只收用户已经确定的名称、目标和与主角的事实关系，不默认补小/中/大层级。主角原型标签、多主角分工同样可选。
 
 ### Step 4：金手指与兑现机制
 
@@ -229,7 +239,7 @@ canonical 题材集合（写入 `project_info.genre`）：都市、玄幻、仙�
 - 初始化前必须展示并确认 `WORKSPACE_ROOT`、`PROJECT_SLUG`、`PROJECT_ROOT`。
 
 ```bash
-PROJECT_SLUG="$(python -X utf8 -c "import re,sys; title=sys.argv[1].strip(); slug=re.sub(r'[\\\\/:*?\"<>|]+','',title); slug=re.sub(r'\\s+','-',slug).strip('-'); print(('proj-' + slug) if (not slug or slug.startswith('.')) else slug)" "{title}")"
+PROJECT_SLUG="$("${WEBNOVEL_PYTHON}" -X utf8 -c "import re,sys; title=sys.argv[1].strip(); slug=re.sub(r'[\\\\/:*?\"<>|]+','',title); slug=re.sub(r'\\s+','-',slug).strip('-'); print(('proj-' + slug) if (not slug or slug.startswith('.')) else slug)" "{title}")"
 PROJECT_ROOT="${WORKSPACE_ROOT}/${PROJECT_SLUG}"
 echo "WORKSPACE_ROOT=${WORKSPACE_ROOT}"
 echo "PROJECT_SLUG=${PROJECT_SLUG}"
@@ -240,10 +250,10 @@ echo "PROJECT_ROOT=${PROJECT_ROOT}"
 
 ### 1) 运行初始化脚本
 
-参数全部来自上面的采集对象（书名/题材/主角/金手指/世界观/反派/创意约束等），逐字段映射为 `webnovel.py init` 的 `--*` 选项；完整字段清单见 `references/init-collection-schema.md`，可用 `python "${SCRIPTS_DIR}/webnovel.py" init --help` 核对选项名。
+参数全部来自上面的采集对象（书名/题材/主角/金手指/世界观/反派/创意约束等），逐字段映射为 `webnovel.py init` 的 `--*` 选项；完整字段清单见 `references/init-collection-schema.md`，可用 `"${WEBNOVEL_PYTHON}" "${SCRIPTS_DIR}/webnovel.py" init --help` 核对选项名。
 
 ```bash
-python "${SCRIPTS_DIR}/webnovel.py" init \
+"${WEBNOVEL_PYTHON}" "${SCRIPTS_DIR}/webnovel.py" init \
   "${PROJECT_ROOT}" "{title}" "{genre}" \
   --protagonist-name "{protagonist_name}" \
   --target-words {target_words} --target-chapters {target_chapters} \
@@ -268,16 +278,16 @@ python "${SCRIPTS_DIR}/webnovel.py" init \
 
 ### 3) Patch 总纲
 
-`大纲/总纲.md` 必须补齐：故事一句话、核心主线/暗线。创意约束、反派分层、爽点里程碑可写，不写不算失败。
+`大纲/总纲.md` 必须补齐：故事一句话、主线目标、已确定的故事边界。暗线、对立来源和其他创作结构只在用户明确提供时记录，不写不算失败。
 
 ### 4) 生成写前合同树（Story System 初始化）
 
 init 完成后立即生成 MASTER_SETTING，让后续 plan 有调性/禁忌参照。此处不传 `--chapter`（只生成 `MASTER_SETTING.json` 和 `anti_patterns.json`），也不传 `--emit-runtime-contracts`（还没有卷/章级数据）；plan 拆到具体章节时再生成 volume/chapter/review 合同。
 
 ```bash
-GENRE="$(python -X utf8 -c "import json,os; root=os.environ['PROJECT_ROOT']; s=json.load(open(root + '/.webnovel/state.json',encoding='utf-8')); pi=s.get('project_info',{}); print(pi.get('genre') or s.get('project',{}).get('genre',''))")"
+GENRE="$("${WEBNOVEL_PYTHON}" -X utf8 -c "import json,os; root=os.environ['PROJECT_ROOT']; s=json.load(open(root + '/.webnovel/state.json',encoding='utf-8')); pi=s.get('project_info',{}); print(pi.get('genre') or s.get('project',{}).get('genre',''))")"
 
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
+"${WEBNOVEL_PYTHON}" -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
   story-system "${GENRE}" --genre "${GENRE}" --persist --format json
 ```
 
@@ -310,7 +320,7 @@ test "$(basename "${PROJECT_ROOT}")" = "${PROJECT_SLUG}"
 初始化开始前先说明本次会经历：收集故事核心 -> 确认创意约束 -> 生成项目骨架 -> 写入初始故事档案 -> 验证能否进入规划。过程提示用作者语言，不直接输出原始 JSON、traceback 或长命令日志；技术详情写入 `.webnovel/logs/run_last.log`：
 
 ```bash
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" run-log \
+"${WEBNOVEL_PYTHON}" -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" run-log \
   --event init-progress \
   --payload-json "{\"stage\": \"init\"}" \
   --format text
@@ -323,7 +333,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" run
 不可恢复故障才在最终报告提示 `.webnovel/logs/run_last.log`；平时只保留日志，不打扰作者。收尾必须调用作者报告 helper：
 
 ```bash
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" user-report \
+"${WEBNOVEL_PYTHON}" -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" user-report \
   --stage init \
   --format text
 ```
