@@ -140,7 +140,7 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
     "命名规则": {
         "file": "命名规则.csv",
         "search_cols": {"关键词": 3, "意图与同义词": 4, "核心摘要": 2},
-        "output_cols": ["编号", "命名对象", "核心摘要", "大模型指令", "详细展开"],
+        "output_cols": ["编号", "命名对象", "正例", "反例", "规则"],
         "poison_col": "毒点",
         "role": "base",
         "contract_inject": "MASTER_SETTING.base_context",
@@ -150,7 +150,7 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
     "场景写法": {
         "file": "场景写法.csv",
         "search_cols": {"关键词": 3, "意图与同义词": 4, "核心摘要": 2},
-        "output_cols": ["编号", "模式名称", "核心摘要", "大模型指令", "详细展开"],
+        "output_cols": ["编号", "模式名称", "核心摘要", "详细展开"],
         "poison_col": "毒点",
         "role": "base",
         "craft": True,
@@ -161,7 +161,7 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
     "写作技法": {
         "file": "写作技法.csv",
         "search_cols": {"关键词": 3, "意图与同义词": 4, "核心摘要": 2},
-        "output_cols": ["编号", "技法名称", "核心摘要", "大模型指令", "详细展开"],
+        "output_cols": ["编号", "技法名称", "核心摘要", "详细展开"],
         "poison_col": "毒点",
         "role": "base",
         "craft": True,
@@ -172,7 +172,7 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
     "桥段套路": {
         "file": "桥段套路.csv",
         "search_cols": {"关键词": 3, "意图与同义词": 4, "核心摘要": 2},
-        "output_cols": ["编号", "桥段名称", "核心摘要", "大模型指令", "详细展开"],
+        "output_cols": ["编号", "桥段名称", "核心摘要", "详细展开"],
         "poison_col": "毒点",
         "role": "dynamic",
         "craft": True,
@@ -183,7 +183,7 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
     "爽点与节奏": {
         "file": "爽点与节奏.csv",
         "search_cols": {"关键词": 3, "意图与同义词": 4, "核心摘要": 2},
-        "output_cols": ["编号", "节奏类型", "核心摘要", "大模型指令", "详细展开"],
+        "output_cols": ["编号", "节奏类型", "核心摘要", "详细展开"],
         "poison_col": "毒点",
         "role": "dynamic",
         "craft": True,
@@ -194,7 +194,7 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
     "人设与关系": {
         "file": "人设与关系.csv",
         "search_cols": {"关键词": 3, "意图与同义词": 4, "核心摘要": 2},
-        "output_cols": ["编号", "人设类型", "核心摘要", "大模型指令", "详细展开"],
+        "output_cols": ["编号", "人设类型", "核心摘要", "详细展开"],
         "poison_col": "毒点",
         "role": "base",
         "contract_inject": "MASTER_SETTING.base_context",
@@ -204,7 +204,7 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
     "金手指与设定": {
         "file": "金手指与设定.csv",
         "search_cols": {"关键词": 3, "意图与同义词": 4, "核心摘要": 2},
-        "output_cols": ["编号", "设定类型", "核心摘要", "大模型指令", "详细展开"],
+        "output_cols": ["编号", "设定类型", "核心摘要", "详细展开"],
         "poison_col": "毒点",
         "role": "base",
         "contract_inject": "MASTER_SETTING.base_context",
@@ -344,12 +344,26 @@ _FALLBACK_CONTENT_COLUMNS = [
 ]
 
 _SUMMARY_SKIP_COLS = {"编号", "大模型指令", "详细展开", "核心摘要"}
+_NAMING_SUMMARY_COLS = ("命名对象", "正例", "反例")
 
 
 def _build_summary(row: Dict[str, str], table_name: Optional[str] = None) -> str:
     """Merge key content columns into a single summary string."""
+    if table_name == "命名规则":
+        parts: List[str] = []
+        for col in _NAMING_SUMMARY_COLS:
+            val = str(row.get(col) or "").strip()
+            if not val:
+                continue
+            parts.append(val if col == "命名对象" else f"{col}：{val}")
+        if parts:
+            return "；".join(parts)
+        rule = str(row.get("规则") or "").strip()
+        if rule:
+            return rule
+
     core_summary = row.get("核心摘要", "").strip()
-    if core_summary:
+    if table_name != "命名规则" and core_summary:
         return core_summary
 
     # Derive fallback columns from CSV_CONFIG if available
@@ -461,7 +475,6 @@ def search(
             "层级": row.get("层级", ""),
             "适用题材": row.get("适用题材", ""),
             "内容摘要": _build_summary(row, table_name=tbl_name),
-            "大模型指令": row.get("大模型指令", "").strip(),
         })
 
     return {

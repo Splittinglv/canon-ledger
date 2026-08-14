@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from ..config import DataModulesConfig, get_config
-from ..fact_text import sanitize_fact_atom, sanitize_fact_text
+from ..fact_text import sanitize_fact_atom, sanitize_fact_text, sanitize_world_rule_text
 from .schema import (
     BUCKET_TO_CATEGORY,
     CATEGORY_TO_BUCKET,
@@ -302,7 +302,10 @@ class MemoryOrchestrator:
     def _serialize_hard_constraint(item: MemoryItem) -> Dict[str, Any] | None:
         """Emit a closed, factual view of a mandatory scratchpad item."""
         raw_value = str(item.value or "")
-        value = sanitize_fact_text(raw_value, max_chars=max(1, len(raw_value)))
+        if item.category == "world_rule":
+            value = sanitize_world_rule_text(raw_value, max_chars=max(1, len(raw_value)))
+        else:
+            value = sanitize_fact_text(raw_value, max_chars=max(1, len(raw_value)))
         if not value:
             return None
         # Lifecycle prose is commonly a Chinese question (for example

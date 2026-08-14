@@ -113,6 +113,18 @@ def test_story_system_persist_preserves_complete_outline_directive(
     )
     outline_dir = project_root / "大纲"
     outline_dir.mkdir()
+    (outline_dir / "总纲.md").write_text(
+        "\n".join(
+            [
+                "## 卷划分",
+                "",
+                "| 卷号 | 卷名 | 章节范围 | 卷内目标 | 预期结束状态 |",
+                "|------|------|----------|----------|----------|",
+                "| 1 | 立足 | 1-50 | 卷一站稳脚跟 | 主角在宗门站稳脚跟 |",
+            ]
+        ),
+        encoding="utf-8",
+    )
     (outline_dir / "第3章-红铜账簿.md").write_text(
         "\n".join(
             [
@@ -148,7 +160,10 @@ def test_story_system_persist_preserves_complete_outline_directive(
     worldview_text = (
         "# 世界观\n\n"
         "## 核心规则\n"
-        "- 硬约束：潮汐退去前，雾港城门不得开启。\n\n"
+        "- 硬约束：潮汐退去前，雾港城门不得开启。\n"
+        "- 修炼：用三年时间炼成金丹。\n"
+        "- 视角：主角以限知视角经历宗门大比。\n"
+        "- 本书题材是仙侠修真。\n\n"
         "## 反馈节奏\n"
         "- 关键反馈节点：每章必须展示一次潮汐变化。\n\n"
         "## 镜像对抗\n"
@@ -251,10 +266,21 @@ def test_story_system_persist_preserves_complete_outline_directive(
         item["value"] for item in master["setting_canon"]["facts"]
     ]
     assert "潮汐退去前，雾港城门不得开启。" in setting_values
+    assert "用三年时间炼成金丹。" in setting_values
+    assert "主角以限知视角经历宗门大比。" in setting_values
+    assert "本书题材是仙侠修真。" in setting_values
     assert "每章必须展示一次潮汐变化。" not in setting_values
     assert "每章结尾安排一次反转。" not in setting_values
     assert "用冷峻短句制造悬念。" not in setting_values
     assert "冷峻短句，减少修饰。" not in setting_values
+    volume = json.loads(
+        (project_root / ".story-system" / "volumes" / "volume_001.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert volume["volume_goal"]["summary"] == "卷一站稳脚跟"
+    assert volume["volume_goal"]["name"] == "立足"
+    assert volume["volume_goal"]["end_state"] == "主角在宗门站稳脚跟"
 
 
 def test_markdown_writer_preserves_manual_notes_outside_markers(tmp_path):

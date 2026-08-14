@@ -11,7 +11,7 @@ import re
 from copy import deepcopy
 from typing import Any, Dict, Iterable, List
 
-from .fact_text import sanitize_fact_atom, sanitize_fact_text
+from .fact_text import normalize_author_text, sanitize_fact_atom
 
 
 CRAFT_TABLES = frozenset({"场景写法", "写作技法", "桥段套路", "爽点与节奏"})
@@ -165,7 +165,7 @@ def _is_craft_key(key: Any) -> bool:
 
 def _safe_text(value: Any) -> str:
     text = str(value or "")
-    return sanitize_fact_text(text, max_chars=max(1200, len(text))).strip()
+    return normalize_author_text(text, max_chars=max(1200, len(text)))
 
 
 def _safe_atom(value: Any, *, max_chars: int = 160) -> str:
@@ -197,8 +197,7 @@ def sanitize_chapter_directive_text(value: Any) -> str:
     """
     if not isinstance(value, str):
         return ""
-    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", value)
-    return re.sub(r"\s+", " ", text).strip()
+    return normalize_author_text(value, max_chars=max(1200, len(value)))
 
 
 def _safe_outline_atom(value: Any, *, max_chars: int) -> str:
@@ -386,10 +385,9 @@ def _sanitize_override_policy(policy: Any) -> Dict[str, List[str]]:
 def sanitize_initial_canon(value: Any) -> Dict[str, Dict[str, str]]:
     """Return the closed, fact-only initialization contract.
 
-    Initialization arguments are author-owned facts, but they are still
-    persisted data and can later be edited.  Rebuild the public view from a
-    small allow-list and run every value through the shared instruction
-    filter.  Empty values are omitted so placeholders never become canon.
+    Initialization arguments are author-owned facts. Rebuild the public view
+    from a small allow-list and keep the author's wording. Empty values are
+    omitted so placeholders never become canon.
     """
     if not isinstance(value, dict):
         return {}
@@ -459,10 +457,35 @@ def _sanitize_chapter(chapter: Dict[str, Any]) -> Dict[str, Any]:
     return cleaned
 
 
+_VOLUME_GOAL_FIELDS = (
+    "summary",
+    "name",
+    "title",
+    "goal",
+    "end_state",
+    "end_status",
+    "core_conflict",
+    "chapters_range",
+)
+
+
+def _sanitize_volume_goal(raw: Any) -> Dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    cleaned: Dict[str, str] = {}
+    for key in _VOLUME_GOAL_FIELDS:
+        if key not in raw:
+            continue
+        text = sanitize_chapter_directive_text(raw.get(key))
+        if text:
+            cleaned[key] = text
+    return cleaned
+
+
 def _sanitize_volume(volume: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "meta": _sanitize_meta(volume.get("meta")),
-        "volume_goal": {},
+        "volume_goal": _sanitize_volume_goal(volume.get("volume_goal")),
         "selected_tropes": [],
         "selected_pacing": {},
         "selected_scenes": [],
@@ -482,8 +505,7 @@ def _sanitize_review(
         "anti_patterns": [],
     }
     # These fields are plot/canon obligations consumed by pre-write gates.
-    # Keep only declarative fragments; style/craft text is stripped by the
-    # shared fact sanitizer.  Generic system constraints remain excluded.
+    # Author wording is kept; plugin-provided craft tables stay excluded.
     for key in (
         "must_check",
         "blocking_rules",

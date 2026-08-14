@@ -984,3 +984,13 @@ def test_reviewer_has_no_react_meta_narrative():
     text = _read_text(AGENTS_DIR / "reviewer.md")
     assert "ReAct" not in text, "reviewer 不应出现 ReAct 字样"
     assert "思维链" not in text, "reviewer 不应保留思维链元叙述"
+
+
+def test_reviewer_does_not_block_on_missing_previous_chapter_summary():
+    """第一章或读不到摘要时，不得把连贯维写成 blocking。"""
+    text = _read_text(AGENTS_DIR / "reviewer.md")
+    assert "读不到上章摘要 → 不是错误" in text
+    assert "禁止因此输出 blocking" in text
+    assert "不要查章末钩子、场景过渡写法、情绪弧" in text
+    assert "自由文本摘要不是真源" in text
+    assert "不得因为「没有上章」输出 blocking" in text

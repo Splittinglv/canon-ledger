@@ -217,7 +217,7 @@ class TestOutputFormat:
     """Test output JSON structure."""
 
     def test_result_has_required_fields(self):
-        """Each result has 编号, 表, 分类, 层级, 适用题材, 内容摘要, 大模型指令."""
+        """Each result has 编号, 表, 分类, 层级, 适用题材, 内容摘要; never 大模型指令."""
         out = run_search(
             "--skill", "write",
             "--table", "命名规则",
@@ -231,10 +231,10 @@ class TestOutputFormat:
             assert "层级" in r
             assert "适用题材" in r
             assert "内容摘要" in r
-            assert "大模型指令" in r
+            assert "大模型指令" not in r
 
-    def test_content_summary_prefers_core_summary(self):
-        """内容摘要优先返回 核心摘要。"""
+    def test_naming_summary_uses_examples_not_style_lesson(self):
+        """命名检索摘要用对象/正反例，不喂「保留修仙感」这类写法课。"""
         out = run_search(
             "--skill", "write",
             "--table", "命名规则",
@@ -242,7 +242,11 @@ class TestOutputFormat:
             "--genre", "玄幻",
         )
         row = next(r for r in out["data"]["results"] if r["编号"] == "NR-001")
-        assert row["内容摘要"] == "玄幻角色命名要保留修仙感与古风意象，避免现代日常姓名直接套入。"
+        assert row["内容摘要"] == (
+            "角色人名；正例：萧炎、叶凌天、慕容紫烟；反例：张伟、李明、王小花"
+        )
+        assert "修仙感" not in row["内容摘要"]
+        assert "大模型指令" not in row
 
     def test_data_envelope_fields(self):
         """Data envelope has query, skill, genre, total, results."""

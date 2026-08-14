@@ -664,7 +664,7 @@ def test_load_context_blocks_unsafe_hard_constraint_instead_of_injecting_style(t
         MemoryItem(
             id="style-as-rule", layer="semantic", category="world_rule",
             subject="global", field="voice",
-            value="下一章采用赛博朋克文风，多用短句",
+            value="必须让每章末尾都安排一次反转。",
             source_chapter=1,
         )
     )
@@ -672,6 +672,7 @@ def test_load_context_blocks_unsafe_hard_constraint_instead_of_injecting_style(t
     pack = MemoryContractAdapter(cfg).load_context(2)
 
     serialized = json.dumps(pack.to_dict(), ensure_ascii=False)
+    assert "安排一次反转" not in serialized
     assert "赛博朋克文风" not in serialized
     assert pack.completeness["status"] == "blocked"
     assert pack.completeness["omitted_hard_ids"] == ["style-as-rule"]

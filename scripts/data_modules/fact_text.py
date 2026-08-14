@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Keep retrieval text factual and discard embedded creative instructions."""
+"""Normalize story facts. Author sources keep their wording; model text only drops jailbreaks."""
 from __future__ import annotations
 
 import hashlib
@@ -9,120 +9,13 @@ from pathlib import Path
 from typing import Any
 
 
-_CREATIVE_DIRECTIVE_PATTERNS = (
-    # Explicit meta-writing vocabulary is not a story-world fact even when it
-    # is phrased without an imperative verb.
+# Model-authored free text may try to override the writing contract. Keep only
+# that jailbreak filter — not a style/pacing vocabulary. Ordinary facts such as
+# 「用三年时间炼成金丹」 or 「限知视角」 must survive.
+_JAILBREAK_PATTERNS = (
     re.compile(
-        r"(?:文风|写作风格|叙事风格|文笔|写作|写法|改写|续写|润色|口吻|"
-        r"第一人称|第二人称|第三人称|人称|视角|POV|叙述者|叙事者|全知|限知|"
-        r"时态|语态|本段|段落|句式|短句|长句|修辞|用词|措辞|旁白|内心独白|"
-        r"心理描写|环境描写|对话比例|对白|对白比例|字数|篇幅|章节长度|"
-        r"倒叙|插叙|顺叙|口语化|对话比例|环境细节|"
-        r"笔调|叙述|场面|画面|镜头感|电影质感|电影气息|像诗一样写|写得像寓言|长篇大论|"
-        r"像诗一样写|写得像寓言|长篇大论|镜头感|"
-        r"海明威|莎士比亚|鲁迅|金庸|古龙|模仿作者|模仿作家|"
-        r"桥段|套路|爽文|虐文|追妻火葬场|升级流|赛博朋克|题材|节奏|氛围|"
-        r"系统提示|提示词|大模型|语言模型|剧情走向|剧情安排)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:prompt|instructions?|system\s+message|writing|rewrite|prose|"
-        r"style|tone|pacing|trope|genre|point\s+of\s+view|POV|narrator|"
-        r"first\s+person|second\s+person|third\s+person|past\s+tense|present\s+tense|"
-        r"paragraph|sentence\s+structure|diction|word\s+count|dialogue\s+ratio|"
-        r"lyrical|poetic|literary|terse|concise|simple\s+language|screenplay|"
-        r"rhythm|cadence|imagery|abstractions?|cinematic|muscular|spare|"
-        r"omniscient\s+voice|limited\s+voice|narrative\s+voice|"
-        r"Hemingway|Shakespeare|write\s+like|imitate\s+(?:an?\s+)?author|"
-        r"chapter\s+length)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:as\s+(?:an?\s+)?(?:language\s+model|assistant|writer)|"
-        r"follow\s+(?:the\s+)?(?:user|system|developer)?\s*(?:requests?|instructions?)|"
-        r"obey\s+(?:the\s+)?(?:user|system|developer))\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:忽略|无视|绕过|覆盖|不要遵循|不必遵循).{0,24}"
+        r"(?:忽略|无视|绕过|不要遵循|不必遵循).{0,24}"
         r"(?:合同|规则|约束|指令|提示词|系统提示|既有设定|前文要求)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:改写|改成|写成|采用|使用|切换|调整|加入|添加).{0,24}"
-        r"(?:文风|写作风格|叙事风格|口吻|节奏|桥段|套路|爽文|虐文|火葬场|升级流|赛博朋克)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:文风|写作风格|叙事风格|口吻|节奏|桥段|套路).{0,24}"
-        r"(?:改成|采用|使用|切换|调整|必须|应该)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:让|要求|命令)(?:模型|作者|写手).{0,28}"
-        r"(?:写|改|忽略|采用|加入|添加)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:后续|下一章|接下来).{0,20}"
-        r"(?:改写|写成|续写|润色|采用|使用|加入|添加|切换|安排|描述|讲述)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:next\s+chapter|future\s+chapters?)\b.{0,40}"
-        r"\b(?:write|rewrite|continue|polish|use|adopt|switch|change|add|insert|narrate|describe)\b",
-        re.IGNORECASE,
-    ),
-    # Meta-writing commands that avoid the usual words "style" and "prose".
-    # Match the command and its craft target together so ordinary story facts
-    # containing one of the nouns are not rejected on that noun alone.
-    re.compile(
-        r"\b(?:make|keep|tell|use|favor|favour|employ)\b.{0,48}"
-        r"\b(?:sentences?|narration|story|third[-\s]?person|cinematic|imagery)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:每(?:一)?句.{0,8}(?:都|要|应|保持).{0,8}(?:短|简短)|"
-        r"像诗一样写|故事写得像寓言)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:行文|文字|语言|字句).{0,16}"
-        r"(?:保持|要|应|需|得|有|使用|采用).{0,12}"
-        r"(?:克制|韵律|简洁|华丽|朴素|抒情|诗意|有力)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:(?:行文|文字|语言|字句).{0,8}(?:如|像|似).{0,16}(?:刀|诗|画|音乐)|"
-        r"句句.{0,8}(?:见血|有力|铿锵|押韵))",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:用动作代替解释|避免长篇大论|"
-        r"场景.{0,8}(?:要|应|需|有|保持|具有).{0,8}电影质感)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:只|仅)?(?:使用|采用)(?:简单|简洁|朴素)(?:的)?(?:语言|文字|措辞)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:每(?:一)?(?:章|回|节|段|句)|(?:本|下|上)章|章节|"
-        r"章(?:首|末|尾)|开场|开头|结尾|收尾|正文|段落|句子|"
-        r"读者|作者|写手|模型|叙事|剧情|桥段|情节).{0,32}"
-        r"(?:必须|应该|应当|需要|务必|总要|最好|都要|"
-        r"出现|加入|添加|安排|设置|制造|保留|留下|写入|"
-        r"描写|改写|揭示|呈现|反转|悬念|意外|钩子|爽点)",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:write\s+in\s+clipped\s+fragments?|"
-        r"favou?r\s+verbs?\s+over\s+adjectives?)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"(?:把|将|让|请|需要|务必|建议|可以|要).{0,36}"
-        r"(?:提前呈现|提前揭示|留(?:下|一个)?悬念|改得|插入|增删|调整|强化|弱化)",
         re.IGNORECASE,
     ),
     re.compile(
@@ -131,8 +24,14 @@ _CREATIVE_DIRECTIVE_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
-        r"\b(?:write|rewrite|continue|switch|change|use|adopt)\b.{0,40}"
-        r"\b(?:style|tone|plot|pacing|trope|voice|genre)\b",
+        r"\b(?:as\s+(?:an?\s+)?(?:language\s+model|assistant)|"
+        r"follow\s+(?:the\s+)?(?:user|system|developer)?\s*(?:requests?|instructions?)|"
+        r"obey\s+(?:the\s+)?(?:user|system|developer))\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:作为(?:一个)?(?:语言模型|助手)|扮演|假装).{0,16}"
+        r"(?:不受约束|无限制|越狱)",
         re.IGNORECASE,
     ),
     re.compile(
@@ -140,16 +39,6 @@ _CREATIVE_DIRECTIVE_PATTERNS = (
         r"(?:prompt|message)?\s*[:：]",
         re.IGNORECASE,
     ),
-)
-
-_IMPERATIVE_PREFIX = re.compile(
-    r"^(?:请|务必|应当|应该|不要|避免|把本|将本|让|保持|"
-    r"改为|改成|改用|采用|使用|加入|添加|插入|开头|开场|结尾|收尾|"
-    r"每.{0,6}句|please\b|make\b|write\b|rewrite\b|use\b|adopt\b|"
-    r"switch\b|change\b|insert\b|open\b|end\b|act\b|answer\b|follow\b|obey\b|"
-    r"keep\b|tell\b|favor\b|favour\b|employ\b|render\b|choose\b|narrate\b|describe\b|"
-    r"遵循|服从|执行|按照|按|用|以|回答|扮演|假装)",
-    re.IGNORECASE,
 )
 
 _FACT_ATOM = re.compile(r"^[\w\u4e00-\u9fff·.()（）:/\- ]+$", re.UNICODE)
@@ -325,45 +214,54 @@ def world_rule_evidence_in_commit(
     )
 
 
-def sanitize_fact_text(value: Any, *, max_chars: int = 1200) -> str:
-    """Return declarative fragments while dropping creative-control text.
+def _strip_controls(value: Any) -> str:
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", str(value or ""))
+    return re.sub(r"\s+", " ", text).strip()
 
-    Extracted summaries and event descriptions are data authored by a model or
-    imported from an existing project. They can contain a valid fact followed
-    by an instruction aimed at the next writer. Sentence-boundary filtering
-    preserves the fact while refusing prose, plot, or contract instructions.
+
+def _is_jailbreak(text: str) -> bool:
+    return any(pattern.search(text) for pattern in _JAILBREAK_PATTERNS)
+
+
+def normalize_author_text(value: Any, *, max_chars: int = 1200) -> str:
+    """Keep author-owned wording. No style vocabulary, no jailbreak filter.
+
+    设定集、init 输入和已接受 commit 是作者真源；插件不论文风，也不准
+    因为句首「用/以/按」或子串「视角/题材」把事实整段丢掉。
     """
+    text = _strip_controls(value)
+    if not text:
+        return ""
+    return text[: max(1, int(max_chars))].strip()
+
+
+def sanitize_fact_text(value: Any, *, max_chars: int = 1200) -> str:
+    """Keep model free text except jailbreak sentences such as 「忽略合同」."""
     text = str(value or "")
     text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text)
     fragments = re.split(r"(?:\r?\n)+|(?<=[。！？!?；;])", text)
     safe: list[str] = []
     for fragment in fragments:
         normalized = re.sub(r"\s+", " ", fragment).strip()
-        if not normalized:
-            continue
-        if _IMPERATIVE_PREFIX.search(normalized):
-            continue
-        if any(pattern.search(normalized) for pattern in _CREATIVE_DIRECTIVE_PATTERNS):
+        if not normalized or _is_jailbreak(normalized):
             continue
         safe.append(normalized)
     return " ".join(safe)[: max(1, int(max_chars))].strip()
 
 
 def sanitize_fact_atom(value: Any, *, max_chars: int = 80) -> str:
-    """Accept a short data value, never an arbitrary sentence or instruction."""
+    """Accept a short data value. Jailbreak atoms are refused; style words are not."""
     if value is None or isinstance(value, (dict, list, tuple, set)):
         return ""
     if isinstance(value, bool):
         return "true" if value else "false"
-    text = re.sub(r"\s+", " ", str(value)).strip()
+    text = _strip_controls(value)
     if not text or len(text) > max(1, int(max_chars)):
         return ""
-    if any(mark in text for mark in "。！？!?；;\n\r"):
+    if any(mark in text for mark in "。！？!?；;"):
         return ""
     if not _FACT_ATOM.fullmatch(text):
         return ""
-    if _IMPERATIVE_PREFIX.search(text):
-        return ""
-    if any(pattern.search(text) for pattern in _CREATIVE_DIRECTIVE_PATTERNS):
+    if _is_jailbreak(text):
         return ""
     return text

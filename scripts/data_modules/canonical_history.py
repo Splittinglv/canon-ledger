@@ -18,9 +18,9 @@ from .chapter_content_binding import verify_commit_content_binding
 from .commit_artifacts import extraction_list
 from .consistency_context import sanitize_initial_canon
 from .fact_text import (
+    normalize_author_text,
     normalize_world_rule_payload,
     sanitize_fact_atom,
-    sanitize_fact_text,
     world_rule_evidence_in_commit,
 )
 from .story_contracts import sanitize_setting_canon, verify_setting_canon
@@ -31,7 +31,7 @@ _COMMIT_NAME = re.compile(r"^chapter_(\d+)\.commit\.json$")
 
 def _text(value: Any, max_chars: int = 1200) -> str:
     raw = str(value or "")
-    return sanitize_fact_text(raw, max_chars=max(1, min(max_chars, len(raw) or 1)))
+    return normalize_author_text(raw, max_chars=max(1, min(max_chars, len(raw) or 1)))
 
 
 def _atom(value: Any, max_chars: int = 160) -> str:

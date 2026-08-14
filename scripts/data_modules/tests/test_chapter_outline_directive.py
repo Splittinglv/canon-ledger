@@ -6,6 +6,7 @@ import json
 from chapter_outline_loader import (
     load_chapter_execution_directive,
     load_chapter_outline,
+    load_volume_goal,
 )
 
 
@@ -127,3 +128,50 @@ def test_load_directive_supports_hundred_chinese_heading_without_neighbor_leakag
     assert directive["chapter_span"] == "一炷香"
     assert "只属于九十九章" not in raw_outline
     assert "只属于一百零一章" not in raw_outline
+
+
+def test_load_volume_goal_reads_master_outline_then_beat_sheet(tmp_path):
+    outline_dir = tmp_path / "大纲"
+    outline_dir.mkdir()
+    (outline_dir / "总纲.md").write_text(
+        "\n".join(
+            [
+                "| 卷号 | 卷名 | 章节范围 | 卷内目标 | 预期结束状态 |",
+                "|------|------|----------|----------|----------|",
+                "| 1 | 立足 | 1-20 | 卷一站稳脚跟 | 主角在宗门站稳脚跟 |",
+                "| 2 | 远行 | 21-40 | 卷二离开宗门 | 主角抵达皇城 |",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (outline_dir / "第1卷-节拍表.md").write_text(
+        "# 第 1 卷：误名 - 卷内事实规划表\n> 卷内目标：节拍表不得覆盖总纲\n",
+        encoding="utf-8",
+    )
+
+    goal = load_volume_goal(tmp_path, 1)
+    assert goal["name"] == "立足"
+    assert goal["summary"] == "卷一站稳脚跟"
+    assert goal["end_state"] == "主角在宗门站稳脚跟"
+    assert goal["chapters_range"] == "1-20"
+    assert load_volume_goal(tmp_path, 2)["summary"] == "卷二离开宗门"
+
+
+def test_load_volume_goal_falls_back_to_beat_sheet(tmp_path):
+    outline_dir = tmp_path / "大纲"
+    outline_dir.mkdir()
+    (outline_dir / "第2卷-节拍表.md").write_text(
+        "\n".join(
+            [
+                "# 第 2 卷：远行 - 卷内事实规划表",
+                "> 卷内目标：离开宗门",
+                "> 预期结束状态：抵达皇城",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    goal = load_volume_goal(tmp_path, 2)
+    assert goal["name"] == "远行"
+    assert goal["summary"] == "离开宗门"
+    assert goal["end_state"] == "抵达皇城"

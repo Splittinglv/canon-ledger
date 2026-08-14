@@ -5,7 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-from chapter_outline_loader import load_chapter_plot_structure, volume_num_for_chapter_from_state
+from chapter_outline_loader import (
+    load_chapter_plot_structure,
+    load_volume_goal,
+    volume_num_for_chapter_from_state,
+)
 
 from .story_contract_schema import MasterSetting, ReviewContract, VolumeBrief
 from .story_contracts import read_json_if_exists
@@ -20,11 +24,12 @@ class RuntimeContractBuilder:
         anti_patterns = self._load_anti_patterns()
         plot = self._load_plot_structure(chapter)
         volume = self._resolve_volume(chapter)
+        volume_goal = load_volume_goal(self.project_root, volume)
 
         volume_brief = VolumeBrief.model_validate(
             {
                 "meta": {"schema_version": "story-system/v1", "contract_type": "VOLUME_BRIEF"},
-                "volume_goal": {"summary": f"第{volume}卷延续作者已确认的主冲突"},
+                "volume_goal": volume_goal,
                 # 题材标签不是套路 preset；默认合同不替作者选择桥段或节奏。
                 "selected_tropes": [],
                 "selected_pacing": {},

@@ -682,7 +682,7 @@ def test_context_manager_includes_story_contract_and_prewrite_validation(temp_pr
         json.dumps(
             {
                 "meta": {"schema_version": "story-system/v1", "contract_type": "REVIEW_CONTRACT"},
-                "must_check": ["发现陷阱", craft_marker],
+    "must_check": ["发现陷阱"],
                 "blocking_rules": ["不可提前摊牌"],
                 "genre_specific_risks": [],
                 "anti_patterns": [],

@@ -65,9 +65,11 @@ color: yellow
 - 角色同时出现在两个地点
 
 ### 3. 叙事连贯（category: continuity）
-- 上章钩子是否有回应
-- 场景转换是否有过渡
-- 情绪弧是否连续（上章愤怒本章突然平静无过渡）
+- 只查可验证的跨章事实：已接受提交里的未闭合问题、伏笔、承诺、人物位置/状态是否与本章正文矛盾
+- 章合同 `must_cover_nodes` 未在正文发生 → blocking 的 continuity
+- 不要查章末钩子、场景过渡写法、情绪弧，也不要把「好不好看」写成 issue
+- 上章事实只来自已接受 `CHAPTER_COMMIT`、hard_constraints 和结构化事件；自由文本摘要不是真源，不要读摘要来判连贯
+- 第一章没有上章。没有已接受的上章提交时，只按本章合同与设定审查，不得因为「没有上章」输出 blocking
 
 ### 4. 角色一致性（category: character，仅 standard）
 - 行为是否与已建立的性格/动机一致
@@ -156,7 +158,7 @@ color: yellow
 
 - `status`：standard 且五维结论齐全为 `completed`；fast 且三维结论齐全为 `partial`；正文为空或无法完成本模式要求的维度为 `failed`。
 - `problems`：正文为空、读取状态失败、维度跳过、输出不完整、blocking issue、耗时异常。
-- `auto_handled`：无状态读取时跳过某个非关键维度、降级读取摘要。
+- `auto_handled`：无已接受上章提交时跳过跨章核对。
 - `needs_user_action`：存在 `blocking=true` 或无法审查时为 true。
 - `duration_ms`：由主流程计时记录。
 - `outputs`：`.canon-ledger/tmp/review_results.json` 与审查报告路径由主流程记录。
@@ -164,5 +166,5 @@ color: yellow
 ## 9. 错误处理
 
 - 无法读取角色状态 → 输出 blocking 的 setting 问题，并把该维度结论写成“无法完成校验：角色状态读取失败”，不得把未检查写成“未发现事实问题”
-- 无法读取上章摘要 → 输出 blocking 的 continuity 问题，并把该维度结论写成“无法完成校验：上章事实读取失败”
+- 读不到上章摘要 → 不是错误。摘要不是真源。第一章或尚无已接受上章提交时，连贯维写“无上章已接受事实，未发现与既有提交矛盾”，禁止因此输出 blocking
 - 正文为空 → 输出单条 critical issue："正文为空"

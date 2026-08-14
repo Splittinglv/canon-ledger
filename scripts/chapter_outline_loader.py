@@ -437,6 +437,108 @@ def parse_chapter_execution_directive(outline_text: str) -> Dict[str, Any]:
     return directive
 
 
+_VOLUME_TABLE_HEADER = re.compile(r"^\s*\|\s*卷号\s*\|")
+_VOLUME_GOAL_LINE = re.compile(r"卷内目标\s*[:：]\s*(.+)$")
+_VOLUME_END_LINE = re.compile(r"预期结束状态\s*[:：]\s*(.+)$")
+_VOLUME_TITLE_LINE = re.compile(r"第\s*(\d+)\s*卷\s*[：:]\s*(.+?)(?:\s*[-—]|$)")
+
+
+def _split_markdown_row(line: str) -> list[str]:
+    return [part.strip() for part in line.strip().strip("|").split("|")]
+
+
+def _volume_goal_from_master_outline(text: str, volume: int) -> Dict[str, str]:
+    lines = text.splitlines()
+    header_idx = next(
+        (index for index, line in enumerate(lines) if _VOLUME_TABLE_HEADER.match(line)),
+        None,
+    )
+    if header_idx is None:
+        return {}
+    header = _split_markdown_row(lines[header_idx])
+    index = {name: position for position, name in enumerate(header)}
+    volume_idx = index.get("卷号")
+    if volume_idx is None:
+        return {}
+    for line in lines[header_idx + 1 :]:
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            if stripped:
+                break
+            continue
+        cells = _split_markdown_row(stripped)
+        if not cells or all(re.fullmatch(r":?-{3,}:?", cell or "") for cell in cells):
+            continue
+        try:
+            row_volume = int(cells[volume_idx])
+        except (IndexError, TypeError, ValueError):
+            continue
+        if row_volume != volume:
+            continue
+        goal: Dict[str, str] = {}
+        mapping = {
+            "卷名": "name",
+            "章节范围": "chapters_range",
+            "卷内目标": "summary",
+            "预期结束状态": "end_state",
+        }
+        for header_name, field in mapping.items():
+            position = index.get(header_name)
+            if position is None or position >= len(cells):
+                continue
+            value = cells[position].strip()
+            if value:
+                goal[field] = value
+        return goal
+    return {}
+
+
+def _volume_goal_from_beat_sheet(text: str, volume: int) -> Dict[str, str]:
+    goal: Dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        title = _VOLUME_TITLE_LINE.search(line)
+        if title and int(title.group(1)) == volume:
+            name = title.group(2).strip()
+            if name:
+                goal["name"] = name
+        match = _VOLUME_GOAL_LINE.search(line)
+        if match:
+            summary = match.group(1).strip()
+            if summary:
+                goal["summary"] = summary
+        end_match = _VOLUME_END_LINE.search(line)
+        if end_match:
+            end_state = end_match.group(1).strip()
+            if end_state:
+                goal["end_state"] = end_state
+    return goal
+
+
+def load_volume_goal(project_root: Path, volume: int) -> Dict[str, str]:
+    """Read author volume summary/goal from 总纲 and the volume beat sheet."""
+    if volume <= 0:
+        return {}
+    outline_dir = Path(project_root) / "大纲"
+    goal: Dict[str, str] = {}
+    master = outline_dir / "总纲.md"
+    if master.is_file():
+        try:
+            goal.update(_volume_goal_from_master_outline(master.read_text(encoding="utf-8"), volume))
+        except (OSError, UnicodeDecodeError):
+            pass
+    beat = outline_dir / f"第{volume}卷-节拍表.md"
+    if beat.is_file():
+        try:
+            extra = _volume_goal_from_beat_sheet(beat.read_text(encoding="utf-8"), volume)
+        except (OSError, UnicodeDecodeError):
+            extra = {}
+        for key, value in extra.items():
+            if value and not goal.get(key):
+                goal[key] = value
+    return goal
+
+
 def load_chapter_execution_directive(project_root: Path, chapter_num: int) -> Dict[str, Any]:
     outline_dir = project_root / "大纲"
     split_outline = _find_split_outline_file(outline_dir, chapter_num)

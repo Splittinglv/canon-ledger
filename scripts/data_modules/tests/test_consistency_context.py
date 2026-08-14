@@ -83,7 +83,6 @@ def test_sanitize_story_contracts_rebuilds_only_consistency_fields():
         "master": "采用简练有力的短句文风。",
         "row": "让叙述像水一样流动。",
         "chapter": "把对白改写成剧本格式。",
-        "volume": "多用具体意象，少用抽象表达。",
         "scene": "所有场面呈现出黑色电影气息。",
         "review": "每个场景都保持简洁并具画面感。",
     }
@@ -106,7 +105,11 @@ def test_sanitize_story_contracts_rebuilds_only_consistency_fields():
                 }
             },
             "volume_brief": {
-                "volume_goal": {"summary": markers["volume"]},
+                "volume_goal": {
+                    "summary": "卷一站稳脚跟",
+                    "name": "立足",
+                    "end_state": "主角在宗门站稳脚跟",
+                },
                 "selected_scenes": [markers["scene"]],
                 "selected_tropes": ["套路标签"],
                 "system_constraints": [markers["review"]],
@@ -126,6 +129,10 @@ def test_sanitize_story_contracts_rebuilds_only_consistency_fields():
     assert cleaned["master_setting"]["route"]["primary_genre"] == "悬疑"
     assert cleaned["chapter_brief"]["chapter_directive"]["goal"] == "让掌柜承认旧约"
     assert cleaned["chapter_brief"]["chapter_directive"]["key_entities"] == ["掌柜"]
+    assert cleaned["volume_brief"]["volume_goal"]["summary"] == "卷一站稳脚跟"
+    assert cleaned["volume_brief"]["volume_goal"]["name"] == "立足"
+    assert cleaned["volume_brief"]["volume_goal"]["end_state"] == "主角在宗门站稳脚跟"
+    assert cleaned["volume_brief"]["selected_scenes"] == []
     assert cleaned["review_contract"]["must_check"] == ["掌柜必须承认旧约"]
     assert cleaned["review_contract"]["blocking_rules"] == ["不可让已死角色复活"]
     assert "unexpected" not in cleaned

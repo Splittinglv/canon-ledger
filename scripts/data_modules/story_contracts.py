@@ -11,7 +11,7 @@ from typing import Any, Dict, Iterable, List
 
 from chapter_outline_loader import volume_num_for_chapter_from_state
 from .consistency_context import sanitize_initial_canon, sanitize_story_contracts
-from .fact_text import sanitize_fact_atom, sanitize_fact_text
+from .fact_text import normalize_author_text, sanitize_fact_atom
 
 try:
     from security_utils import atomic_write_json
@@ -152,7 +152,7 @@ def _clean_setting_value(raw: Any, *, source: str, line: int) -> str:
         return ""
     if len(text) > _SETTING_VALUE_LIMIT:
         raise ValueError(f"设定事实过长，无法安全同步：{source}:{line}")
-    cleaned = sanitize_fact_text(text, max_chars=_SETTING_VALUE_LIMIT).strip()
+    cleaned = normalize_author_text(text, max_chars=_SETTING_VALUE_LIMIT)
     if text and not cleaned:
         raise ValueError(f"设定事实无法安全结构化：{source}:{line}")
     return cleaned
@@ -438,7 +438,7 @@ def sanitize_setting_canon(value: Any) -> Dict[str, Any]:
         field = sanitize_fact_atom(row.get("field"), max_chars=160).strip()
         section = sanitize_fact_atom(row.get("section"), max_chars=160).strip()
         raw_value = str(row.get("value") or "")
-        cleaned_value = sanitize_fact_text(raw_value, max_chars=_SETTING_VALUE_LIMIT).strip()
+        cleaned_value = normalize_author_text(raw_value, max_chars=_SETTING_VALUE_LIMIT)
         if (
             not subject
             or not field
