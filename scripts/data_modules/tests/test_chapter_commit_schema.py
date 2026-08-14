@@ -5,6 +5,8 @@ from copy import deepcopy
 
 import pytest
 
+from .review_test_helpers import standard_review
+
 from data_modules.chapter_commit_schema import (
     ChapterCommitSchema,
     DisambiguationResult,
@@ -35,7 +37,7 @@ def _commit_payload(chapter=3):
         },
         "chapter_binding": binding,
         "provenance": {"chapter_binding": binding},
-        "review_result": {"blocking_count": 0, "chapter_binding": binding},
+        "review_result": standard_review(binding),
         "fulfillment_result": {
             "planned_nodes": [],
             "covered_nodes": [],
@@ -56,14 +58,7 @@ def _commit_payload(chapter=3):
 
 def test_artifact_models_preserve_valid_top_level_payloads():
     binding = _binding()
-    review = ReviewResult.model_validate(
-        {
-            "blocking_count": 0,
-            "issues_count": 2,
-            "has_blocking": False,
-            "chapter_binding": binding,
-        }
-    )
+    review = ReviewResult.model_validate(standard_review(binding))
     fulfillment = FulfillmentResult.model_validate(
         {
             "planned_nodes": ["发现陷阱"],
@@ -86,7 +81,7 @@ def test_artifact_models_preserve_valid_top_level_payloads():
         }
     )
 
-    assert review.model_dump()["issues_count"] == 2
+    assert review.model_dump()["issues_count"] == 0
     assert fulfillment.covered_nodes == ["发现陷阱"]
     assert disambiguation.pending == []
     assert extraction.state_deltas[0]["entity_id"] == "xiaoyan"

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List
@@ -34,8 +36,22 @@ class EventLogStore:
     def write_events(self, chapter: int, events: Any) -> Path:
         normalized = self.normalize_events(chapter, events)
         path = self.paths.event_json(chapter)
-        write_json(path, normalized)
-        self._write_sqlite_mirror(normalized)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existed = path.is_file()
+        old_bytes = path.read_bytes() if existed else b""
+        try:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                self._replace_sqlite_chapter(conn, chapter, normalized)
+                # Keep the SQLite transaction open until the atomically
+                # written chapter snapshot is visible.  A failure restores
+                # the prior file and rolls the transaction back, so callers
+                # never receive success for a half-replaced event mirror.
+                write_json(path, normalized)
+                conn.commit()
+        except Exception:
+            self._restore_event_file(path, existed=existed, old_bytes=old_bytes)
+            raise
         return path
 
     def read_events(self, chapter: int) -> List[Dict[str, Any]]:
@@ -106,41 +122,67 @@ class EventLogStore:
     def normalize_events(self, chapter: int, events: Any) -> List[Dict[str, Any]]:
         return normalize_accepted_events(chapter, events)
 
-    def _write_sqlite_mirror(self, events: List[Dict[str, Any]]) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS story_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_id TEXT NOT NULL UNIQUE,
-                    chapter INTEGER NOT NULL,
-                    event_type TEXT NOT NULL,
-                    subject TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    def _replace_sqlite_chapter(
+        self,
+        conn: sqlite3.Connection,
+        chapter: int,
+        events: List[Dict[str, Any]],
+    ) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS story_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                chapter INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_story_events_chapter ON story_events(chapter)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_story_events_type ON story_events(event_type)"
+        )
+        conn.execute("DELETE FROM story_events WHERE chapter = ?", (int(chapter),))
+        conn.executemany(
+            """
+            INSERT INTO story_events(event_id, chapter, event_type, subject, payload_json)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    event["event_id"],
+                    int(event["chapter"]),
+                    event["event_type"],
+                    event["subject"],
+                    json.dumps(event.get("payload") or {}, ensure_ascii=False),
                 )
-                """
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_story_events_chapter ON story_events(chapter)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_story_events_type ON story_events(event_type)"
-            )
-            conn.executemany(
-                """
-                INSERT OR IGNORE INTO story_events(event_id, chapter, event_type, subject, payload_json)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        event["event_id"],
-                        int(event["chapter"]),
-                        event["event_type"],
-                        event["subject"],
-                        json.dumps(event.get("payload") or {}, ensure_ascii=False),
-                    )
-                    for event in events
-                ],
-            )
-            conn.commit()
+                for event in events
+            ],
+        )
+
+    @staticmethod
+    def _restore_event_file(path: Path, *, existed: bool, old_bytes: bytes) -> None:
+        if not existed:
+            path.unlink(missing_ok=True)
+            return
+        fd, temp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".restore",
+            dir=path.parent,
+        )
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(old_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temp_name, path)
+        finally:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass

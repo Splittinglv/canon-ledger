@@ -36,16 +36,17 @@ def test_writer_stage4_memory_facts_mapping(tmp_path):
     result = {
         "memory_facts": {
             "timeline_events": [{"event": "萧炎离开天云宗", "chapter": 100, "time_hint": "三年之约前夕"}],
-            "world_rules": [{"rule": "修炼体系九境", "scope": "global", "domain": "修炼体系", "field": "境界划分"}],
+            "world_rules": [{"rule": "修炼体系九境", "rule_category": "力量", "scope": "global", "domain": "修炼体系", "field": "境界划分"}],
             "open_loops": [{"content": "三年之约", "status": "active", "urgency": 80}],
             "reader_promises": [{"content": "纳兰嫣然会出场", "type": "encounter", "target": "纳兰嫣然"}],
         }
     }
     summary = writer.update_from_chapter_result(100, result)
-    assert summary["items_added"] >= 4
+    # 旧版 memory_facts 中没有正文绑定证据的世界规则不再晋升为硬约束；
+    # 时间线、伏笔和读者承诺仍按兼容路径写入。
+    assert summary["items_added"] >= 3
     store = ScratchpadManager(cfg)
     assert store.query(category="timeline", status="active")
-    assert store.query(category="world_rule", status="active")
+    assert not store.query(category="world_rule", status="active")
     assert store.query(category="open_loop", status="active")
     assert store.query(category="reader_promise", status="active")
-

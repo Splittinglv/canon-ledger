@@ -1,71 +1,64 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-审查结果 schema（v6）。
+"""事实审查结果契约。
 
-替代原 checker-output-schema.md 的评分制，改为结构化问题清单。
+审查只记录可验证的一致性问题，不产生文笔评分、节奏评分或写法反模式。
 """
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .chapter_content_binding import ChapterContentBinding, chapter_bindings_equal
 
-try:
-    from security_utils import atomic_write_json
-except ImportError:  # pragma: no cover
-    from scripts.security_utils import atomic_write_json
 
+REVIEW_DIMENSIONS = ("setting", "timeline", "continuity", "character", "logic")
+FAST_REVIEW_DIMENSIONS = ("setting", "timeline", "continuity")
 VALID_SEVERITIES = {"critical", "high", "medium", "low"}
-VALID_CATEGORIES = {
-    "continuity", "setting", "character", "timeline",
-    "ai_flavor", "logic", "pacing", "other",
-}
-SCORE_CATEGORIES = (
-    "continuity",
-    "setting",
-    "character",
-    "timeline",
-    "ai_flavor",
-    "logic",
-    "pacing",
-    "other",
-)
-SEVERITY_PENALTIES = {
-    "critical": 35.0,
-    "high": 15.0,
-    "medium": 6.0,
-    "low": 2.0,
-}
+VALID_CATEGORIES = set(REVIEW_DIMENSIONS)
 
 
-def _clamp_score(value: float) -> float:
-    return round(max(0.0, min(100.0, value)), 2)
+def expected_dimensions_for_mode(review_mode: str) -> tuple[str, ...]:
+    if review_mode == "standard":
+        return REVIEW_DIMENSIONS
+    if review_mode == "fast":
+        return FAST_REVIEW_DIMENSIONS
+    if review_mode == "minimal":
+        return ()
+    raise ValueError("review_result.review_mode 必须是 standard、fast 或 minimal")
 
 
-def _issue_penalty(issue: "ReviewIssue") -> float:
-    return float(SEVERITY_PENALTIES.get(issue.severity, SEVERITY_PENALTIES["medium"]))
+@dataclass(frozen=True)
+class ReviewDimensionResult:
+    dimension: str
+    conclusion: str
+
+    def __post_init__(self) -> None:
+        if self.dimension not in REVIEW_DIMENSIONS:
+            raise ValueError(f"未知审查维度：{self.dimension}")
+        if not self.conclusion.strip():
+            raise ValueError(f"审查维度 {self.dimension} 缺少结论")
+
+    def to_dict(self) -> Dict[str, str]:
+        return asdict(self)
 
 
 @dataclass
 class ReviewIssue:
     severity: str
-    category: str = "other"
+    category: str
     location: str = ""
     description: str = ""
     evidence: str = ""
     fix_hint: str = ""
     blocking: Optional[bool] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.severity not in VALID_SEVERITIES:
-            self.severity = "medium"
+            raise ValueError(f"未知问题级别：{self.severity}")
         if self.category not in VALID_CATEGORIES:
-            self.category = "other"
+            raise ValueError(f"未知事实审查分类：{self.category}")
         if self.blocking is None:
             self.blocking = self.severity == "critical"
 
@@ -76,9 +69,24 @@ class ReviewIssue:
 @dataclass
 class ReviewResult:
     chapter: int
+    review_mode: str
     chapter_binding: Dict[str, Any] = field(default_factory=dict)
     issues: List[ReviewIssue] = field(default_factory=list)
+    dimension_results: List[ReviewDimensionResult] = field(default_factory=list)
     summary: str = ""
+
+    def __post_init__(self) -> None:
+        expected = expected_dimensions_for_mode(self.review_mode)
+        actual = tuple(item.dimension for item in self.dimension_results)
+        if actual != expected:
+            expected_text = "、".join(expected) if expected else "无"
+            actual_text = "、".join(actual) if actual else "无"
+            raise ValueError(
+                f"{self.review_mode} 模式必须按顺序审查维度 {expected_text}，"
+                f"实际为 {actual_text}"
+            )
+        if self.review_mode == "minimal" and self.issues:
+            raise ValueError("minimal 模式跳过审查，不能携带问题结论")
 
     @property
     def issues_count(self) -> int:
@@ -86,23 +94,47 @@ class ReviewResult:
 
     @property
     def blocking_count(self) -> int:
-        return sum(1 for i in self.issues if i.blocking)
+        return sum(1 for issue in self.issues if issue.blocking)
 
     @property
     def has_blocking(self) -> bool:
         return self.blocking_count > 0
 
     @property
+    def review_status(self) -> str:
+        if self.review_mode == "standard":
+            return "completed"
+        if self.review_mode == "fast":
+            return "partial"
+        return "skipped"
+
+    @property
+    def review_skipped(self) -> bool:
+        return self.review_mode == "minimal"
+
+    @property
+    def review_degraded(self) -> bool:
+        return self.review_mode != "standard"
+
+    @property
+    def reviewed_dimensions(self) -> List[str]:
+        return [item.dimension for item in self.dimension_results]
+
+    @property
+    def skipped_dimensions(self) -> List[str]:
+        reviewed = set(self.reviewed_dimensions)
+        return [dimension for dimension in REVIEW_DIMENSIONS if dimension not in reviewed]
+
+    @property
     def severity_counts(self) -> Dict[str, int]:
         counts = {level: 0 for level in ("critical", "high", "medium", "low")}
         for issue in self.issues:
-            severity = issue.severity if issue.severity in counts else "medium"
-            counts[severity] += 1
+            counts[issue.severity] += 1
         return counts
 
     @property
     def categories(self) -> List[str]:
-        return sorted(set(i.category for i in self.issues))
+        return sorted({issue.category for issue in self.issues})
 
     @property
     def critical_issues(self) -> List[str]:
@@ -112,58 +144,75 @@ class ReviewResult:
             if issue.severity == "critical" and issue.description
         ]
 
-    def _build_dimension_scores(self) -> Dict[str, float]:
-        scores = {category: 100.0 for category in SCORE_CATEGORIES}
-        for issue in self.issues:
-            category = issue.category if issue.category in scores else "other"
-            scores[category] = _clamp_score(scores[category] - _issue_penalty(issue))
-        return scores
-
-    def _build_notes(self, categories: List[str]) -> str:
+    def _build_notes(self) -> str:
         parts: List[str] = []
         if self.summary:
             parts.append(self.summary)
-        parts.append(f"issues={self.issues_count}")
-        parts.append(f"blocking={self.blocking_count}")
-        if categories:
-            parts.append("categories=" + ",".join(categories))
-        return " | ".join(parts)
-
-    def _calculate_overall_score(self) -> float:
-        score = 100.0
-        for issue in self.issues:
-            score -= _issue_penalty(issue)
-        return _clamp_score(score)
+        parts.append(f"问题数={self.issues_count}")
+        parts.append(f"阻断数={self.blocking_count}")
+        if self.categories:
+            parts.append("分类=" + "、".join(self.categories))
+        return "；".join(parts)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "chapter": self.chapter,
             "chapter_binding": dict(self.chapter_binding),
-            "issues": [i.to_dict() for i in self.issues],
+            "review_mode": self.review_mode,
+            "review_status": self.review_status,
+            "review_skipped": self.review_skipped,
+            "review_degraded": self.review_degraded,
+            "reviewed_dimensions": self.reviewed_dimensions,
+            "skipped_dimensions": self.skipped_dimensions,
+            "dimension_results": [item.to_dict() for item in self.dimension_results],
+            "issues": [issue.to_dict() for issue in self.issues],
             "issues_count": self.issues_count,
             "blocking_count": self.blocking_count,
             "has_blocking": self.has_blocking,
             "summary": self.summary,
         }
 
-    def to_metrics_dict(self, report_file: str = "") -> Dict[str, Any]:
-        categories = self.categories
-        severity_counts = self.severity_counts
+    def to_audit_dict(self, report_file: str = "") -> Dict[str, Any]:
+        """生成事实审查审计记录，不生成任何质量分数。"""
         return {
             "chapter": self.chapter,
             "start_chapter": self.chapter,
             "end_chapter": self.chapter,
-            "overall_score": self._calculate_overall_score(),
-            "dimension_scores": self._build_dimension_scores(),
-            "severity_counts": severity_counts,
+            "review_mode": self.review_mode,
+            "review_status": self.review_status,
+            "review_degraded": self.review_degraded,
+            "reviewed_dimensions": self.reviewed_dimensions,
+            "skipped_dimensions": self.skipped_dimensions,
+            "dimension_results": [item.to_dict() for item in self.dimension_results],
+            "severity_counts": self.severity_counts,
             "critical_issues": self.critical_issues,
             "report_file": report_file,
-            "notes": self._build_notes(categories),
+            "notes": self._build_notes(),
             "issues_count": self.issues_count,
             "blocking_count": self.blocking_count,
-            "categories": categories,
+            "categories": self.categories,
             "timestamp": datetime.now().isoformat(timespec="seconds"),
         }
+
+    # 保留旧方法名供调用方迁移，返回值已经是无评分的审计记录。
+    def to_metrics_dict(self, report_file: str = "") -> Dict[str, Any]:
+        return self.to_audit_dict(report_file=report_file)
+
+
+def _parse_dimension_results(raw: Any) -> List[ReviewDimensionResult]:
+    if not isinstance(raw, list):
+        raise ValueError("review_result.dimension_results 必须是数组")
+    results: List[ReviewDimensionResult] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"review_result.dimension_results[{index}] 必须是对象")
+        results.append(
+            ReviewDimensionResult(
+                dimension=str(item.get("dimension") or "").strip(),
+                conclusion=str(item.get("conclusion") or "").strip(),
+            )
+        )
+    return results
 
 
 def parse_review_output(
@@ -182,77 +231,47 @@ def parse_review_output(
         raise ValueError(
             f"review_result.chapter 为 {declared_chapter}，与请求章节 {chapter} 不一致"
         )
+
+    review_mode = str(raw.get("review_mode") or "").strip()
+    expected_dimensions_for_mode(review_mode)
+
     raw_binding = raw.get("chapter_binding")
     try:
         binding = ChapterContentBinding.model_validate(raw_binding).model_dump()
     except Exception as exc:
         raise ValueError("review_result.chapter_binding 缺失或无效") from exc
-    if expected_binding is not None and not chapter_bindings_equal(
-        binding,
-        expected_binding,
-    ):
+    if expected_binding is not None and not chapter_bindings_equal(binding, expected_binding):
         raise ValueError("review_result.chapter_binding 与预期正文不一致")
-    issues = []
-    for item in raw.get("issues", []):
+
+    raw_issues = raw.get("issues")
+    if not isinstance(raw_issues, list):
+        raise ValueError("review_result.issues 必须是数组")
+    issues: List[ReviewIssue] = []
+    for index, item in enumerate(raw_issues):
         if not isinstance(item, dict):
-            continue
-        issues.append(ReviewIssue(
-            severity=str(item.get("severity", "medium")),
-            category=str(item.get("category", "other")),
-            location=str(item.get("location", "")),
-            description=str(item.get("description", "")),
-            evidence=str(item.get("evidence", "")),
-            fix_hint=str(item.get("fix_hint", "")),
-            blocking=item.get("blocking"),
-        ))
-    return ReviewResult(
-        chapter=chapter,
-        chapter_binding=binding,
-        issues=issues,
-        summary=str(raw.get("summary", "")),
-    )
-
-
-def _read_json_if_exists(path: Path) -> Any | None:
-    if not path.is_file():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"文件 {path} 中的 JSON 无效") from exc
-
-
-def _write_json(path: Path, payload: Any) -> None:
-    atomic_write_json(path, payload, backup=True)
-
-
-def append_ai_flavor_anti_patterns(project_root: str | Path, result: ReviewResult) -> int:
-    root = Path(project_root).expanduser().resolve()
-    path = root / ".story-system" / "anti_patterns.json"
-    existing = _read_json_if_exists(path) or []
-    if not isinstance(existing, list):
-        existing = []
-
-    seen_texts = {str(item.get("text") or "").strip() for item in existing if isinstance(item, dict)}
-    additions: List[Dict[str, Any]] = []
-    for index, issue in enumerate(result.issues, start=1):
-        if issue.category != "ai_flavor" or issue.severity not in {"medium", "high", "critical"}:
-            continue
-        text = (issue.evidence or issue.description or "").strip()[:200]
-        if not text or text in seen_texts:
-            continue
-        seen_texts.add(text)
-        additions.append(
-            {
-                "text": text,
-                "source_table": "review_extracted",
-                "source_id": f"ch{int(result.chapter):04d}_issue_{index}",
-                "category": issue.category,
-                "added_at": datetime.now().isoformat(timespec="seconds"),
-            }
+            raise ValueError(f"review_result.issues[{index}] 必须是对象")
+        issues.append(
+            ReviewIssue(
+                severity=str(item.get("severity") or "").strip(),
+                category=str(item.get("category") or "").strip(),
+                location=str(item.get("location") or ""),
+                description=str(item.get("description") or ""),
+                evidence=str(item.get("evidence") or ""),
+                fix_hint=str(item.get("fix_hint") or ""),
+                blocking=item.get("blocking"),
+            )
         )
 
-    if additions:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _write_json(path, [*existing, *additions])
-    return len(additions)
+    result = ReviewResult(
+        chapter=chapter,
+        review_mode=review_mode,
+        chapter_binding=binding,
+        issues=issues,
+        dimension_results=_parse_dimension_results(raw.get("dimension_results")),
+        summary=str(raw.get("summary") or ""),
+    )
+    if result.review_mode == "minimal" and raw.get("review_skipped") is not True:
+        raise ValueError("minimal 模式必须显式声明 review_skipped=true")
+    if result.review_mode != "minimal" and raw.get("review_skipped") is True:
+        raise ValueError("standard/fast 模式不能声明跳过审查")
+    return result

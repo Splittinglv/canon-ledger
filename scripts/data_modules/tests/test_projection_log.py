@@ -25,6 +25,7 @@ from data_modules.projection_log import (  # noqa: E402
     projection_status_from_run,
     read_projection_runs,
 )
+from .review_test_helpers import standard_review  # noqa: E402
 
 
 def _build_bound_commit(service: ChapterCommitService, **kwargs):
@@ -34,6 +35,11 @@ def _build_bound_commit(service: ChapterCommitService, **kwargs):
     if not chapter_path.exists():
         chapter_path.write_text(f"第{chapter}章测试正文\n", encoding="utf-8")
     binding = build_chapter_binding(service.project_root, chapter)
+    if "blocking_count" in kwargs["review_result"]:
+        kwargs["review_result"] = standard_review(
+            binding,
+            blocking_count=int(kwargs["review_result"].get("blocking_count") or 0),
+        )
     for artifact_name in (
         "review_result",
         "fulfillment_result",

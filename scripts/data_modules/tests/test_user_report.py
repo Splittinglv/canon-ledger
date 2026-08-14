@@ -6,6 +6,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 
 def _ensure_scripts_on_path() -> None:
@@ -16,12 +17,13 @@ def _ensure_scripts_on_path() -> None:
 
 _ensure_scripts_on_path()
 
+import backup_manager  # noqa: E402
 from data_modules.projection_log import append_projection_run  # noqa: E402
-from data_modules.projection_log import commit_hash  # noqa: E402
 from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
 from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
 from data_modules.run_ledger import record_write_step  # noqa: E402
 from data_modules.user_report import build_user_report, render_user_report_text  # noqa: E402
+from .review_test_helpers import minimal_review, standard_review  # noqa: E402
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -68,37 +70,25 @@ def _write_review(
     review_skipped: bool = False,
     chapter_binding: dict | None = None,
 ) -> None:
-    review = {
-        "chapter": chapter,
-        "issues": [],
-        "issues_count": 0,
-        "blocking_count": blocking_count,
-        "has_blocking": blocking_count > 0,
-        "summary": "可继续" if blocking_count == 0 else "有阻断",
-    }
-    if blocking_count:
-        review["issues"] = [
-            {
-                "severity": "critical",
-                "category": "timeline",
-                "location": "第2段",
-                "description": "时间线断裂",
-                "fix_hint": "补过渡",
-                "blocking": True,
-            }
-        ]
-        review["issues_count"] = 1
-    if review_skipped:
-        review["review_skipped"] = True
-        review["review_mode"] = "minimal"
-    if chapter_binding is not None:
-        review["chapter_binding"] = dict(chapter_binding)
+    if chapter_binding is None:
+        chapter_binding = build_chapter_binding(project_root, chapter)
+    review = (
+        minimal_review(chapter_binding)
+        if review_skipped
+        else standard_review(chapter_binding, blocking_count=blocking_count)
+    )
     _write_json(project_root / ".webnovel" / "tmp" / "review_results.json", review)
     _write_json(
-        project_root / ".webnovel" / "tmp" / "review_metrics.json",
+        project_root / ".webnovel" / "tmp" / "review_audit.json",
         {
+            "chapter": chapter,
             "start_chapter": chapter,
             "end_chapter": chapter,
+            "review_mode": review["review_mode"],
+            "review_status": review["review_status"],
+            "review_degraded": review["review_degraded"],
+            "reviewed_dimensions": review["reviewed_dimensions"],
+            "skipped_dimensions": review["skipped_dimensions"],
             "issues_count": review["issues_count"],
             "blocking_count": blocking_count,
             "report_file": f"审查报告/第{chapter}章审查报告.md",
@@ -154,14 +144,11 @@ def _commit_payload(
     blocking_count: int = 0,
     projection_status: dict | None = None,
 ) -> dict:
-    """Build a real, current-prose-bound commit rather than a legacy stub."""
+    """构造绑定当前正文的真实提交，不使用旧版占位数据。"""
     binding = build_chapter_binding(project_root, chapter)
     payload = ChapterCommitService(project_root).build_commit(
         chapter=chapter,
-        review_result={
-            "blocking_count": blocking_count,
-            "chapter_binding": binding,
-        },
+        review_result=standard_review(binding, blocking_count=blocking_count),
         fulfillment_result={
             "planned_nodes": [],
             "covered_nodes": [],
@@ -198,6 +185,13 @@ def _write_commit(project_root: Path, payload: dict) -> Path:
     return path
 
 
+def _write_strict_local_backup(project_root: Path, *, chapter: int) -> Path:
+    with patch.object(backup_manager, "is_git_available", return_value=False):
+        manager = backup_manager.GitBackupManager(str(project_root))
+        assert manager.backup(chapter, require_accepted_binding=True)
+    return project_root / ".webnovel" / "backups" / f"ch{chapter:04d}.receipt.json"
+
+
 def _write_success_case(project_root: Path, *, chapter: int = 1) -> dict:
     _make_project(project_root)
     chapter_file = project_root / "正文" / f"第{chapter:04d}章.md"
@@ -208,36 +202,8 @@ def _write_success_case(project_root: Path, *, chapter: int = 1) -> dict:
     payload = _commit_payload(project_root, chapter=chapter)
     _write_commit(project_root, payload)
 
-    # Mirror the evidence that the strict resume path accepts: the receipt
-    # must bind this exact accepted commit and the ledger must record the same
-    # current manuscript as its backup input.
-    backup_dir = project_root / ".webnovel" / "backups"
-    snapshot = backup_dir / f"snapshot_ch{chapter:04d}_current"
-    snapshot.mkdir(parents=True, exist_ok=True)
-    snapshot_chapter = snapshot / payload["chapter_binding"]["path"]
-    snapshot_chapter.parent.mkdir(parents=True, exist_ok=True)
-    snapshot_chapter.write_bytes(chapter_file.read_bytes())
-    snapshot_commit = (
-        snapshot
-        / ".story-system"
-        / "commits"
-        / f"chapter_{chapter:03d}.commit.json"
-    )
-    snapshot_commit.parent.mkdir(parents=True, exist_ok=True)
-    _write_json(snapshot_commit, payload)
-    receipt_path = backup_dir / f"ch{chapter:04d}.receipt.json"
-    _write_json(
-        receipt_path,
-        {
-            "schema_version": "webnovel-backup-receipt/v1",
-            "chapter": chapter,
-            "chapter_binding": payload["chapter_binding"],
-            "chapter_commit_path": f".story-system/commits/chapter_{chapter:03d}.commit.json",
-            "chapter_commit_hash": commit_hash(payload),
-            "mode": "local",
-            "snapshot": snapshot.name,
-        },
-    )
+    # 用真实严格备份生成带签名的完整快照；运行台账同时绑定当前正文。
+    receipt_path = _write_strict_local_backup(project_root, chapter=chapter)
     record_write_step(
         project_root,
         chapter=chapter,
@@ -327,29 +293,8 @@ def test_render_write_report_projection_retry_success_is_auto_handled(tmp_path: 
         {"index": {"status": "failed:locked"}},
         commit_path=commit_path,
     )
-    # The commit snapshot changed, so refresh the backup receipt/snapshot to
-    # model a completed retry followed by the normal backup step.
-    binding = payload["chapter_binding"]
-    backup_dir = tmp_path / ".webnovel" / "backups"
-    snapshot = backup_dir / "snapshot_ch0001_retry"
-    snapshot_chapter = snapshot / binding["path"]
-    snapshot_chapter.parent.mkdir(parents=True, exist_ok=True)
-    snapshot_chapter.write_bytes((tmp_path / binding["path"]).read_bytes())
-    snapshot_commit = snapshot / ".story-system" / "commits" / commit_path.name
-    snapshot_commit.parent.mkdir(parents=True, exist_ok=True)
-    _write_json(snapshot_commit, payload)
-    _write_json(
-        backup_dir / "ch0001.receipt.json",
-        {
-            "schema_version": "webnovel-backup-receipt/v1",
-            "chapter": 1,
-            "chapter_binding": binding,
-            "chapter_commit_path": ".story-system/commits/chapter_001.commit.json",
-            "chapter_commit_hash": commit_hash(payload),
-            "mode": "local",
-            "snapshot": snapshot.name,
-        },
-    )
+    # commit 快照已变化，按正常流程重新生成严格本地备份。
+    _write_strict_local_backup(tmp_path, chapter=1)
     append_projection_run(
         tmp_path,
         payload,

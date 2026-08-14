@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 
 from ..commit_artifacts import extraction_list
 from ..config import DataModulesConfig, get_config
+from ..fact_text import normalize_world_rule_payload, world_rule_evidence_in_commit
 from ..urgency_utils import coerce_urgency
 from .schema import MemoryItem
 from .store import ScratchpadManager
@@ -268,15 +269,22 @@ class MemoryWriter:
         for row in world_rules:
             if not isinstance(row, dict):
                 continue
-            rule = str(row.get("rule", "") or "").strip()
-            if not rule:
-                continue
-            subject = (
-                str(row.get("domain", "") or "").strip()
-                or str(row.get("scope", "") or "").strip()
-                or "global"
+            normalized_rule = normalize_world_rule_payload(
+                {
+                    "rule_content": row.get("rule"),
+                    "rule_category": row.get("rule_category") or row.get("category"),
+                    "domain": row.get("domain"),
+                    "field": row.get("field"),
+                    "scope": row.get("scope"),
+                    "evidence_quote": row.get("evidence_quote"),
+                },
+                row.get("domain"),
             )
-            field = str(row.get("field", "") or "").strip() or rule[:32]
+            if normalized_rule is None:
+                continue
+            rule = normalized_rule["rule_content"]
+            subject = normalized_rule["domain"]
+            field = normalized_rule["field"]
             item = MemoryItem(
                 id=self._item_id("world_rule", subject, field, chapter),
                 layer="semantic",
@@ -284,7 +292,11 @@ class MemoryWriter:
                 subject=subject,
                 field=field,
                 value=rule,
-                payload={"scope": row.get("scope"), "rule_text": rule},
+                payload={
+                    "scope": normalized_rule["scope"],
+                    "rule_category": normalized_rule["rule_category"],
+                    "rule_text": rule,
+                },
                 source_chapter=int(chapter),
                 evidence=[f"memory_facts:world_rule:{chapter}"],
             )
@@ -497,11 +509,21 @@ class MemoryWriter:
         return errors
 
     def validate_commit_projection(self, commit_payload: Dict[str, Any]) -> list[str]:
-        """Validate lifecycle operations before any derived writer mutates state."""
+        """Validate canonical facts before any derived writer mutates state."""
         chapter = int((commit_payload.get("meta") or {}).get("chapter") or 0)
         accepted_events = list(extraction_list(commit_payload, "accepted_events"))
         creations, resolutions, errors = self._lifecycle_events(accepted_events, chapter)
         errors.extend(self._validate_lifecycle_targets(creations, resolutions))
+        for index, event in enumerate(accepted_events):
+            if not isinstance(event, dict) or event.get("event_type") != "world_rule_revealed":
+                continue
+            if not world_rule_evidence_in_commit(
+                self.config.project_root,
+                commit_payload,
+                event,
+            ):
+                event_id = str(event.get("event_id") or f"event-{chapter}-{index}")
+                errors.append(f"world_rule_evidence_untrusted:{event_id}")
         timeline_rows = [
             row
             for row in extraction_list(commit_payload, "timeline_events")
@@ -515,9 +537,8 @@ class MemoryWriter:
         chapter = int((commit_payload.get("meta") or {}).get("chapter") or 0)
         entity_deltas = list(extraction_list(commit_payload, "entity_deltas"))
         accepted_events = list(extraction_list(commit_payload, "accepted_events"))
-        creations, resolutions, lifecycle_errors = self._lifecycle_events(accepted_events, chapter)
-        lifecycle_errors.extend(self._validate_lifecycle_targets(creations, resolutions))
-        if lifecycle_errors:
+        projection_errors = self.validate_commit_projection(commit_payload)
+        if projection_errors:
             return {
                 "chapter": chapter,
                 "items_added": 0,
@@ -525,8 +546,9 @@ class MemoryWriter:
                 "items_outdated": 0,
                 "items_resolved": 0,
                 "warnings": [],
-                "error": lifecycle_errors[0],
+                "error": projection_errors[0],
             }
+        creations, resolutions, _ = self._lifecycle_events(accepted_events, chapter)
 
         legacy_memory_facts = commit_payload.get("extraction_result", {}).get("memory_facts")
         if not isinstance(legacy_memory_facts, dict):
@@ -547,26 +569,19 @@ class MemoryWriter:
             # world rule until an explicit ``world_rule_revealed`` commit
             # establishes that rule as canonical.
             if event_type == "world_rule_revealed":
-                rule_text = str(
-                    payload.get("rule_content")
-                    or payload.get("proposed_value")
-                    or payload.get("rule")
-                    or payload.get("base_value")
-                    or payload.get("description")
-                    or ""
-                ).strip()
-                if rule_text:
+                normalized_rule = normalize_world_rule_payload(
+                    payload,
+                    event.get("subject"),
+                )
+                if normalized_rule is not None:
                     memory_facts["world_rules"].append(
                         {
-                            "rule": rule_text,
-                            "scope": payload.get("scope") or "global",
-                            "domain": (
-                                payload.get("domain")
-                                or payload.get("rule_category")
-                                or event.get("subject")
-                                or "global"
-                            ),
-                            "field": payload.get("field") or event_type,
+                            "rule": normalized_rule["rule_content"],
+                            "rule_category": normalized_rule["rule_category"],
+                            "scope": normalized_rule["scope"],
+                            "domain": normalized_rule["domain"],
+                            "field": normalized_rule["field"],
+                            "evidence_quote": normalized_rule["evidence_quote"],
                         }
                     )
 

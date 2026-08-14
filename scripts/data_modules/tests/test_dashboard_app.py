@@ -20,6 +20,7 @@ from data_modules.index_manager import (
     IndexManager,
     ReviewMetrics,
 )
+from .review_test_helpers import standard_review
 
 
 def _create_dashboard_client(monkeypatch, project_root: Path) -> TestClient:
@@ -231,9 +232,23 @@ def _build_project_data(project_root: Path) -> None:
         json.dumps({"meta": {"contract_type": "VOLUME_BRIEF", "volume": 2}}, ensure_ascii=False),
         encoding="utf-8",
     )
+    (story_root / "chapters" / "chapter_002.json").write_text(
+        json.dumps(
+            {
+                "meta": {"contract_type": "CHAPTER_BRIEF", "chapter": 2},
+                "chapter_directive": {"goal": "确认黑市线索的来源"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     (story_root / "chapters" / "chapter_003.json").write_text(
         json.dumps(
-            {"meta": {"contract_type": "CHAPTER_BRIEF", "chapter": 3}, "override_allowed": {"chapter_focus": "夜探黑市"}},
+            {
+                "meta": {"contract_type": "CHAPTER_BRIEF", "chapter": 3},
+                "chapter_directive": {"goal": "夜探黑市"},
+                "override_allowed": {"chapter_focus": "夜探黑市"},
+            },
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -251,7 +266,7 @@ def _build_project_data(project_root: Path) -> None:
     binding = build_chapter_binding(project_root, 2)
     accepted_commit = ChapterCommitService(project_root).build_commit(
         chapter=2,
-        review_result={"blocking_count": 0, "chapter_binding": binding},
+        review_result=standard_review(binding),
         fulfillment_result={
             "planned_nodes": [],
             "covered_nodes": [],
@@ -425,7 +440,7 @@ def test_dashboard_commits_and_contract_summary_endpoints(monkeypatch, tmp_path)
     assert contracts_payload["master"]["primary_genre"] == "玄幻升级流"
     assert contracts_payload["master"]["core_tone"] == "先压后爆"
     assert contracts_payload["counts"]["volumes"] == 2
-    assert contracts_payload["counts"]["chapters"] == 1
+    assert contracts_payload["counts"]["chapters"] == 2
     assert contracts_payload["counts"]["reviews"] == 1
     assert contracts_payload["counts"]["commits"] == 2
     assert contracts_payload["current_contracts"]["chapter"] is True

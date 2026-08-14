@@ -13,6 +13,7 @@ entity_deltas 用 `entity_type` 而非 `type`，open_loop_created 事件 payload
 import json
 
 from data_modules.config import DataModulesConfig
+from data_modules.chapter_content_binding import build_chapter_binding
 from data_modules.memory.store import ScratchpadManager
 from data_modules.memory_projection_writer import MemoryProjectionWriter
 from data_modules.state_projection_writer import StateProjectionWriter
@@ -444,10 +445,16 @@ def test_memory_writer_extracts_world_rule_from_rule_content(tmp_path):
     cfg = DataModulesConfig.from_project_root(tmp_path)
     cfg.ensure_dirs()
     writer = MemoryProjectionWriter(tmp_path)
+    chapter_path = tmp_path / "正文" / "第0002章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_quote = "青云城借贷市场：利率垄断、无信用体系、暴力收债"
+    chapter_path.write_text(evidence_quote, encoding="utf-8")
+    binding = build_chapter_binding(tmp_path, 2)
 
     writer.apply(
         {
             "meta": {"status": "accepted", "chapter": 2},
+            "chapter_binding": binding,
             "state_deltas": [],
             "entity_deltas": [],
             "accepted_events": [
@@ -455,11 +462,14 @@ def test_memory_writer_extracts_world_rule_from_rule_content(tmp_path):
                     "event_id": "evt_003",
                     "chapter": 2,
                     "event_type": "world_rule_revealed",
-                    "subject": "luming",
+                    "subject": "青云城借贷市场",
                     "payload": {
                         "description": "青云城借贷市场三大空白",
-                        "rule_category": "金融/经济",
+                        "rule_category": "经济",
+                        "domain": "青云城借贷市场",
+                        "field": "借贷秩序",
                         "rule_content": "利率垄断、无信用体系、暴力收债",
+                        "evidence_quote": evidence_quote,
                     },
                 }
             ],

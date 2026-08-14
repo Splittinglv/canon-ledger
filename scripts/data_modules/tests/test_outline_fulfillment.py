@@ -7,6 +7,7 @@ import pytest
 
 from data_modules.outline_fulfillment import (
     fulfillment_node_errors,
+    load_authoritative_chapter_goal,
     load_authoritative_planned_nodes,
 )
 
@@ -45,6 +46,22 @@ def test_authoritative_nodes_preserve_canonical_and_legacy_order(tmp_path):
         "识别封蜡缺口",
         "记下账房暗号",
     ]
+
+
+def test_authoritative_goal_keeps_legacy_project_without_outline_compatible(tmp_path):
+    assert load_authoritative_chapter_goal(tmp_path, 1) is None
+
+
+def test_outline_goal_requires_a_persisted_chapter_contract(tmp_path):
+    outline_path = tmp_path / "大纲" / "第1章-旧约.md"
+    outline_path.parent.mkdir(parents=True, exist_ok=True)
+    outline_path.write_text(
+        "### 第一章：旧约\n- 本章目标：让掌柜承认旧约",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="chapter_contract_missing_goal"):
+        load_authoritative_chapter_goal(tmp_path, 1)
 
 
 def test_outline_nodes_fail_closed_when_contract_drops_them(tmp_path):

@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from .review_test_helpers import standard_review
+
 
 def _ensure_scripts_on_path() -> None:
     scripts_dir = Path(__file__).resolve().parents[2]
@@ -603,7 +605,15 @@ def test_write_gate_cli_runs_prewrite(monkeypatch, tmp_path, capsys):
     for path, payload in (
         (project_root / ".story-system" / "MASTER_SETTING.json", {"meta": {"contract_type": "MASTER_SETTING"}}),
         (project_root / ".story-system" / "volumes" / "volume_001.json", {"meta": {"volume": 1}}),
-        (project_root / ".story-system" / "chapters" / "chapter_001.json", {"chapter_directive": {"must_cover_nodes": []}}),
+        (
+            project_root / ".story-system" / "chapters" / "chapter_001.json",
+            {
+                "chapter_directive": {
+                    "goal": "确认第一章已经建立的事实",
+                    "must_cover_nodes": [],
+                }
+            },
+        ),
         (project_root / ".story-system" / "reviews" / "chapter_001.review.json", {"blocking_rules": []}),
     ):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -651,7 +661,7 @@ def test_projections_retry_cli_runs(monkeypatch, tmp_path, capsys):
     service.persist_commit(
         service.build_commit(
             chapter=1,
-            review_result={"blocking_count": 1, "chapter_binding": binding},
+            review_result=standard_review(binding, blocking_count=1),
             fulfillment_result={
                 "planned_nodes": [],
                 "covered_nodes": [],
@@ -801,33 +811,21 @@ def test_review_pipeline_builds_artifacts(tmp_path):
     )
 
     review_results_path = tmp_path / "review_results.json"
+    raw_review = standard_review(chapter_binding, blocking_count=1)
+    raw_review["issues"].append(
+        {
+            "severity": "medium",
+            "category": "setting",
+            "location": "第五段",
+            "description": "本章使用了尚未获得的通行令牌。",
+            "evidence": "既有记录中主角尚未获得该令牌。",
+            "fix_hint": "补充令牌来源，或改用已经持有的凭证。",
+            "blocking": False,
+        }
+    )
+    raw_review["summary"] = "本章发现一个阻断问题和一个非阻断问题。"
     review_results_path.write_text(
-        json.dumps(
-            {
-                "chapter": 20,
-                "chapter_binding": chapter_binding,
-                "issues": [
-                    {
-                        "severity": "critical",
-                        "category": "timeline",
-                        "location": "第2段",
-                        "description": "时间线回跳",
-                        "evidence": "上章深夜，本章突然中午",
-                        "fix_hint": "补时间过渡",
-                        "blocking": True,
-                    },
-                    {
-                        "severity": "medium",
-                        "category": "ai_flavor",
-                        "location": "第5段",
-                        "description": "'稳住心神'出现2次",
-                        "fix_hint": "替换为具体动作",
-                    },
-                ],
-                "summary": "1个阻断，1个中等",
-            },
-            ensure_ascii=False,
-        ),
+        json.dumps(raw_review, ensure_ascii=False),
         encoding="utf-8",
     )
 
@@ -842,15 +840,15 @@ def test_review_pipeline_builds_artifacts(tmp_path):
     assert payload["review_result"]["blocking_count"] == 1
     assert payload["review_result"]["has_blocking"] is True
     assert payload["review_result"]["issues_count"] == 2
-    assert payload["metrics"]["start_chapter"] == 20
-    assert payload["metrics"]["end_chapter"] == 20
-    assert payload["metrics"]["issues_count"] == 2
-    assert payload["metrics"]["blocking_count"] == 1
-    assert payload["metrics"]["severity_counts"]["critical"] == 1
-    assert payload["metrics"]["severity_counts"]["medium"] == 1
-    assert payload["metrics"]["critical_issues"] == ["时间线回跳"]
-    assert payload["metrics"]["overall_score"] < 100
-    assert payload["metrics"]["report_file"] == "审查报告/第20章.md"
+    assert payload["review_audit"]["start_chapter"] == 20
+    assert payload["review_audit"]["end_chapter"] == 20
+    assert payload["review_audit"]["issues_count"] == 2
+    assert payload["review_audit"]["blocking_count"] == 1
+    assert payload["review_audit"]["severity_counts"]["critical"] == 1
+    assert payload["review_audit"]["severity_counts"]["medium"] == 1
+    assert payload["review_audit"]["critical_issues"] == ["第1个已确认的事实冲突。"]
+    assert "overall_score" not in payload["review_audit"]
+    assert payload["review_audit"]["report_file"] == "审查报告/第20章.md"
 
     persisted_review = json.loads(review_results_path.read_text(encoding="utf-8"))
     assert persisted_review["chapter"] == 20
@@ -891,11 +889,11 @@ def test_review_pipeline_forwards_with_resolved_project_root(monkeypatch, tmp_pa
             str(review_results),
             "--chapter-binding",
             str(chapter_binding),
-            "--metrics-out",
-            str(tmp_path / "metrics.json"),
+            "--audit-out",
+            str(tmp_path / "audit.json"),
             "--report-file",
             "审查报告/第18章.md",
-            "--save-metrics",
+            "--save-audit",
         ],
     )
 
@@ -913,12 +911,67 @@ def test_review_pipeline_forwards_with_resolved_project_root(monkeypatch, tmp_pa
         str(review_results),
         "--chapter-binding",
         str(chapter_binding),
-        "--metrics-out",
-        str(tmp_path / "metrics.json"),
+        "--audit-out",
+        str(tmp_path / "audit.json"),
         "--report-file",
         "审查报告/第18章.md",
-        "--save-metrics",
+        "--save-audit",
     ]
+
+
+def test_review_pipeline_minimal_cli_writes_explicit_skipped_artifact(
+    monkeypatch,
+    tmp_path,
+):
+    import review_pipeline as review_pipeline_module
+    from data_modules.artifact_validator import validate_review_result
+    from data_modules.chapter_content_binding import build_chapter_binding
+
+    project_root = tmp_path / "测试作品"
+    chapter_file = project_root / "正文" / "第0006章.md"
+    chapter_file.parent.mkdir(parents=True, exist_ok=True)
+    chapter_file.write_text("本章正文只用于验证最简审查凭据。\n", encoding="utf-8")
+    chapter_binding = build_chapter_binding(project_root, 6)
+    chapter_binding_path = project_root / ".webnovel" / "tmp" / "chapter_binding.json"
+    chapter_binding_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_binding_path.write_text(
+        json.dumps(chapter_binding, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    review_results_path = project_root / ".webnovel" / "tmp" / "review_results.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "review_pipeline.py",
+            "--project-root",
+            str(project_root),
+            "--chapter",
+            "6",
+            "--review-results",
+            str(review_results_path),
+            "--chapter-binding",
+            str(chapter_binding_path),
+            "--minimal",
+        ],
+    )
+
+    review_pipeline_module.main()
+
+    persisted = json.loads(review_results_path.read_text(encoding="utf-8"))
+    assert persisted["review_mode"] == "minimal"
+    assert persisted["review_status"] == "skipped"
+    assert persisted["review_skipped"] is True
+    assert persisted["review_degraded"] is True
+    assert persisted["reviewed_dimensions"] == []
+    assert persisted["skipped_dimensions"] == [
+        "setting",
+        "timeline",
+        "continuity",
+        "character",
+        "logic",
+    ]
+    assert validate_review_result(review_results_path)["ok"] is True
 
 
 def test_review_pipeline_rejects_changed_manuscript_before_side_effects(tmp_path):
@@ -940,8 +993,8 @@ def test_review_pipeline_rejects_changed_manuscript_before_side_effects(tmp_path
         "issues": [
             {
                 "severity": "high",
-                "category": "ai_flavor",
-                "evidence": "唯一一个知道秘密的人。",
+                "category": "setting",
+                "evidence": "角色使用了尚未获得的通行令牌。",
             }
         ],
         "summary": "待审",
@@ -992,9 +1045,9 @@ def test_project_memory_forwards_with_resolved_project_root(monkeypatch, tmp_pat
             "project-memory",
             "add-pattern",
             "--pattern-type",
-            "format",
+            "timeline",
             "--description",
-            '内心独白使用双引号""',
+            "离开霜河城后，后续时间锚不得早于霜月初三。",
         ],
     )
 
@@ -1008,13 +1061,13 @@ def test_project_memory_forwards_with_resolved_project_root(monkeypatch, tmp_pat
         str(book_root),
         "add-pattern",
         "--pattern-type",
-        "format",
+        "timeline",
         "--description",
-        '内心独白使用双引号""',
+        "离开霜河城后，后续时间锚不得早于霜月初三。",
     ]
 
 
-def test_project_memory_add_pattern_escapes_quotes(tmp_path):
+def test_project_memory_rejects_style_content(tmp_path):
     _ensure_scripts_on_path()
     import project_memory as project_memory_module
 
@@ -1025,23 +1078,59 @@ def test_project_memory_add_pattern_escapes_quotes(tmp_path):
         encoding="utf-8",
     )
 
-    description = "正文格式规范：内心独白使用双引号\"\"，系统界面保留方括号[]"
+    with pytest.raises(ValueError, match="不能包含文风"):
+        project_memory_module.add_pattern(
+            project_root,
+            pattern_type="timeline",
+            description="正文使用短句，并让对白更口语化。",
+            category="写作规范",
+            importance="high",
+        )
+
+    assert not (project_root / ".webnovel" / "project_memory.json").exists()
+    assert not (project_root / ".webnovel" / "memory_scratchpad.json").exists()
+
+
+def test_project_memory_writes_a_consumable_consistency_rule(tmp_path):
+    _ensure_scripts_on_path()
+    import project_memory as project_memory_module
+
+    project_root = (tmp_path / "book").resolve()
+    (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
+    (project_root / ".webnovel" / "state.json").write_text(
+        json.dumps({"progress": {"current_chapter": 3}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    description = "角色离开霜河城后，后续时间锚必须晚于霜月初三。"
+
     result = project_memory_module.add_pattern(
         project_root,
-        pattern_type="format",
+        pattern_type="timeline",
         description=description,
-        category="写作规范",
+        category="时间线",
         importance="high",
     )
 
-    memory_path = project_root / ".webnovel" / "project_memory.json"
-    raw_text = memory_path.read_text(encoding="utf-8")
-    payload = json.loads(raw_text)
-
+    memory_path = project_root / ".webnovel" / "memory_scratchpad.json"
+    payload = json.loads(memory_path.read_text(encoding="utf-8"))
+    rules = payload["world_rules"]
     assert result["status"] == "success"
-    assert '\\"\\"' in raw_text
-    assert payload["patterns"][0]["description"] == description
-    assert payload["patterns"][0]["source_chapter"] == 3
+    assert result["path"] == str(memory_path)
+    assert len(rules) == 1
+    assert rules[0]["value"] == description
+    assert rules[0]["source_chapter"] == 3
+    assert rules[0]["payload"]["origin"] == "/webnovel-learn"
+
+    from data_modules.config import DataModulesConfig
+    from data_modules.memory.orchestrator import MemoryOrchestrator
+
+    pack = MemoryOrchestrator(
+        DataModulesConfig.from_project_root(project_root)
+    ).build_memory_pack(4, include_soft=False)
+    assert any(
+        item.get("value") == description
+        for item in pack.get("hard_constraints") or []
+    )
 
 
 def test_review_pipeline_main_creates_output_directories(tmp_path):
@@ -1064,27 +1153,25 @@ def test_review_pipeline_main_creates_output_directories(tmp_path):
     )
 
     review_results_path = tmp_path / "review_results.json"
+    raw_review = standard_review(chapter_binding)
+    raw_review["issues"] = [
+        {
+            "severity": "low",
+            "category": "logic",
+            "location": "第一段",
+            "description": "行动结果缺少已建立的前置条件。",
+            "evidence": "角色尚未获得开门所需的钥匙。",
+            "fix_hint": "补充钥匙来源或调整进入方式。",
+            "blocking": False,
+        }
+    ]
+    raw_review["summary"] = "本章发现一处轻微事实问题。"
     review_results_path.write_text(
-        json.dumps(
-            {
-                "chapter": 9,
-                "chapter_binding": chapter_binding,
-                "issues": [
-                    {
-                        "severity": "low",
-                        "category": "other",
-                        "location": "p1",
-                        "description": "小问题",
-                    }
-                ],
-                "summary": "轻微",
-            },
-            ensure_ascii=False,
-        ),
+        json.dumps(raw_review, ensure_ascii=False),
         encoding="utf-8",
     )
 
-    metrics_out = project_root / ".webnovel" / "tmp" / "review" / "metrics.json"
+    audit_out = project_root / ".webnovel" / "tmp" / "review" / "audit.json"
     report_file = project_root / "审查报告" / "第9章审查报告.md"
 
     old_argv = sys.argv
@@ -1098,24 +1185,24 @@ def test_review_pipeline_main_creates_output_directories(tmp_path):
         str(review_results_path),
         "--chapter-binding",
         str(chapter_binding_path),
-        "--metrics-out",
-        str(metrics_out),
+        "--audit-out",
+        str(audit_out),
         "--report-file",
         "审查报告/第9章审查报告.md",
-        "--save-metrics",
+        "--save-audit",
     ]
     try:
         review_pipeline_module.main()
     finally:
         sys.argv = old_argv
 
-    assert metrics_out.is_file()
+    assert audit_out.is_file()
     assert report_file.is_file()
     report_text = report_file.read_text(encoding="utf-8")
     assert "# 第9章审查报告" in report_text
     assert "## 作者视图" in report_text
     assert "本章结论：⚠️建议改" in report_text
-    assert "小问题" in report_text
+    assert "行动结果缺少已建立的前置条件" in report_text
     assert "## 其他问题" in report_text
 
     persisted_review = json.loads(review_results_path.read_text(encoding="utf-8"))
@@ -1128,9 +1215,9 @@ def test_review_pipeline_main_creates_output_directories(tmp_path):
 
     with sqlite3.connect(project_root / ".webnovel" / "index.db") as conn:
         row = conn.execute(
-            "SELECT start_chapter, end_chapter, report_file FROM review_metrics"
+            "SELECT chapter, review_mode, report_file FROM review_audits"
         ).fetchone()
-    assert row == (9, 9, "审查报告/第9章审查报告.md")
+    assert row == (9, "standard", "审查报告/第9章审查报告.md")
 
 
 def test_webnovel_skill_flow_runs_story_contract_context_and_review_pipeline_with_stubbed_vector_model(
@@ -1225,7 +1312,7 @@ def test_webnovel_skill_flow_runs_story_contract_context_and_review_pipeline_wit
     prior_service = ChapterCommitService(project_root)
     prior_payload = prior_service.build_commit(
         chapter=2,
-        review_result={"blocking_count": 0, "chapter_binding": prior_binding},
+        review_result=standard_review(prior_binding),
         fulfillment_result={
             "planned_nodes": [],
             "covered_nodes": [],
@@ -1249,8 +1336,7 @@ def test_webnovel_skill_flow_runs_story_contract_context_and_review_pipeline_wit
             "chapter_binding": prior_binding,
         },
     )
-    # The fixture stores this exact projection below, so mark the persisted
-    # commit as retrieval-complete before exercising the read-side allowlist.
+    # 夹具会在下方写入这份精确投影；测试读取侧白名单前，先把提交标记为检索完成。
     prior_payload["projection_status"]["vector"] = "done"
     prior_chunks = VectorProjectionWriter(project_root)._collect_chunks(prior_payload)
     adapter = rag_module.RAGAdapter(cfg)
@@ -1347,28 +1433,24 @@ def test_webnovel_skill_flow_runs_story_contract_context_and_review_pipeline_wit
         json.dumps(chapter_binding, ensure_ascii=False),
         encoding="utf-8",
     )
+    raw_review = standard_review(chapter_binding)
+    raw_review["issues"] = [
+        {
+            "severity": "medium",
+            "category": "continuity",
+            "location": "第三段",
+            "description": "上章留下的规则异常在本章没有得到事实回应。",
+            "evidence": "上章确认规则异常，本章没有提及该事实。",
+            "fix_hint": "补充角色对规则异常的回应。",
+            "blocking": False,
+        }
+    ]
+    raw_review["summary"] = "本章发现一个非阻断问题。"
     review_results_path.write_text(
-        json.dumps(
-            {
-                "chapter": 3,
-                "chapter_binding": chapter_binding,
-                "issues": [
-                    {
-                        "severity": "medium",
-                        "category": "continuity",
-                        "location": "第3段",
-                        "description": "衔接略弱",
-                        "evidence": "上章钩子未明确承接",
-                        "fix_hint": "补衔接句",
-                    }
-                ],
-                "summary": "1个中优问题",
-            },
-            ensure_ascii=False,
-        ),
+        json.dumps(raw_review, ensure_ascii=False),
         encoding="utf-8",
     )
-    metrics_out = project_root / ".webnovel" / "tmp" / "review_metrics.json"
+    audit_out = project_root / ".webnovel" / "tmp" / "review_audit.json"
     assert (
         _run_webnovel(
             [
@@ -1381,17 +1463,18 @@ def test_webnovel_skill_flow_runs_story_contract_context_and_review_pipeline_wit
                 str(review_results_path),
                 "--chapter-binding",
                 str(chapter_binding_path),
-                "--metrics-out",
-                str(metrics_out),
+                "--audit-out",
+                str(audit_out),
                 "--report-file",
                 "审查报告/第3章.md",
             ]
         )
         == 0
     )
-    assert metrics_out.is_file()
-    metrics_payload = json.loads(metrics_out.read_text(encoding="utf-8"))
-    assert metrics_payload["issues_count"] == 1
+    assert audit_out.is_file()
+    audit_payload = json.loads(audit_out.read_text(encoding="utf-8"))
+    assert audit_payload["issues_count"] == 1
+    assert "overall_score" not in audit_payload
 
 
 def test_subagent_models_cli_reads_project_file(monkeypatch, tmp_path, capsys):

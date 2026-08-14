@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from .review_test_helpers import standard_review
+
 # 确保 scripts/ 在 sys.path 中
 _scripts_dir = str(Path(__file__).resolve().parent.parent.parent)
 if _scripts_dir not in sys.path:
@@ -239,7 +241,8 @@ class TestLoadContext:
         pack = adapter.load_context(10)
         assert isinstance(pack, ContextPack)
         assert pack.chapter == 10
-        assert pack.completeness["status"] == "complete"
+        assert pack.completeness["status"] == "blocked"
+        assert "missing_master_contract" in pack.completeness["missing_sources"]
         assert pack.budget_used_tokens > 0
 
     def test_load_context_empty_project_does_not_create_read_models(self, tmp_path):
@@ -247,7 +250,8 @@ class TestLoadContext:
 
         pack = MemoryContractAdapter(cfg).load_context(1)
 
-        assert pack.completeness["status"] == "complete"
+        assert pack.completeness["status"] == "blocked"
+        assert "missing_master_contract" in pack.completeness["missing_sources"]
         assert not cfg.index_db.exists()
         assert not cfg.vector_db.exists()
 
@@ -500,10 +504,7 @@ class TestCommitChapter:
         result = adapter.commit_chapter(
             3,
             {
-                "review_result": {
-                    "blocking_count": 0,
-                    "chapter_binding": binding,
-                },
+                "review_result": standard_review(binding),
                 "fulfillment_result": {
                     "planned_nodes": ["发现陷阱"],
                     "covered_nodes": ["发现陷阱"],
@@ -632,7 +633,7 @@ def test_load_context_distinguishes_empty_memory_from_memory_read_failure(
 
     assert pack.sections["hard_constraints"] == []
     assert pack.completeness["status"] == "blocked"
-    assert pack.completeness["missing_sources"] == ["scratchpad"]
+    assert "scratchpad" in pack.completeness["missing_sources"]
     assert pack.completeness["source_status"]["scratchpad"]["status"] == "error"
 
 
@@ -643,7 +644,7 @@ def test_load_context_marks_corrupt_existing_scratchpad_as_blocking(tmp_path):
     pack = MemoryContractAdapter(cfg).load_context(2)
 
     assert pack.completeness["status"] == "blocked"
-    assert pack.completeness["missing_sources"] == ["scratchpad"]
+    assert "scratchpad" in pack.completeness["missing_sources"]
     assert pack.sections["hard_constraints"] == []
 
 
@@ -698,7 +699,7 @@ def test_load_context_marks_structurally_corrupt_scratchpad_as_blocking(
     pack = MemoryContractAdapter(cfg).load_context(2)
 
     assert pack.completeness["status"] == "blocked"
-    assert pack.completeness["missing_sources"] == ["scratchpad"]
+    assert "scratchpad" in pack.completeness["missing_sources"]
     assert pack.sections["hard_constraints"] == []
 
 

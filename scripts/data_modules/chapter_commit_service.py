@@ -35,6 +35,7 @@ from .override_ledger_service import (
 )
 from .outline_fulfillment import (
     fulfillment_node_errors,
+    load_authoritative_chapter_goal,
     load_authoritative_planned_nodes,
 )
 
@@ -88,6 +89,10 @@ class ChapterCommitService:
                     "chapter_content_hash_mismatch",
                     f"{artifact_name}.chapter_binding is stale",
                 )
+        authoritative_goal = load_authoritative_chapter_goal(
+            self.project_root,
+            chapter,
+        )
         authoritative_nodes = load_authoritative_planned_nodes(
             self.project_root,
             chapter,
@@ -142,6 +147,7 @@ class ChapterCommitService:
                 "chapter_binding": chapter_binding,
             },
             "outline_snapshot": {
+                "goal": authoritative_goal or "",
                 "planned_nodes": fulfillment.planned_nodes,
                 "covered_nodes": fulfillment.covered_nodes,
                 "missed_nodes": fulfillment.missed_nodes,
@@ -310,6 +316,8 @@ class ChapterCommitService:
         payload: Dict[str, Any],
         *,
         only_writers: set[str] | None = None,
+        persist_run: bool = True,
+        writer_results_out: dict[str, dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
         status = str((payload.get("meta") or {}).get("status") or "")
         if status not in {"accepted", "rejected"}:
@@ -355,7 +363,11 @@ class ChapterCommitService:
                             "error": binding_error,
                             "reason": "chapter_content_changed",
                         }
-                self._persist_projection_run(payload, writer_results)
+                if writer_results_out is not None:
+                    writer_results_out.clear()
+                    writer_results_out.update(writer_results)
+                if persist_run:
+                    self._persist_projection_run(payload, writer_results)
                 return payload
             try:
                 result = writer.apply(payload)
@@ -367,7 +379,11 @@ class ChapterCommitService:
             except Exception as exc:
                 payload["projection_status"][name] = f"failed:{exc}"
                 writer_results[name] = {"status": "failed", "error": str(exc)}
-        self._persist_projection_run(payload, writer_results)
+        if writer_results_out is not None:
+            writer_results_out.clear()
+            writer_results_out.update(writer_results)
+        if persist_run:
+            self._persist_projection_run(payload, writer_results)
         return payload
 
     def apply_projections(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -376,6 +392,43 @@ class ChapterCommitService:
             return payload
 
         if self._block_changed_chapter_content(payload):
+            return payload
+
+        # Persist the canonical source before deciding between the append
+        # fast-path and a corpus rebuild.  The rebuild runs in an isolated
+        # project root and only installs a read model that was produced from
+        # this exact ordered commit set.
+        self.persist_commit(payload)
+        from .projection_rebuild import (
+            projection_snapshot_requires_rebuild,
+            rebuild_all_projections,
+            record_projection_snapshot,
+        )
+
+        if projection_snapshot_requires_rebuild(self.project_root, payload):
+            report = rebuild_all_projections(
+                self.project_root,
+                reason="canonical_snapshot_changed",
+            )
+            if report.get("ok"):
+                chapter = int((payload.get("meta") or {}).get("chapter") or 0)
+                for projected in report.get("payloads") or []:
+                    if int((projected.get("meta") or {}).get("chapter") or 0) == chapter:
+                        return projected
+                return payload
+
+            error = str(report.get("error") or "projection_rebuild_failed")
+            payload.setdefault("projection_status", {})
+            required = set(EventProjectionRouter().required_writers(payload)) or {"state"}
+            writer_results: dict[str, dict[str, Any]] = {}
+            for name in required:
+                payload["projection_status"][name] = f"failed:{error}"
+                writer_results[name] = {
+                    "status": f"failed:{error}",
+                    "reason": "projection_rebuild_failed",
+                    "error": str(report.get("detail") or error),
+                }
+            self._persist_projection_run(payload, writer_results)
             return payload
 
         if status == "accepted":
@@ -405,4 +458,8 @@ class ChapterCommitService:
                     persist_amend_proposals(conn, chapter, proposals)
                     conn.commit()
 
-        return self.apply_projection_writers(payload)
+        projected = self.apply_projection_writers(payload)
+        projection_status = projected.get("projection_status") or {}
+        if not any(str(value).startswith("failed") for value in projection_status.values()):
+            record_projection_snapshot(self.project_root, projected)
+        return projected

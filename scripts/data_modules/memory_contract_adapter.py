@@ -14,6 +14,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .chapter_commit_service import ChapterCommitService
+from .canonical_history import (
+    latest_canonical_chapter,
+    load_canonical_history,
+)
 from .commit_artifacts import extraction_list
 from .config import DataModulesConfig, get_config
 from .memory_contract import (
@@ -246,7 +250,16 @@ class MemoryContractAdapter:
         source_status: Dict[str, Dict[str, str]] = {}
         missing_sources: List[str] = []
         omitted_hard_ids: List[str] = []
-        runtime_sources = load_runtime_sources(self.config.project_root, chapter)
+        history_as_of = max(0, int(chapter) - 1)
+        runtime_sources = load_runtime_sources(
+            self.config.project_root,
+            chapter,
+            history_as_of,
+        )
+        canonical_history = load_canonical_history(
+            self.config.project_root,
+            history_as_of,
+        )
 
         mandatory["story_contracts"] = sanitize_story_contracts(
             dict(runtime_sources.contracts)
@@ -265,11 +278,38 @@ class MemoryContractAdapter:
             "latest_accepted_commit": commit_status_view(
                 getattr(runtime_sources, "latest_accepted_commit", None)
             ),
+            "history_as_of_chapter": history_as_of,
+            "canonical_chapters": list(canonical_history.valid_chapters),
         }
         mandatory["latest_commit"] = (
             commit_status_view(getattr(runtime_sources, "latest_commit", None)) or {}
         )
-        source_status["story_contracts"] = {"status": "ok"}
+        contract_failures = [
+            str(item)
+            for item in (getattr(runtime_sources, "fallback_sources", []) or [])
+            if str(item).startswith(("missing_", "invalid_", "stale_"))
+        ]
+        if contract_failures:
+            source_status["story_contracts"] = {
+                "status": "error",
+                "reason": ",".join(contract_failures),
+            }
+            missing_sources.extend(contract_failures)
+        else:
+            source_status["story_contracts"] = {"status": "ok"}
+
+        if canonical_history.invalid_sources:
+            source_status["canonical_history"] = {
+                "status": "error",
+                "reason": ",".join(canonical_history.invalid_sources),
+            }
+            missing_sources.extend(canonical_history.invalid_sources)
+        else:
+            source_status["canonical_history"] = {
+                "status": "ok",
+                "as_of_chapter": str(history_as_of),
+            }
+        omitted_hard_ids.extend(canonical_history.omitted_fact_ids)
 
         # 1. MemoryOrchestrator 基础包
         memory_pack: Dict[str, Any] = {}
@@ -295,14 +335,14 @@ class MemoryContractAdapter:
             }
             missing_sources.append("scratchpad")
 
-        hard_constraints, hard_error = normalize_hard_constraints(memory_pack)
+        scratchpad_hard, hard_error = normalize_hard_constraints(memory_pack)
         if hard_error:
             source_status["scratchpad"] = {
                 "status": "error",
                 "reason": hard_error,
             }
             missing_sources.append("scratchpad")
-            hard_constraints = []
+            scratchpad_hard = []
         for warning in memory_pack.get("warnings") or []:
             if not isinstance(warning, dict):
                 continue
@@ -320,7 +360,53 @@ class MemoryContractAdapter:
                         "reason": "unsafe_hard_constraint_without_ids",
                     }
 
+        # The commit envelopes, not the scratchpad projection, are the modern
+        # source of chapter-derived canon.  Chapter-zero/imported facts remain
+        # valid setup data; legacy projects without Story System keep their
+        # old scratchpad view but are visibly blocked by missing contracts.
+        modern_contract_root = (
+            self.config.project_root / ".story-system"
+        ).is_dir()
+        def _is_author_consistency_rule(row: Dict[str, Any]) -> bool:
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            return bool(
+                row.get("category") == "world_rule"
+                and str(row.get("id") or "").startswith("author-consistency-")
+                and payload.get("origin") == "/webnovel-learn"
+            )
+
+        setup_hard = [
+            row
+            for row in scratchpad_hard
+            if int((row or {}).get("source_chapter") or 0) == 0
+            or _is_author_consistency_rule(row)
+        ]
+        if not modern_contract_root:
+            setup_hard = list(scratchpad_hard)
+        elif scratchpad_hard:
+            trusted_chapters = set(canonical_history.valid_chapters)
+            for row in scratchpad_hard:
+                source_chapter = int((row or {}).get("source_chapter") or 0)
+                if (
+                    source_chapter > 0
+                    and source_chapter not in trusted_chapters
+                    and not _is_author_consistency_rule(row)
+                ):
+                    omitted_hard_ids.append(str((row or {}).get("id") or "unbound_fact"))
+
+        hard_constraints: List[Dict[str, Any]] = []
+        seen_hard_ids: set[str] = set()
+        for row in [*canonical_history.hard_constraints, *setup_hard]:
+            if not isinstance(row, dict):
+                continue
+            item_id = str(row.get("id") or "")
+            if not item_id or item_id in seen_hard_ids:
+                continue
+            seen_hard_ids.add(item_id)
+            hard_constraints.append(row)
+
         mandatory["hard_constraints"] = hard_constraints
+        mandatory["canonical_facts"] = list(canonical_history.canonical_facts)
 
         # Context Pack v2 exposes one canonical hard set.  Optional evidence
         # never repeats it, and aliases that duplicated the same prose were
@@ -390,58 +476,87 @@ class MemoryContractAdapter:
         # continuity sources.
         source_status["summaries"] = {"status": "excluded_untyped"}
 
-        # 4. 主角状态 + 进度。state.json 是“当前”投影，不是历史快照；
-        # 只有在其 current_chapter 严格早于目标章时才可用于写前上下文。
-        try:
-            if self.config.state_file.exists():
-                state_payload = json.loads(
-                    self.config.state_file.read_text(encoding="utf-8")
-                )
-                if not isinstance(state_payload, dict):
-                    raise ValueError("state_root_must_be_object")
-            else:
-                state_payload = {}
-            progress = state_payload.get("progress") or {}
-            if not isinstance(progress, dict):
-                raise ValueError("state_progress_must_be_object")
-            state_chapter, state_safe, state_reason = validate_state_snapshot(
-                state_payload,
-                chapter,
+        # 4. state.json 是可丢弃的“当前投影”，不能回答历史章节问题。
+        # Story System 项目只从初始化合同和已绑定 commit 派生主角/进度；
+        # 没有 Story System 的旧项目保留原来的兼容读取，但会因缺合同而
+        # fail closed，提示用户迁移。
+        if modern_contract_root:
+            protagonist_setup = dict(
+                canonical_history.initial_canon.get("protagonist") or {}
             )
-            if not state_safe:
-                source_status["state"] = {
-                    "status": "as_of_unavailable",
-                    "reason": state_reason,
-                    "current_chapter": (
-                        str(state_chapter) if state_chapter is not None else ""
-                    ),
-                }
-                missing_sources.append("state_as_of_chapter")
-            else:
-                protagonist = state_payload.get("protagonist_state") or {}
-                safe_protagonist, protagonist_rejected = _sanitize_state_value(
-                    protagonist
-                )
-                safe_progress, progress_rejected = _sanitize_state_value(progress)
-                if protagonist_rejected or progress_rejected:
-                    source_status["state"] = {
-                        "status": "error",
-                        "reason": "unsafe_state_value",
-                    }
-                    missing_sources.append("state")
-                else:
-                    if safe_protagonist:
-                        mandatory["protagonist"] = safe_protagonist
-                    if safe_progress:
-                        mandatory["progress"] = safe_progress
-                    source_status["state"] = {"status": "ok"}
-        except Exception as e:
-            logger.warning("load_context: state failed: %s", e)
-            source_status["state"] = {
-                "status": "error",
-                "reason": e.__class__.__name__,
+            protagonist_name = str(protagonist_setup.get("name") or "")
+            matched_entity = next(
+                (
+                    entity
+                    for entity in canonical_history.entities.values()
+                    if protagonist_name
+                    and str(entity.get("name") or "") == protagonist_name
+                ),
+                None,
+            )
+            if matched_entity:
+                protagonist_setup["entity"] = matched_entity
+            if protagonist_setup:
+                mandatory["protagonist"] = protagonist_setup
+            mandatory["progress"] = {
+                "as_of_chapter": history_as_of,
+                "canonical_chapters": list(canonical_history.valid_chapters),
             }
-            missing_sources.append("state")
+            source_status["state"] = {
+                "status": "excluded_projection",
+                "reason": "canonical_history_used",
+            }
+        else:
+            try:
+                if self.config.state_file.exists():
+                    state_payload = json.loads(
+                        self.config.state_file.read_text(encoding="utf-8")
+                    )
+                    if not isinstance(state_payload, dict):
+                        raise ValueError("state_root_must_be_object")
+                else:
+                    state_payload = {}
+                progress = state_payload.get("progress") or {}
+                if not isinstance(progress, dict):
+                    raise ValueError("state_progress_must_be_object")
+                state_chapter, state_safe, state_reason = validate_state_snapshot(
+                    state_payload,
+                    chapter,
+                )
+                if not state_safe:
+                    source_status["state"] = {
+                        "status": "as_of_unavailable",
+                        "reason": state_reason,
+                        "current_chapter": (
+                            str(state_chapter) if state_chapter is not None else ""
+                        ),
+                    }
+                    missing_sources.append("state_as_of_chapter")
+                else:
+                    protagonist = state_payload.get("protagonist_state") or {}
+                    safe_protagonist, protagonist_rejected = _sanitize_state_value(
+                        protagonist
+                    )
+                    safe_progress, progress_rejected = _sanitize_state_value(progress)
+                    if protagonist_rejected or progress_rejected:
+                        source_status["state"] = {
+                            "status": "error",
+                            "reason": "unsafe_state_value",
+                        }
+                        missing_sources.append("state")
+                    else:
+                        if safe_protagonist:
+                            mandatory["protagonist"] = safe_protagonist
+                        if safe_progress:
+                            mandatory["progress"] = safe_progress
+                        source_status["state"] = {"status": "legacy_projection"}
+            except Exception as e:
+                logger.warning("load_context: state failed: %s", e)
+                source_status["state"] = {
+                    "status": "error",
+                    "reason": e.__class__.__name__,
+                }
+                missing_sources.append("state")
 
         missing_sources = list(dict.fromkeys(missing_sources))
         completeness = {
@@ -553,48 +668,155 @@ class MemoryContractAdapter:
             completeness=completeness,
         )
 
-    def query_entity(self, entity_id: str) -> Optional[EntitySnapshot]:
+    def _query_as_of(self, as_of_chapter: int | None) -> int:
+        if as_of_chapter is not None:
+            return max(0, int(as_of_chapter))
+        return latest_canonical_chapter(self.config.project_root)
+
+    def query_entity(
+        self,
+        entity_id: str,
+        as_of_chapter: int | None = None,
+    ) -> Optional[EntitySnapshot]:
+        as_of = self._query_as_of(as_of_chapter)
+        history = load_canonical_history(self.config.project_root, as_of)
+        entity = history.entities.get(str(entity_id or "").strip())
+        if entity:
+            changes = [
+                row
+                for row in history.state_changes
+                if row.get("entity_id") == entity.get("id")
+            ]
+            return EntitySnapshot(
+                id=str(entity.get("id") or entity_id),
+                name=str(entity.get("name") or entity_id),
+                type=str(entity.get("type") or "角色"),
+                tier=str(entity.get("tier") or "核心"),
+                aliases=list(entity.get("aliases") or []),
+                attributes=dict(entity.get("attributes") or {}),
+                first_appearance=int(entity.get("first_appearance") or 0),
+                last_appearance=int(entity.get("last_appearance") or 0),
+                recent_state_changes=changes[-5:],
+            )
+        # Explicit historical queries must never fall through to a current
+        # SQLite projection, which may contain facts from later chapters.
+        if as_of_chapter is not None or (
+            self.config.project_root / ".story-system"
+        ).is_dir():
+            return None
+
+        # Compatibility for pre-Story-System projects: normalize the actual
+        # SQLite entity shape (canonical_name/current_json) instead of treating
+        # its metadata columns as character attributes.
         try:
-            sm = self._state_manager()
-            sm._load_state()
-            entity = sm.get_entity(entity_id)
+            if not self.config.index_db.is_file():
+                sm = self._state_manager()
+                sm._load_state()
+                entity = sm.get_entity(entity_id)
+                if not entity:
+                    return None
+                entity_type = sm.get_entity_type(entity_id) or "角色"
+                state_changes = sm.get_state_changes(entity_id)
+                attributes = entity.get("attributes") or {
+                    key: value
+                    for key, value in entity.items()
+                    if key
+                    not in (
+                        "name",
+                        "tier",
+                        "aliases",
+                        "first_appearance",
+                        "last_appearance",
+                    )
+                }
+                return EntitySnapshot(
+                    id=entity_id,
+                    name=str(entity.get("name") or entity_id),
+                    type=entity_type,
+                    tier=str(entity.get("tier") or "核心"),
+                    aliases=list(entity.get("aliases") or []),
+                    attributes=dict(attributes or {}),
+                    first_appearance=int(entity.get("first_appearance") or 0),
+                    last_appearance=int(entity.get("last_appearance") or 0),
+                    recent_state_changes=list(state_changes[-5:] if state_changes else []),
+                )
+
+            index = self._index_manager()
+            entity = index.get_entity(entity_id)
             if not entity:
                 return None
-
-            entity_type = sm.get_entity_type(entity_id) or "角色"
-            state_changes = sm.get_state_changes(entity_id)
-            recent_changes = state_changes[-5:] if state_changes else []
-
+            resolved_id = str(entity.get("id") or entity_id)
+            current = entity.get("current_json")
+            if not isinstance(current, dict):
+                current = entity.get("current")
+            if not isinstance(current, dict):
+                current = {}
+            safe_attributes, rejected = _sanitize_state_value(current)
+            if rejected or not isinstance(safe_attributes, dict):
+                safe_attributes = {}
+            recent_changes = index.get_entity_state_changes(resolved_id, limit=5)
             return EntitySnapshot(
-                id=entity_id,
-                name=entity.get("name", entity_id),
-                type=entity_type,
-                tier=entity.get("tier", "核心"),
-                aliases=entity.get("aliases", []),
-                attributes={k: v for k, v in entity.items()
-                            if k not in ("name", "tier", "aliases", "first_appearance", "last_appearance")},
-                first_appearance=entity.get("first_appearance", 0),
-                last_appearance=entity.get("last_appearance", 0),
+                id=resolved_id,
+                name=str(
+                    entity.get("canonical_name") or entity.get("name") or resolved_id
+                ),
+                type=str(entity.get("type") or "角色"),
+                tier=str(entity.get("tier") or "核心"),
+                aliases=list(index.get_entity_aliases(resolved_id) or []),
+                attributes=safe_attributes,
+                first_appearance=int(entity.get("first_appearance") or 0),
+                last_appearance=int(entity.get("last_appearance") or 0),
                 recent_state_changes=recent_changes,
             )
         except Exception as e:
             logger.warning("query_entity(%s) failed: %s", entity_id, e)
             return None
 
-    def query_rules(self, domain: str = "") -> List[Rule]:
+    def query_rules(
+        self,
+        domain: str = "",
+        as_of_chapter: int | None = None,
+    ) -> List[Rule]:
+        as_of = self._query_as_of(as_of_chapter)
+        history = load_canonical_history(self.config.project_root, as_of)
+        canonical_rules: List[Rule] = []
+        for item in history.rules:
+            if domain and item.get("subject") != domain and domain not in str(item.get("value") or ""):
+                continue
+            canonical_rules.append(
+                Rule(
+                    id=str(item.get("id") or ""),
+                    subject=str(item.get("subject") or ""),
+                    field=str(item.get("field") or ""),
+                    value=str(item.get("value") or ""),
+                    domain=str(item.get("subject") or ""),
+                    source_chapter=int(item.get("source_chapter") or 0),
+                )
+            )
+        if canonical_rules or as_of_chapter is not None or (
+            self.config.project_root / ".story-system"
+        ).is_dir():
+            return canonical_rules
         try:
+            from .fact_text import sanitize_fact_atom, sanitize_fact_text
+
             store = self._memory_store()
             items = store.query(category="world_rule", status="active")
             rules = []
             for item in items:
-                if domain and item.subject != domain and domain not in item.value:
+                subject = sanitize_fact_atom(item.subject, max_chars=120)
+                field = sanitize_fact_atom(item.field, max_chars=120)
+                value = sanitize_fact_text(item.value, max_chars=1200)
+                if not subject or not field or not value:
+                    continue
+                if domain and subject != domain and domain not in value:
                     continue
                 rules.append(Rule(
                     id=item.id,
-                    subject=item.subject,
-                    field=item.field,
-                    value=item.value,
-                    domain=item.subject,
+                    subject=subject,
+                    field=field,
+                    value=value,
+                    domain=subject,
                     source_chapter=item.source_chapter,
                 ))
             return rules
@@ -613,7 +835,29 @@ class MemoryContractAdapter:
             logger.warning("read_summary(%d) failed: %s", chapter, e)
             return ""
 
-    def get_open_loops(self, status: str = "active") -> List[OpenLoop]:
+    def get_open_loops(
+        self,
+        status: str = "active",
+        as_of_chapter: int | None = None,
+    ) -> List[OpenLoop]:
+        as_of = self._query_as_of(as_of_chapter)
+        history = load_canonical_history(self.config.project_root, as_of)
+        canonical = [
+            OpenLoop(
+                id=str(item.get("id") or ""),
+                content=str(item.get("value") or ""),
+                status="active",
+                planted_chapter=int(item.get("source_chapter") or 0),
+                expected_payoff=str((item.get("payload") or {}).get("expected_payoff") or ""),
+                urgency=coerce_urgency((item.get("payload") or {}).get("urgency")),
+            )
+            for item in history.obligations
+            if item.get("category") == "open_loop" and status == "active"
+        ]
+        if canonical or as_of_chapter is not None or (
+            self.config.project_root / ".story-system"
+        ).is_dir():
+            return canonical
         try:
             store = self._memory_store()
             items = store.query(category="open_loop", status=status)
@@ -633,8 +877,30 @@ class MemoryContractAdapter:
             return []
 
     def get_lifecycle_obligations(
-        self, status: str = "active"
+        self,
+        status: str = "active",
+        as_of_chapter: int | None = None,
     ) -> List[LifecycleObligation]:
+        as_of = self._query_as_of(as_of_chapter)
+        history = load_canonical_history(self.config.project_root, as_of)
+        canonical = [
+            LifecycleObligation(
+                id=str(item.get("id") or ""),
+                category=str(item.get("category") or ""),
+                content=str(item.get("value") or ""),
+                status="active",
+                source_chapter=int(item.get("source_chapter") or 0),
+                expected_payoff=str((item.get("payload") or {}).get("expected_payoff") or ""),
+                urgency=coerce_urgency((item.get("payload") or {}).get("urgency")),
+            )
+            for item in history.obligations
+            if status == "active"
+        ]
+        if canonical or as_of_chapter is not None or (
+            self.config.project_root / ".story-system"
+        ).is_dir():
+            canonical.sort(key=lambda item: (item.category, item.source_chapter, item.id))
+            return canonical
         try:
             store = self._memory_store()
             result: List[LifecycleObligation] = []
@@ -658,7 +924,28 @@ class MemoryContractAdapter:
             logger.warning("get_lifecycle_obligations failed: %s", e)
             return []
 
-    def get_timeline(self, from_ch: int, to_ch: int) -> List[TimelineEvent]:
+    def get_timeline(
+        self,
+        from_ch: int,
+        to_ch: int,
+        as_of_chapter: int | None = None,
+    ) -> List[TimelineEvent]:
+        as_of = self._query_as_of(as_of_chapter)
+        history = load_canonical_history(self.config.project_root, as_of)
+        canonical = [
+            TimelineEvent(
+                event=str(item.get("value") or ""),
+                chapter=int(item.get("source_chapter") or 0),
+                time_hint=str((item.get("payload") or {}).get("time_hint") or ""),
+                event_type=str((item.get("payload") or {}).get("event_type") or ""),
+            )
+            for item in history.timeline
+            if int(from_ch) <= int(item.get("source_chapter") or 0) <= int(to_ch)
+        ]
+        if canonical or as_of_chapter is not None or (
+            self.config.project_root / ".story-system"
+        ).is_dir():
+            return canonical
         try:
             store = self._memory_store()
             items = store.query(category="timeline", status="active")

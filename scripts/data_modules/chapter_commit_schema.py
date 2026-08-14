@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import (
     BaseModel,
@@ -17,6 +17,7 @@ from pydantic import (
 
 from .story_event_schema import StoryEvent
 from .chapter_content_binding import ChapterContentBinding, chapter_bindings_equal
+from .fact_text import normalize_world_rule_payload
 
 EXTRACTION_CORE_FIELDS = ("accepted_events", "state_deltas", "entity_deltas")
 EXTRACTION_LIST_FIELDS = (
@@ -112,12 +113,107 @@ def _ensure_object_list(artifact_name: str, field_name: str, value: Any) -> Any:
     return value
 
 
+REVIEW_DIMENSIONS = ("setting", "timeline", "continuity", "character", "logic")
+FAST_REVIEW_DIMENSIONS = REVIEW_DIMENSIONS[:3]
+
+
+class ReviewDimensionResultSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dimension: Literal["setting", "timeline", "continuity", "character", "logic"]
+    conclusion: str = Field(min_length=1)
+
+
+class ReviewIssueSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    severity: Literal["critical", "high", "medium", "low"]
+    category: Literal["setting", "timeline", "continuity", "character", "logic"]
+    location: str = ""
+    description: str = ""
+    evidence: str = ""
+    fix_hint: str = ""
+    blocking: bool = Field(strict=True)
+
+
 class ReviewResult(CommitArtifactModel):
     artifact_name: ClassVar[str] = "review_result"
     wrapper_key: ClassVar[str | None] = "review"
-    required_top_level_fields: ClassVar[tuple[str, ...]] = ("blocking_count",)
+    required_top_level_fields: ClassVar[tuple[str, ...]] = (
+        "review_mode",
+        "review_status",
+        "review_skipped",
+        "review_degraded",
+        "reviewed_dimensions",
+        "skipped_dimensions",
+        "dimension_results",
+        "issues",
+        "issues_count",
+        "blocking_count",
+        "has_blocking",
+    )
 
+    review_mode: Literal["standard", "fast", "minimal"]
+    review_status: Literal["completed", "partial", "skipped"]
+    review_skipped: bool = Field(strict=True)
+    review_degraded: bool = Field(strict=True)
+    reviewed_dimensions: list[
+        Literal["setting", "timeline", "continuity", "character", "logic"]
+    ]
+    skipped_dimensions: list[
+        Literal["setting", "timeline", "continuity", "character", "logic"]
+    ]
+    dimension_results: list[ReviewDimensionResultSchema]
+    issues: list[ReviewIssueSchema]
+    issues_count: int = Field(ge=0, strict=True)
     blocking_count: int = Field(ge=0, strict=True)
+    has_blocking: bool = Field(strict=True)
+
+    @model_validator(mode="after")
+    def validate_review_coverage(self) -> "ReviewResult":
+        if self.review_mode == "standard":
+            expected_reviewed = list(REVIEW_DIMENSIONS)
+            expected_status = "completed"
+            expected_skipped = False
+            expected_degraded = False
+        elif self.review_mode == "fast":
+            expected_reviewed = list(FAST_REVIEW_DIMENSIONS)
+            expected_status = "partial"
+            expected_skipped = False
+            expected_degraded = True
+        else:
+            expected_reviewed = []
+            expected_status = "skipped"
+            expected_skipped = True
+            expected_degraded = True
+
+        expected_skipped_dimensions = [
+            dimension for dimension in REVIEW_DIMENSIONS
+            if dimension not in expected_reviewed
+        ]
+        actual_dimension_results = [item.dimension for item in self.dimension_results]
+        if self.reviewed_dimensions != expected_reviewed:
+            raise ValueError("reviewed_dimensions 与 review_mode 不一致")
+        if self.skipped_dimensions != expected_skipped_dimensions:
+            raise ValueError("skipped_dimensions 与 review_mode 不一致")
+        if actual_dimension_results != expected_reviewed:
+            raise ValueError("dimension_results 未完整覆盖本模式要求的维度")
+        if self.review_status != expected_status:
+            raise ValueError("review_status 与 review_mode 不一致")
+        if self.review_skipped is not expected_skipped:
+            raise ValueError("review_skipped 与 review_mode 不一致")
+        if self.review_degraded is not expected_degraded:
+            raise ValueError("review_degraded 与 review_mode 不一致")
+        if self.review_mode == "minimal" and self.issues:
+            raise ValueError("minimal 模式不能携带问题结论")
+        if self.issues_count != len(self.issues):
+            raise ValueError("issues_count 与 issues 数量不一致")
+        actual_blocking = sum(1 for issue in self.issues if issue.blocking)
+        if self.blocking_count != actual_blocking:
+            raise ValueError("blocking_count 与 issues 中的阻断项数量不一致")
+        if self.has_blocking is not (self.blocking_count > 0):
+            raise ValueError("has_blocking 与 blocking_count 不一致")
+        return self
 
 
 class FulfillmentResult(CommitArtifactModel):
@@ -305,6 +401,20 @@ class AcceptedEventsInput(BaseModel):
                 context={"chapter": chapter, "index": index},
             ).model_dump()
             normalized_event = StoryEvent.model_validate(payload).model_dump()
+            if normalized_event.get("event_type") == "world_rule_revealed":
+                normalized_rule = normalize_world_rule_payload(
+                    normalized_event.get("payload"),
+                    normalized_event.get("subject"),
+                )
+                if normalized_rule is None:
+                    raise ValueError(
+                        f"accepted_events[{index}] 世界规则缺少受控类别、"
+                        "故事内领域、具体字段、正文原文证据或安全的规则正文"
+                    )
+                normalized_event["payload"] = {
+                    **normalized_event.get("payload", {}),
+                    **normalized_rule,
+                }
             normalized.append(_normalize_lifecycle_event(normalized_event))
         return normalized
 

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 
 import pytest
@@ -19,6 +20,7 @@ from data_modules.memory_contract_adapter import MemoryContractAdapter
 from data_modules.memory_projection_writer import MemoryProjectionWriter
 from data_modules.projections import retry_projection
 from data_modules.state_projection_writer import StateProjectionWriter
+from .review_test_helpers import standard_review
 
 
 def _prepare_project(tmp_path):
@@ -30,15 +32,31 @@ def _prepare_project(tmp_path):
 
 
 def _build_commit(project_root, chapter: int, extraction: dict):
+    extraction = copy.deepcopy(extraction)
+    evidence_lines: list[str] = []
+    for event in extraction.get("accepted_events") or []:
+        if not isinstance(event, dict) or event.get("event_type") != "world_rule_revealed":
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        domain = str(payload.get("domain") or event.get("subject") or "").strip()
+        content = str(payload.get("rule_content") or "").strip()
+        if domain and content:
+            quote = str(payload.get("evidence_quote") or f"{domain}：{content}").strip()
+            payload["evidence_quote"] = quote
+            event["payload"] = payload
+            evidence_lines.append(quote)
     chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
     if not chapter_path.exists():
-        chapter_path.write_text(f"第{chapter}章最终正文\n", encoding="utf-8")
+        chapter_path.write_text(
+            "\n".join([f"第{chapter}章最终正文", *evidence_lines]),
+            encoding="utf-8",
+        )
     binding = build_chapter_binding(project_root, chapter)
     service = ChapterCommitService(project_root)
     return service.build_commit(
         chapter=chapter,
-        review_result={"blocking_count": 0, "chapter_binding": binding},
+        review_result=standard_review(binding),
         fulfillment_result={
             "planned_nodes": [],
             "covered_nodes": [],
@@ -518,6 +536,7 @@ def test_world_rule_broken_does_not_promote_a_proposed_value_to_active_rule(tmp_
                     "payload": {
                         "domain": "修炼体系",
                         "field": "突破条件",
+                        "rule_category": "力量",
                         "rule_content": "突破必须先通过心境考验",
                     },
                 }
@@ -617,7 +636,7 @@ def test_relationship_event_projects_to_memory_and_old_retry_cannot_roll_back(tm
     ]
     assert relationships == [
         {
-            "id": current[0].id,
+            "id": "evt-relationship-new",
             "category": "relationship",
             "subject": "hero",
             "field": "mentor",
@@ -695,8 +714,7 @@ def test_legacy_lifecycle_row_has_explicit_target_and_migrates_without_duplicate
     adapter = MemoryContractAdapter(config)
     legacy_id = adapter.get_lifecycle_obligations()[0].id
 
-    # Replaying the old accepted creation migrates the exact deterministic
-    # legacy row instead of leaving an uncloseable duplicate behind.
+    # 重放旧版创建事件时，必须按确定性标识迁移旧行，不能留下无法闭合的重复项。
     created = _commit(
         tmp_path,
         2,
@@ -716,7 +734,7 @@ def test_legacy_lifecycle_row_has_explicit_target_and_migrates_without_duplicate
     assert len(active) == 1
     assert active[0].payload["lifecycle_id"] == "evt-old"
 
-    # The public adapter exposes the exact stable target used by data-agent.
+    # 公共适配器必须暴露 data-agent 实际使用的稳定目标标识。
     assert adapter.get_open_loops()[0].id == "evt-old"
     assert adapter.get_lifecycle_obligations()[0].id == "evt-old"
     _commit(
@@ -1050,7 +1068,7 @@ def test_old_entity_retry_cannot_roll_back_newer_metadata(tmp_path):
     assert entity["is_archived"] == 1
 
 
-def test_retry_only_runs_failed_writer_and_keeps_newer_state(tmp_path, monkeypatch):
+def test_retry_rebuilds_canonical_corpus_and_keeps_newer_state(tmp_path):
     _prepare_project(tmp_path)
     _commit(
         tmp_path,
@@ -1071,22 +1089,9 @@ def test_retry_only_runs_failed_writer_and_keeps_newer_state(tmp_path, monkeypat
     old["projection_status"]["state"] = "failed:temporary"
     ChapterCommitService(tmp_path).persist_commit(old)
 
-    calls: list[str] = []
-    original_state_apply = StateProjectionWriter.apply
-
-    def spy_state(self, payload):
-        calls.append("state")
-        return original_state_apply(self, payload)
-
-    def fail_if_called(self, payload):  # pragma: no cover - assertion path
-        raise AssertionError("retry must not re-run an already completed index writer")
-
-    monkeypatch.setattr(StateProjectionWriter, "apply", spy_state)
-    monkeypatch.setattr(IndexProjectionWriter, "apply", fail_if_called)
-
     report = retry_projection(tmp_path, chapter=3)
     assert report["ok"] is True
-    assert calls == ["state"]
+    assert report["rebuilt_chapters"] == [1, 3, 10]
 
     state = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
     assert state["entity_state"]["hero"]["realm"] == "金丹"

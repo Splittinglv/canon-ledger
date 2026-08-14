@@ -41,10 +41,13 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 - `chapter_contract_file`：本章已净化的章合同；读取 `chapter_directive` 的必须节点与禁区
 - `review_contract_file`：本章已净化的审查合同；读取 `must_check` / `blocking_rules`
 - `chapter_binding`：调用方在审查开始前生成的正文内容绑定；输出时必须原样回传
+- `review_mode`：`standard` 或 `fast`。缺失或取值非法时停止并报告调用错误；`minimal` 不会调用 reviewer
 - `project_root`：项目根目录
 - `scripts_dir`：脚本目录
 
 ## 4. 执行流程（按顺序执行）
+
+`standard` 必须完成 setting / timeline / continuity / character / logic 五个维度。`fast` 只完成 setting / timeline / continuity 三个维度，不能暗示角色与逻辑已经检查；后端会把它记录为 `partial` 并列出两个跳过维度。
 
 ### 0. 加载章纲硬约束
 - 先读取 `chapter_contract_file` 与 `review_contract_file`；缺失、损坏或章号不符时，输出 blocking 的 `setting` issue，禁止把合同不可读当作“没有约束”。
@@ -66,27 +69,28 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 - 场景转换是否有过渡
 - 情绪弧是否连续（上章愤怒本章突然平静无过渡）
 
-### 4. 角色一致性（category: character）
+### 4. 角色一致性（category: character，仅 standard）
 - 行为是否与已建立的性格/动机一致
 - 角色知识边界——角色是否使用了不应知道的信息
 - 不把口吻、句长、修辞习惯当成 issue；那是文风，不是事实
 
-### 5. 逻辑（category: logic）
+### 5. 逻辑（category: logic，仅 standard）
 - 因果关系是否成立
 - 角色决策是否有合理动机
 - 战斗/冲突结果是否符合已建立的力量对比
 
 ### 强制逐项结论
 
-完成上述 5 个维度检查后，必须为**每个维度**输出一行结论；无问题也要显式输出 `pass`。
+完成本模式要求的维度后，必须为**每个已审维度**输出一行结论；无问题也要显式输出“未发现事实问题”。
 
 - 每个维度的结论写入输出 JSON 的 `dimension_results` 字段（见第 7 节）。
-- 结论格式：无问题 → `"conclusion": "pass"`；有问题 → `"conclusion": "发现N个问题：简述"`，同时在 `issues` 中给出每条问题的完整结构。
-- `dimension_results` 必须且只能覆盖这 5 个维度：setting / timeline / continuity / character / logic。
+- 结论格式：无问题 → `"conclusion": "未发现事实问题"`；有问题 → `"conclusion": "发现N个问题：简述"`，同时在 `issues` 中给出每条问题的完整结构。
+- `standard` 的 `dimension_results` 必须按顺序且只能覆盖 setting / timeline / continuity / character / logic。
+- `fast` 的 `dimension_results` 必须按顺序且只能覆盖 setting / timeline / continuity；character / logic 不得伪造结论。
 
 ## 5. 边界与禁区
 
-- **不评分**——不输出 overall_score、不输出 pass/fail
+- **不评分**——不输出 overall_score，也不输出通过或失败的总评
 - **不评价文笔质量**——"写得不够好 / 不够网文 / 太书面 / AI 味"不是 issue，"与角色性格或已知信息矛盾"才是
 - **不建议情节改动**——"这里应该加个反转"不是 issue
 - **不改文风**——不要求口语化、短句、生理反应三连、对话标签比例
@@ -102,7 +106,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 - [ ] category 归类正确
 - [ ] blocking 字段只在 critical 或确认阻断时为 true
 - [ ] 章合同每个 must-cover 节点均有发生/未发生结论，每个 forbidden zone 均已核对
-- [ ] `dimension_results` 覆盖全部 5 个维度（无问题也输出 pass）
+- [ ] `dimension_results` 精确覆盖本模式规定的维度（无问题也输出 pass）
 
 ## 7. 输出格式
 
@@ -111,6 +115,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 ```json
 {
   "chapter": 100,
+  "review_mode": "standard",
   "chapter_binding": {
     "schema_version": "webnovel-chapter-content-binding/v1",
     "chapter": 100,
@@ -121,7 +126,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
   "issues": [
     {
       "severity": "critical | high | medium | low",
-      "category": "continuity | setting | character | timeline | logic | pacing | other",
+      "category": "continuity | setting | character | timeline | logic",
       "location": "第N段 或 具体引用",
       "description": "问题描述",
       "evidence": "原文引用与数据记录的对比",
@@ -133,23 +138,23 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
   "blocking_count": 1,
   "has_blocking": true,
   "dimension_results": [
-    {"dimension": "setting", "conclusion": "pass"},
+    {"dimension": "setting", "conclusion": "未发现事实问题"},
     {"dimension": "timeline", "conclusion": "发现1个问题：上章黄昏→本章晨光，无时间流逝交代"},
-    {"dimension": "continuity", "conclusion": "pass"},
-    {"dimension": "character", "conclusion": "pass"},
-    {"dimension": "logic", "conclusion": "pass"}
+    {"dimension": "continuity", "conclusion": "未发现事实问题"},
+    {"dimension": "character", "conclusion": "未发现事实问题"},
+    {"dimension": "logic", "conclusion": "未发现事实问题"}
   ],
   "summary": "N个问题：X个阻断，Y个高优"
 }
 ```
 
-> `category` 取值规范：本 agent 只产出 5 个维度值（`setting`/`timeline`/`continuity`/`character`/`logic`）；schema 中的 `pacing`/`other` 仅为后端兼容枚举，本 agent 不主动产出。
+`fast` 输出同一结构，但 `review_mode` 为 `fast`，`dimension_results` 只能包含 setting / timeline / continuity。`review-pipeline` 会在标准 artifact 中明确写入 `review_status=partial`、`review_degraded=true` 与跳过维度。
 
 ## 8. SubagentRun 可汇总信号
 
 不要把 `SubagentRun` 写进 reviewer JSON，也不要输出额外文本。主流程会根据 reviewer JSON 和调用过程记录：
 
-- `status`：JSON 完整且五维结论齐全为 `completed`；维度跳过但已在 `summary` / `dimension_results` 说明为 `partial`；正文为空或无法审查为 `failed`。
+- `status`：standard 且五维结论齐全为 `completed`；fast 且三维结论齐全为 `partial`；正文为空或无法完成本模式要求的维度为 `failed`。
 - `problems`：正文为空、读取状态失败、维度跳过、输出不完整、blocking issue、耗时异常。
 - `auto_handled`：无状态读取时跳过某个非关键维度、降级读取摘要。
 - `needs_user_action`：存在 `blocking=true` 或无法审查时为 true。
@@ -158,6 +163,6 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 
 ## 9. 错误处理
 
-- 无法读取角色状态 → 跳过设定一致性检查，在 summary 中标注"无法校验设定一致性：数据读取失败"
-- 无法读取上章摘要 → 跳过连贯性检查中的"上章钩子回应"项
+- 无法读取角色状态 → 输出 blocking 的 setting 问题，并把该维度结论写成“无法完成校验：角色状态读取失败”，不得把未检查写成“未发现事实问题”
+- 无法读取上章摘要 → 输出 blocking 的 continuity 问题，并把该维度结论写成“无法完成校验：上章事实读取失败”
 - 正文为空 → 输出单条 critical issue："正文为空"

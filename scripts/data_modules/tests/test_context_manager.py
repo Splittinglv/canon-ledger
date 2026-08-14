@@ -20,6 +20,7 @@ from data_modules.context_manager import ContextManager
 from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.chapter_content_binding import build_chapter_binding
 from data_modules.query_router import QueryRouter
+from .review_test_helpers import standard_review
 
 
 @pytest.fixture
@@ -774,10 +775,21 @@ def test_context_manager_exposes_latest_rejected_commit_not_last_accepted(temp_p
         ),
         encoding="utf-8",
     )
+    (story_root / "chapters" / "chapter_002.json").write_text(
+        json.dumps(
+            {
+                "meta": {"schema_version": "story-system/v1", "contract_type": "CHAPTER_BRIEF", "chapter": 2},
+                "chapter_directive": {"goal": "韩立确认第二章的关键线索"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     (story_root / "chapters" / "chapter_003.json").write_text(
         json.dumps(
             {
                 "meta": {"schema_version": "story-system/v1", "contract_type": "CHAPTER_BRIEF", "chapter": 3},
+                "chapter_directive": {"goal": "韩立追查第三章的新线索"},
             },
             ensure_ascii=False,
         ),
@@ -798,7 +810,7 @@ def test_context_manager_exposes_latest_rejected_commit_not_last_accepted(temp_p
     binding = build_chapter_binding(temp_project.project_root, 2)
     accepted_commit = ChapterCommitService(temp_project.project_root).build_commit(
         chapter=2,
-        review_result={"blocking_count": 0, "chapter_binding": binding},
+        review_result=standard_review(binding),
         fulfillment_result={
             "planned_nodes": [],
             "covered_nodes": [],

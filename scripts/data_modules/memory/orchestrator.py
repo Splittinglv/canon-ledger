@@ -309,9 +309,20 @@ class MemoryOrchestrator:
         value = sanitize_fact_text(raw_value, max_chars=max(1, len(raw_value)))
         if not value:
             return None
-        subject = sanitize_fact_atom(item.subject, max_chars=120)
+        # Lifecycle prose is commonly a Chinese question (for example
+        # “真正的账簿藏在哪里？”).  It belongs in ``value`` and must not be
+        # forced through the atom grammar merely because legacy rows copied
+        # it into ``subject``.
+        subject = (
+            ""
+            if item.category in {"open_loop", "reader_promise"}
+            else sanitize_fact_atom(item.subject, max_chars=120)
+        )
         field = sanitize_fact_atom(item.field, max_chars=120)
-        if (item.subject and not subject) or (item.field and not field):
+        if (
+            (item.category not in {"open_loop", "reader_promise"} and item.subject and not subject)
+            or (item.field and not field)
+        ):
             return None
         raw_payload = item.payload or {}
         payload: Dict[str, Any] = {}
@@ -320,6 +331,8 @@ class MemoryOrchestrator:
             scope = sanitize_fact_atom(raw_payload.get("scope"), max_chars=80)
             if scope:
                 payload["scope"] = scope
+            if str(raw_payload.get("origin") or "") == "/webnovel-learn":
+                payload["origin"] = "/webnovel-learn"
         elif item.category in {"open_loop", "reader_promise"}:
             lifecycle_id = sanitize_fact_atom(
                 raw_payload.get("lifecycle_id") or item.id,

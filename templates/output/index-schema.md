@@ -76,7 +76,8 @@
 
 ### 可观测性与审查相关表
 - invalid_facts
-- review_metrics
+- review_audits（默认事实审查链，无评分）
+- review_metrics（旧版评分记录，默认链不再写入）
 - rag_query_log
 - tool_call_stats
 - writing_checklist_scores

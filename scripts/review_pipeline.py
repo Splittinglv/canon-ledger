@@ -4,7 +4,7 @@
 Step 3 审查结果处理。
 
 读取 reviewer agent 的原始输出 JSON，解析为 ReviewResult，
-生成 metrics 用于 index.db 沉淀。
+生成无评分的事实审查审计记录并写入 index.db。
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ def _ensure_scripts_path() -> None:
 _ensure_scripts_path()
 
 from data_modules.review_author_view import render_review_author_view
-from data_modules.review_schema import append_ai_flavor_anti_patterns, parse_review_output
+from data_modules.review_schema import ReviewResult, parse_review_output
 from data_modules.chapter_content_binding import (
     chapter_bindings_equal,
     require_chapter_binding,
@@ -68,11 +68,11 @@ def _format_issue(issue: Dict[str, Any], index: int) -> List[str]:
 
 def render_review_report(payload: Dict[str, Any]) -> str:
     result = payload["review_result"]
-    metrics = payload["metrics"]
+    audit = payload["review_audit"]
     issues = list(result.get("issues", []))
     blocking_issues = [issue for issue in issues if issue.get("blocking")]
     non_blocking_issues = [issue for issue in issues if not issue.get("blocking")]
-    severity_counts = metrics.get("severity_counts", {})
+    severity_counts = audit.get("severity_counts", {})
 
     lines: List[str] = [
         f"# 第{payload['chapter']}章审查报告",
@@ -83,8 +83,13 @@ def render_review_report(payload: Dict[str, Any]) -> str:
         "",
         f"- 问题数：{result.get('issues_count', 0)}",
         f"- 阻断数：{result.get('blocking_count', 0)}",
+        f"- 审查模式：{result.get('review_mode', '')}",
+        f"- 审查状态：{result.get('review_status', '')}",
         f"- 结论：{'需修复后重审' if result.get('has_blocking') else '无阻断问题'}",
     ]
+    skipped_dimensions = result.get("skipped_dimensions") or []
+    if skipped_dimensions:
+        lines.append(f"- 未审维度：{', '.join(skipped_dimensions)}")
     summary = str(result.get("summary") or "").strip()
     if summary:
         lines.append(f"- 摘要：{summary}")
@@ -133,18 +138,23 @@ def write_review_report(project_root: Path, report_file: str, payload: Dict[str,
     return report_path
 
 
-def _build_review_metrics_record(metrics: Dict[str, Any]):
-    from data_modules.index_manager import ReviewMetrics
+def _build_review_audit_record(audit: Dict[str, Any]):
+    from data_modules.index_manager import ReviewAudit
 
-    return ReviewMetrics(
-        start_chapter=int(metrics["start_chapter"]),
-        end_chapter=int(metrics["end_chapter"]),
-        overall_score=float(metrics.get("overall_score", 0.0)),
-        dimension_scores=dict(metrics.get("dimension_scores", {})),
-        severity_counts=dict(metrics.get("severity_counts", {})),
-        critical_issues=list(metrics.get("critical_issues", [])),
-        report_file=str(metrics.get("report_file", "")),
-        notes=str(metrics.get("notes", "")),
+    return ReviewAudit(
+        chapter=int(audit["chapter"]),
+        review_mode=str(audit["review_mode"]),
+        review_status=str(audit["review_status"]),
+        review_degraded=bool(audit.get("review_degraded")),
+        reviewed_dimensions=list(audit.get("reviewed_dimensions", [])),
+        skipped_dimensions=list(audit.get("skipped_dimensions", [])),
+        dimension_results=list(audit.get("dimension_results", [])),
+        severity_counts=dict(audit.get("severity_counts", {})),
+        critical_issues=list(audit.get("critical_issues", [])),
+        issues_count=int(audit.get("issues_count", 0)),
+        blocking_count=int(audit.get("blocking_count", 0)),
+        report_file=str(audit.get("report_file", "")),
+        notes=str(audit.get("notes", "")),
     )
 
 
@@ -171,10 +181,9 @@ def build_review_artifacts(
     )
     if not chapter_bindings_equal(result.chapter_binding, expected_binding):
         raise ValueError("review_result.chapter_binding 与预期正文不一致")
-    # 在写入报告、指标或反模式前立即重新校验正文摘要。
+    # 在写入报告或审计记录前立即重新校验正文摘要。
     require_chapter_binding(project_root, chapter, expected_binding)
-    anti_patterns_added = append_ai_flavor_anti_patterns(project_root, result)
-    metrics = result.to_metrics_dict(report_file=report_file)
+    review_audit = result.to_audit_dict(report_file=report_file)
     normalized_review = result.to_dict()
     review_results_path.parent.mkdir(parents=True, exist_ok=True)
     review_results_path.write_text(
@@ -185,8 +194,36 @@ def build_review_artifacts(
     return {
         "chapter": chapter,
         "review_result": normalized_review,
-        "metrics": metrics,
-        "anti_patterns_added": anti_patterns_added,
+        "review_audit": review_audit,
+    }
+
+
+def build_minimal_review_artifact(
+    project_root: Path,
+    chapter: int,
+    review_results_path: Path,
+    chapter_binding_path: Path,
+) -> Dict[str, Any]:
+    """为明确选择 minimal 的本章生成可验证的跳过审查凭据。"""
+    binding = json.loads(chapter_binding_path.read_text(encoding="utf-8"))
+    binding = require_chapter_binding(project_root, chapter, binding)
+    result = ReviewResult(
+        chapter=chapter,
+        review_mode="minimal",
+        chapter_binding=binding,
+        issues=[],
+        dimension_results=[],
+        summary="用户选择 minimal 模式，本轮明确跳过事实审查。",
+    )
+    normalized = result.to_dict()
+    review_results_path.parent.mkdir(parents=True, exist_ok=True)
+    review_results_path.write_text(
+        json.dumps(normalized, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return {
+        "chapter": chapter,
+        "review_result": normalized,
     }
 
 
@@ -196,14 +233,30 @@ def main() -> None:
     parser.add_argument("--chapter", type=int, required=True)
     parser.add_argument("--review-results", required=True)
     parser.add_argument("--chapter-binding", required=True)
-    parser.add_argument("--metrics-out", default="")
+    parser.add_argument("--audit-out", default="")
+    parser.add_argument("--metrics-out", default="", help=argparse.SUPPRESS)
     parser.add_argument("--report-file", default="")
-    parser.add_argument("--save-metrics", action="store_true",
-                        help="直接写入 index.db，省去单独调用 save-review-metrics")
+    parser.add_argument("--minimal", action="store_true",
+                        help="生成显式跳过审查的 minimal artifact")
+    parser.add_argument("--save-audit", action="store_true",
+                        help="把事实审查覆盖范围与问题计数写入 index.db")
+    parser.add_argument("--save-metrics", action="store_true", help=argparse.SUPPRESS)
 
     args = parser.parse_args()
     project_root = Path(args.project_root)
     review_results_path = Path(args.review_results)
+
+    if args.minimal:
+        if args.audit_out or args.metrics_out or args.report_file or args.save_audit or args.save_metrics:
+            parser.error("--minimal 只生成跳过审查凭据，不能同时生成报告或审计记录")
+        payload = build_minimal_review_artifact(
+            project_root=project_root,
+            chapter=args.chapter,
+            review_results_path=review_results_path,
+            chapter_binding_path=Path(args.chapter_binding),
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
 
     payload = build_review_artifacts(
         project_root=project_root,
@@ -220,11 +273,12 @@ def main() -> None:
         payload["review_result"].get("chapter_binding"),
     )
 
-    if args.metrics_out:
-        out_path = Path(args.metrics_out)
+    audit_out = args.audit_out or args.metrics_out
+    if audit_out:
+        out_path = Path(audit_out)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(
-            json.dumps(payload["metrics"], ensure_ascii=False, indent=2),
+            json.dumps(payload["review_audit"], ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
@@ -235,12 +289,12 @@ def main() -> None:
             payload=payload,
         )
 
-    if args.save_metrics:
+    if args.save_audit or args.save_metrics:
         from data_modules.config import DataModulesConfig
         from data_modules.index_manager import IndexManager
         config = DataModulesConfig.from_project_root(project_root)
         manager = IndexManager(config)
-        manager.save_review_metrics(_build_review_metrics_record(payload["metrics"]))
+        manager.save_review_audit(_build_review_audit_record(payload["review_audit"]))
 
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 

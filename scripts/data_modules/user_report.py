@@ -340,12 +340,12 @@ def _add_artifact_validation_result(
     return result
 
 
-def _review_metrics_path(project_root: Path) -> Path:
-    return project_root / ".webnovel" / "tmp" / "review_metrics.json"
+def _review_audit_path(project_root: Path) -> Path:
+    return project_root / ".webnovel" / "tmp" / "review_audit.json"
 
 
-def _review_report_path_from_metrics(project_root: Path, metrics: dict[str, Any]) -> Path | None:
-    report_file = str(metrics.get("report_file") or "").strip()
+def _review_report_path_from_audit(project_root: Path, audit: dict[str, Any]) -> Path | None:
+    report_file = str(audit.get("report_file") or "").strip()
     if not report_file:
         return None
     path = Path(report_file)
@@ -355,8 +355,8 @@ def _review_report_path_from_metrics(project_root: Path, metrics: dict[str, Any]
 
 
 def _find_review_report(project_root: Path, chapter: int) -> Path | None:
-    metrics, _ = _read_json(_review_metrics_path(project_root))
-    path = _review_report_path_from_metrics(project_root, metrics)
+    audit, _ = _read_json(_review_audit_path(project_root))
+    path = _review_report_path_from_audit(project_root, audit)
     if path and path.is_file():
         return path
     reports_dir = project_root / "审查报告"
@@ -556,6 +556,20 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             source="review_result",
             path=COMMIT_ARTIFACT_FILES[0],
         )
+    elif isinstance(review_payload, dict) and review_payload.get("review_degraded"):
+        skipped = "、".join(review_payload.get("skipped_dimensions") or []) or "未声明"
+        _add_manual_issue(
+            report,
+            "needs_confirmation",
+            code="review_degraded",
+            title="写作检查使用了快速模式",
+            reason=f"本轮只检查部分事实维度，未检查：{skipped}。",
+            impact="正文可以继续保存，但当前审查不能代表完整的五维一致性检查。",
+            next_action="如需完整检查，运行 `/webnovel-review`。",
+            command="/webnovel-review",
+            source="review_result",
+            path=COMMIT_ARTIFACT_FILES[0],
+        )
 
     if commit_error:
         _add_file(report, label="本章事实提交", path=_rel(project_root, commit_path), status="missing", note="未生成 commit")
@@ -683,6 +697,23 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
             message="review_results missing",
         )
     else:
+        validated_review = validate_review_result(review_path)
+        schema_errors = [
+            issue for issue in validated_review.get("errors", [])
+            if issue.get("type") != "blocking_review"
+        ]
+        for issue in schema_errors:
+            _add_classified_issue(
+                report,
+                issue,
+                source="review_result",
+                path=_rel(project_root, review_path),
+                message=str(issue.get("message") or ""),
+                severity="must_handle",
+            )
+        review_schema_valid = bool(validated_review.get("payload")) and not schema_errors
+        if review_schema_valid:
+            review_result = validated_review.get("payload") or review_result
         try:
             review_chapter = int(review_result.get("chapter") or 0)
         except (TypeError, ValueError):
@@ -692,7 +723,11 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
             chapter,
             review_result.get("chapter_binding"),
         )
-        review_trusted = review_chapter == int(chapter) and binding_ok
+        review_trusted = (
+            review_schema_valid
+            and review_chapter == int(chapter)
+            and binding_ok
+        )
         blocking_count = int(review_result.get("blocking_count") or 0)
         _add_file(
             report,
@@ -700,7 +735,7 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
             path=_rel(project_root, review_path),
             status="completed" if review_trusted else "failed",
             note=(
-                f"blocking={blocking_count}"
+                f"阻断数={blocking_count}"
                 if review_trusted
                 else f"stale={binding_code if review_chapter == int(chapter) else 'artifact_chapter_mismatch'}"
             ),
@@ -727,13 +762,40 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
             core_files += 1
             view = build_review_author_view({"review_result": review_result})
             report["review_author_view"] = view.to_dict()
+            if review_result.get("review_skipped"):
+                _add_manual_issue(
+                    report,
+                    "needs_confirmation",
+                    code="review_skipped",
+                    title="本章未执行事实审查",
+                    reason="本轮使用 minimal 模式，五个事实维度均未检查。",
+                    impact="当前结果只能证明审查被明确跳过，不能证明正文不存在一致性问题。",
+                    next_action="如需完整检查，重新运行 `/webnovel-review`。",
+                    command="/webnovel-review",
+                    source="review_result",
+                    path=_rel(project_root, review_path),
+                )
+            elif review_result.get("review_degraded"):
+                skipped = "、".join(review_result.get("skipped_dimensions") or []) or "未声明"
+                _add_manual_issue(
+                    report,
+                    "needs_confirmation",
+                    code="review_degraded",
+                    title="本章只完成了快速事实审查",
+                    reason=f"未检查的维度为：{skipped}。",
+                    impact="当前结论不能代表完整的五维一致性检查。",
+                    next_action="如需完整检查，重新运行 `/webnovel-review`。",
+                    command="/webnovel-review",
+                    source="review_result",
+                    path=_rel(project_root, review_path),
+                )
         if review_trusted and blocking_count > 0:
             _add_manual_issue(
                 report,
                 "must_handle",
                 code="blocking_review",
                 title="审查发现必须先处理的问题",
-                reason=f"本章有 {blocking_count} 个 blocking 问题。",
+                reason=f"本章有 {blocking_count} 个阻断问题。",
                 impact="不处理会影响继续写作、提交或事实一致性。",
                 next_action="先按审查报告处理阻断问题；如果要保留当前版本，需要用户明确裁决。",
                 command="/webnovel-review",
@@ -741,26 +803,49 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
                 path=_rel(project_root, review_path),
             )
 
-    metrics_path = _review_metrics_path(project_root)
-    metrics, metrics_error = _read_json(metrics_path)
-    if metrics_error:
-        _add_file(report, label="审查指标", path=_rel(project_root, metrics_path), status="missing", note="未找到 review_metrics.json")
+    audit_path = _review_audit_path(project_root)
+    audit, audit_error = _read_json(audit_path)
+    if audit_error:
+        _add_file(report, label="审查审计", path=_rel(project_root, audit_path), status="missing", note="未找到 review_audit.json")
         _add_manual_issue(
             report,
             "needs_confirmation",
-            code="review_metrics_missing",
-            title="审查指标未落盘",
-            reason="没有找到 `.webnovel/tmp/review_metrics.json`。",
-            impact="审查正文可读，但 dashboard 或趋势统计可能缺少本章记录。",
-            next_action="重新运行审查流程并保存 metrics。",
+            code="review_audit_missing",
+            title="审查审计记录未落盘",
+            reason="没有找到 `.webnovel/tmp/review_audit.json`。",
+            impact="审查正文可读，但无法核实本轮实际覆盖了哪些维度。",
+            next_action="重新运行审查流程并保存审计记录。",
             command="/webnovel-review",
             source="review",
-            path=_rel(project_root, metrics_path),
+            path=_rel(project_root, audit_path),
         )
     else:
-        _add_file(report, label="审查指标", path=_rel(project_root, metrics_path), status="completed", note="已生成")
+        _add_file(report, label="审查审计", path=_rel(project_root, audit_path), status="completed", note="已生成")
+        if review_result and any(
+            audit.get(key) != review_result.get(key)
+            for key in (
+                "chapter",
+                "review_mode",
+                "review_status",
+                "review_degraded",
+                "reviewed_dimensions",
+                "skipped_dimensions",
+            )
+        ):
+            _add_manual_issue(
+                report,
+                "must_handle",
+                code="review_audit_mismatch",
+                title="审查结果与审计记录不一致",
+                reason="审查模式、状态或覆盖维度在两份记录中不一致。",
+                impact="无法判断本轮实际检查范围，不能把报告当作可靠审查凭据。",
+                next_action="重新运行本章审查流程，覆盖旧结果和旧审计记录。",
+                command="/webnovel-review",
+                source="review",
+                path=_rel(project_root, audit_path),
+            )
 
-    report_path = _review_report_path_from_metrics(project_root, metrics) if metrics else None
+    report_path = _review_report_path_from_audit(project_root, audit) if audit else None
     if report_path and report_path.is_file():
         _add_file(report, label="审查报告文件", path=_rel(project_root, report_path), status="completed", note="已生成")
     else:

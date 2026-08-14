@@ -207,7 +207,7 @@ def _eval_commit_projection_runtime(root: Path, case: dict[str, Any]) -> dict[st
         service = ChapterCommitService(project_root)
         payload = service.build_commit(
             chapter=1,
-            review_result={"blocking_count": 1, "chapter_binding": binding},
+            review_result=_review_artifact(binding, blocking=True),
             fulfillment_result={
                 "planned_nodes": [],
                 "covered_nodes": [],
@@ -280,40 +280,76 @@ def _report_binding(project_root: Path, chapter: int) -> dict[str, Any]:
     return build_chapter_binding(project_root, chapter)
 
 
-def _write_report_artifacts(project_root: Path, *, chapter: int = 1, review_skipped: bool = False, blocking: bool = False) -> None:
-    binding = _report_binding(project_root, chapter)
+def _review_artifact(binding: dict[str, Any], *, blocking: bool = False, minimal: bool = False) -> dict[str, Any]:
+    dimensions = ["setting", "timeline", "continuity", "character", "logic"]
+    if minimal:
+        return {
+            "chapter": int(binding["chapter"]),
+            "chapter_binding": binding,
+            "review_mode": "minimal",
+            "review_status": "skipped",
+            "review_skipped": True,
+            "review_degraded": True,
+            "reviewed_dimensions": [],
+            "skipped_dimensions": dimensions,
+            "dimension_results": [],
+            "issues": [],
+            "issues_count": 0,
+            "blocking_count": 0,
+            "has_blocking": False,
+            "summary": "用户选择最简模式，本章未执行事实审查。",
+        }
     issues = []
     if blocking:
         issues.append(
             {
                 "severity": "critical",
                 "category": "timeline",
-                "location": "第2段",
-                "description": "时间线断裂",
-                "fix_hint": "补过渡",
+                "location": "第二段",
+                "description": "时间线与上一章冲突。",
+                "evidence": "上一章与本章使用了互相矛盾的时间锚点。",
+                "fix_hint": "统一两章的时间锚点。",
                 "blocking": True,
             }
         )
-    review = {
-        "chapter": chapter,
+    return {
+        "chapter": int(binding["chapter"]),
+        "chapter_binding": binding,
+        "review_mode": "standard",
+        "review_status": "completed",
+        "review_skipped": False,
+        "review_degraded": False,
+        "reviewed_dimensions": dimensions,
+        "skipped_dimensions": [],
+        "dimension_results": [
+            {"dimension": dimension, "conclusion": "已完成事实核对。"}
+            for dimension in dimensions
+        ],
         "issues": issues,
         "issues_count": len(issues),
-        "blocking_count": 1 if blocking else 0,
-        "has_blocking": bool(blocking),
-        "summary": "用户选择最简模式，本章未执行完整审查。" if review_skipped else "本章审查未发现阻断问题。",
-        "chapter_binding": binding,
+        "blocking_count": len(issues),
+        "has_blocking": bool(issues),
+        "summary": "本章事实审查已完成。",
     }
-    if review_skipped:
-        review["review_skipped"] = True
-        review["review_mode"] = "minimal"
+
+
+def _write_report_artifacts(project_root: Path, *, chapter: int = 1, review_skipped: bool = False, blocking: bool = False) -> None:
+    binding = _report_binding(project_root, chapter)
+    review = _review_artifact(binding, blocking=blocking, minimal=review_skipped)
     _write_json(project_root / ".webnovel" / "tmp" / "review_results.json", review)
     _write_json(
-        project_root / ".webnovel" / "tmp" / "review_metrics.json",
+        project_root / ".webnovel" / "tmp" / "review_audit.json",
         {
+            "chapter": chapter,
             "start_chapter": chapter,
             "end_chapter": chapter,
-            "issues_count": len(issues),
-            "blocking_count": 1 if blocking else 0,
+            "review_mode": review["review_mode"],
+            "review_status": review["review_status"],
+            "review_degraded": review["review_degraded"],
+            "reviewed_dimensions": review["reviewed_dimensions"],
+            "skipped_dimensions": review["skipped_dimensions"],
+            "issues_count": review["issues_count"],
+            "blocking_count": review["blocking_count"],
             "report_file": f"审查报告/第{chapter}章审查报告.md",
         },
     )
@@ -353,8 +389,13 @@ def _commit_payload(
     review_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     binding = _report_binding(project_root, chapter)
-    review = dict(review_result or {"blocking_count": 0})
-    review["chapter_binding"] = binding
+    if review_result and review_result.get("review_mode") == "minimal":
+        review = _review_artifact(binding, minimal=True)
+    else:
+        review = _review_artifact(
+            binding,
+            blocking=bool((review_result or {}).get("blocking_count")),
+        )
     return {
         "meta": {
             "schema_version": "story-system/v1",

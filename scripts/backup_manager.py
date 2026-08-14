@@ -46,11 +46,13 @@ Git 提交规范：
   ✅ 原子性操作，要么全部成功，要么全部失败
 """
 
-import subprocess
+import hashlib
 import json
 import os
-import sys
+import re
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from runtime_compat import enable_windows_utf8_stdio
@@ -64,6 +66,16 @@ from security_utils import sanitize_commit_message, is_git_available, is_git_rep
 from project_locator import resolve_project_root
 from data_modules.chapter_content_binding import verify_commit_content_binding
 from data_modules.projection_log import commit_hash
+from data_modules.run_ledger import (
+    LOCAL_BACKUP_RECEIPT_SCHEMA,
+    LOCAL_SNAPSHOT_MANIFEST,
+    LOCAL_SNAPSHOT_ROOTS,
+    build_local_snapshot_manifest,
+    ensure_backup_integrity_key,
+    local_snapshot_manifest_trusted,
+    local_snapshot_receipt_trusted,
+    sign_backup_payload,
+)
 
 # Windows 编码兼容性修复
 if sys.platform == "win32":
@@ -125,6 +137,7 @@ __pycache__/
 # Don't ignore .webnovel (we need to track state.json)
 # But ignore cache files
 .webnovel/context_cache.json
+.webnovel/backups/.integrity-key
 
 # Env files
 .env
@@ -187,65 +200,196 @@ __pycache__/
         """合并 Git 输出，优先保留 stderr 中的故障信息。"""
         return "\n".join(part.strip() for part in (stderr, stdout) if part.strip())
 
-    def _local_backup(self, chapter_num: int) -> bool:
-        """本地备份（Git 不可用时的降级方案）"""
+    @staticmethod
+    def _remove_path(path: Path) -> None:
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path)
+
+    @classmethod
+    def _assert_copyable_tree(cls, source: Path, *, exclude_top: set[str] | None = None) -> None:
+        excluded = exclude_top or set()
+        for child in source.iterdir():
+            if child.name in excluded:
+                continue
+            if child.is_symlink():
+                raise OSError(f"拒绝备份符号链接: {child}")
+            if child.is_dir():
+                cls._assert_copyable_tree(child)
+            elif not child.is_file():
+                raise OSError(f"拒绝备份特殊文件: {child}")
+
+    @classmethod
+    def _copy_tree(cls, source: Path, target: Path, *, exclude_top: set[str] | None = None) -> None:
+        excluded = exclude_top or set()
+        cls._assert_copyable_tree(source, exclude_top=excluded)
+
+        def ignore(directory: str, names: list[str]) -> list[str]:
+            if Path(directory) == source:
+                return sorted(set(names) & excluded)
+            return []
+
+        shutil.copytree(source, target, ignore=ignore)
+
+    def _copy_consistency_roots(self, target_root: Path) -> list[str]:
+        copied: list[str] = []
+        for root_name in LOCAL_SNAPSHOT_ROOTS:
+            source = self.project_root / root_name
+            if source.is_symlink():
+                raise OSError(f"一致性根目录不能是符号链接: {source}")
+            if not source.exists():
+                continue
+            if not source.is_dir():
+                raise OSError(f"一致性根目录不是安全目录: {source}")
+            excluded = {"backups"} if root_name == ".webnovel" else set()
+            self._copy_tree(source, target_root / root_name, exclude_top=excluded)
+            copied.append(root_name)
+        return copied
+
+    def _strict_snapshot_has_no_later_chapter(self, chapter_num: int) -> bool:
+        commit_pattern = re.compile(r"^chapter_(\d+)\.commit\.json$")
+        for path in (self.project_root / ".story-system" / "commits").glob(
+            "chapter_*.commit.json"
+        ):
+            matched = commit_pattern.fullmatch(path.name)
+            if matched and int(matched.group(1)) > chapter_num:
+                print(
+                    f"❌ 备份失败：发现晚于第 {chapter_num} 章的 canonical commit "
+                    f"({path.name})"
+                )
+                return False
+        chapter_pattern = re.compile(r"第0*(\d+)章")
+        for path in (self.project_root / "正文").rglob("*"):
+            if not path.is_file():
+                continue
+            matched = chapter_pattern.search(path.name)
+            if matched and int(matched.group(1)) > chapter_num:
+                print(
+                    f"❌ 备份失败：正文中已有晚于第 {chapter_num} 章的文件 "
+                    f"({path.relative_to(self.project_root)})"
+                )
+                return False
+        return True
+
+    def _latest_canonical_chapter(self, fallback: int) -> int:
+        commit_pattern = re.compile(r"^chapter_(\d+)\.commit\.json$")
+        chapters = []
+        for path in (self.project_root / ".story-system" / "commits").glob(
+            "chapter_*.commit.json"
+        ):
+            matched = commit_pattern.fullmatch(path.name)
+            if matched:
+                chapters.append(int(matched.group(1)))
+        return max(chapters or [int(fallback)])
+
+    @staticmethod
+    def _json_bytes(payload: dict) -> bytes:
+        return (
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+
+    def _create_snapshot_tree(
+        self,
+        *,
+        chapter_num: int,
+        snapshot_name: str,
+    ) -> tuple[Path, dict]:
+        backup_dir = self.project_root / ".webnovel" / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        if not ensure_backup_integrity_key(self.project_root):
+            raise OSError("无法创建本地备份完整性密钥")
+        backup_path = backup_dir / snapshot_name
+        if backup_path.exists() or backup_path.is_symlink():
+            raise OSError(f"本地快照路径已存在: {backup_path}")
+        backup_path.mkdir(parents=True)
+        try:
+            self._copy_consistency_roots(backup_path)
+            manifest = build_local_snapshot_manifest(
+                self.project_root,
+                backup_path,
+                chapter=chapter_num,
+                snapshot_name=snapshot_name,
+                created_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+            )
+            (backup_path / LOCAL_SNAPSHOT_MANIFEST).write_bytes(
+                self._json_bytes(manifest)
+            )
+            return backup_path, manifest
+        except Exception:
+            shutil.rmtree(backup_path, ignore_errors=True)
+            raise
+
+    def _prune_local_snapshots(self, *, keep: int = 10) -> None:
+        backup_dir = self.project_root / ".webnovel" / "backups"
+        snapshots = sorted(
+            (path for path in backup_dir.glob("snapshot_ch*") if path.is_dir()),
+            key=lambda path: path.name,
+        )
+        for old_snapshot in snapshots[:-keep]:
+            snapshot_name = old_snapshot.name
+            shutil.rmtree(old_snapshot)
+            for receipt_path in backup_dir.glob("ch*.receipt.json"):
+                try:
+                    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if receipt.get("snapshot") == snapshot_name:
+                    receipt_path.unlink(missing_ok=True)
+
+    def _local_backup(self, chapter_num: int, accepted_receipt: dict | None = None) -> bool:
+        """创建带签名清单的完整本地一致性快照。"""
         backup_dir = self.project_root / ".webnovel" / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_name = f"snapshot_ch{chapter_num:04d}_{timestamp}"
-        backup_path = backup_dir / backup_name
 
         try:
-            backup_path.mkdir(parents=True, exist_ok=True)
-            copied = []
-
-            for folder_name in ("正文", "大纲", "设定集"):
-                source_dir = self.project_root / folder_name
-                if source_dir.exists():
-                    shutil.copytree(source_dir, backup_path / folder_name)
-                    copied.append(folder_name)
-
-            state_file = self.project_root / ".webnovel" / "state.json"
-            if state_file.exists():
-                target_state_dir = backup_path / ".webnovel"
-                target_state_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(state_file, target_state_dir / "state.json")
-                copied.append(".webnovel/state.json")
-
-            commit_file = (
-                self.project_root
-                / ".story-system"
-                / "commits"
-                / f"chapter_{chapter_num:03d}.commit.json"
+            if accepted_receipt is not None and not self._strict_snapshot_has_no_later_chapter(
+                chapter_num
+            ):
+                return False
+            backup_path, _manifest = self._create_snapshot_tree(
+                chapter_num=chapter_num,
+                snapshot_name=backup_name,
             )
-            if commit_file.is_file():
-                target_commit = (
-                    backup_path
-                    / ".story-system"
-                    / "commits"
-                    / commit_file.name
-                )
-                target_commit.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(commit_file, target_commit)
-                copied.append(
-                    f".story-system/commits/{commit_file.name}"
-                )
 
-            snapshots = sorted(
-                (path for path in backup_dir.glob("snapshot_ch*") if path.is_dir()),
-                key=lambda path: path.name,
+            manifest_raw = (backup_path / LOCAL_SNAPSHOT_MANIFEST).read_bytes()
+            receipt = {
+                key: value
+                for key, value in (accepted_receipt or {}).items()
+                if key != "schema_version"
+            }
+            receipt.update(
+                {
+                    "schema_version": LOCAL_BACKUP_RECEIPT_SCHEMA,
+                    "chapter": int(chapter_num),
+                    "mode": "local",
+                    "snapshot": backup_name,
+                    "manifest_path": LOCAL_SNAPSHOT_MANIFEST,
+                    "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+                }
             )
-            for old_snapshot in snapshots[:-10]:
-                shutil.rmtree(old_snapshot)
+            receipt = sign_backup_payload(self.project_root, receipt)
+            self._write_receipt(receipt)
+            if not local_snapshot_receipt_trusted(
+                self.project_root,
+                receipt,
+                chapter=chapter_num,
+                require_current_binding=accepted_receipt is not None,
+            ):
+                self._discard_receipt(chapter_num)
+                shutil.rmtree(backup_path, ignore_errors=True)
+                print("❌ 本地备份失败：快照、manifest 或 receipt 自校验未通过")
+                return False
+
+            self._prune_local_snapshots()
 
             print(f"✅ 本地备份完成: {backup_path}")
-            if copied:
-                print(f"📦 已备份: {', '.join(copied)}")
-            else:
-                print("⚠️  未找到正文/大纲/设定集或 state.json 可备份")
+            print("📦 已备份: 正文、大纲、设定集、完整 .story-system 与必要 .webnovel 状态")
             return True
-        except OSError as e:
+        except (OSError, ValueError) as e:
             print(f"❌ 本地备份失败: {e}")
             return False
 
@@ -361,25 +505,7 @@ __pycache__/
 
         # 如果 Git 不可用，使用本地备份
         if not self.git_available:
-            ok = self._local_backup(chapter_num)
-            if ok and receipt is not None:
-                snapshots = sorted(
-                    (self.project_root / ".webnovel" / "backups").glob(
-                        f"snapshot_ch{chapter_num:04d}_*"
-                    )
-                )
-                receipt.update(
-                    {
-                        "mode": "local",
-                        "snapshot": snapshots[-1].name if snapshots else "",
-                    }
-                )
-                self._write_receipt(receipt)
-                if not self._verify_backup_receipt(chapter_num):
-                    self._discard_receipt(chapter_num)
-                    print("❌ 备份失败：本地快照与 accepted 正文或 commit 不一致")
-                    return False
-            return ok
+            return self._local_backup(chapter_num, accepted_receipt=receipt)
 
         if receipt is not None:
             self._write_receipt(receipt)
@@ -486,6 +612,108 @@ __pycache__/
             return False
         return True
 
+    def _restore_snapshot_tree(self, snapshot_root: Path) -> bool:
+        if not local_snapshot_manifest_trusted(self.project_root, snapshot_root):
+            print(f"❌ 拒绝恢复：快照清单校验失败 ({snapshot_root.name})")
+            return False
+        try:
+            manifest = json.loads(
+                (snapshot_root / LOCAL_SNAPSHOT_MANIFEST).read_text(encoding="utf-8")
+            )
+            root_presence = manifest["root_presence"]
+            for root_name in LOCAL_SNAPSHOT_ROOTS:
+                source = snapshot_root / root_name
+                target = self.project_root / root_name
+                present = bool(root_presence.get(root_name))
+                if root_name == ".webnovel":
+                    if target.is_symlink() or (target.exists() and not target.is_dir()):
+                        raise OSError(".webnovel 不是安全目录")
+                    target.mkdir(parents=True, exist_ok=True)
+                    for child in list(target.iterdir()):
+                        if child.name == "backups":
+                            continue
+                        self._remove_path(child)
+                    if present:
+                        for child in source.iterdir():
+                            destination = target / child.name
+                            if child.is_dir():
+                                self._copy_tree(child, destination)
+                            else:
+                                shutil.copy2(child, destination)
+                    continue
+
+                self._remove_path(target)
+                if present:
+                    self._copy_tree(source, target)
+            return True
+        except Exception as exc:
+            print(f"❌ 安装本地快照失败: {exc}")
+            return False
+
+    def _local_rollback(self, chapter_num: int) -> bool:
+        receipt_path = self._receipt_path(chapter_num)
+        try:
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"❌ 本地备份点 ch{chapter_num:04d} 不存在或 receipt 无效: {exc}")
+            return False
+        if not local_snapshot_receipt_trusted(
+            self.project_root,
+            receipt,
+            chapter=chapter_num,
+            require_current_binding=False,
+        ):
+            print("❌ 拒绝恢复：本地 receipt、manifest 或文件清单校验失败")
+            return False
+
+        snapshot_root = (
+            self.project_root / ".webnovel" / "backups" / str(receipt["snapshot"])
+        )
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        rescue_chapter = self._latest_canonical_chapter(chapter_num)
+        rescue_name = (
+            f"rescue_before_restore_ch{chapter_num:04d}_from_ch"
+            f"{rescue_chapter:04d}_{timestamp}"
+        )
+        try:
+            rescue_root, _rescue_manifest = self._create_snapshot_tree(
+                chapter_num=rescue_chapter,
+                snapshot_name=rescue_name,
+            )
+        except (OSError, ValueError) as exc:
+            print(f"❌ 恢复前救援快照创建失败，未改动项目: {exc}")
+            return False
+
+        print(f"💾 恢复前救援快照: {rescue_root}")
+        if not self._restore_snapshot_tree(snapshot_root):
+            print("↩️  正在从救援快照恢复原状...")
+            if not self._restore_snapshot_tree(rescue_root):
+                print(f"⚠️  自动救援失败，请从此快照手动恢复: {rescue_root}")
+            return False
+
+        try:
+            from data_modules.projection_rebuild import rebuild_all_projections
+
+            report = rebuild_all_projections(
+                self.project_root,
+                reason=f"local_rollback_chapter_{chapter_num}",
+            )
+        except Exception as exc:
+            report = {"ok": False, "error": "projection_rebuild_exception", "detail": str(exc)}
+        if not bool(report.get("ok")):
+            print(
+                "❌ 本地快照已安装，但统一投影重建失败；正在从救援快照恢复原状: "
+                f"{report.get('error') or 'unknown'}"
+            )
+            if not self._restore_snapshot_tree(rescue_root):
+                print(f"⚠️  自动救援失败，请从此快照手动恢复: {rescue_root}")
+            return False
+
+        print(f"✅ 已从本地完整快照恢复到第 {chapter_num} 章")
+        print("✅ canonical 数据、正文与 .webnovel 状态已同步，投影已统一重建")
+        print(f"💡 恢复前状态仍保留在救援快照: {rescue_root}")
+        return True
+
     def rollback(self, chapter_num: int) -> bool:
         """
         前滚式恢复到指定章节（在当前分支创建恢复提交）
@@ -495,6 +723,10 @@ __pycache__/
 
         print(f"🔄 正在回滚到第 {chapter_num} 章...")
         print("💾 将在当前分支创建一个恢复提交，历史不会丢失")
+
+        if not self.git_available:
+            print("💾 Git 不可用，将使用已签名的本地完整快照恢复")
+            return self._local_rollback(chapter_num)
 
         success, _, error = self._run_git_command(["rev-parse", "--verify", tag_name], check=False)
         if not success:
@@ -693,7 +925,8 @@ def main():
             sys.exit(1)
 
     elif args.rollback:
-        manager.rollback(args.rollback)
+        if not manager.rollback(args.rollback):
+            sys.exit(1)
 
     elif args.diff:
         manager.diff(args.diff[0], args.diff[1])

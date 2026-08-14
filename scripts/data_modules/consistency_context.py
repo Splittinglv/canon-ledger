@@ -111,6 +111,43 @@ _CRAFT_KEY_RE = re.compile(
 )
 _DROP = object()
 
+# 初始化只允许这些结构化事实进入默认上下文。这里刻意没有文风、文笔、
+# 节奏、爽点、目标读者等创作控制字段；作者若需要它们，仍由模型或用户
+# 在写作时自行提供，不会被插件提升为长期 canon。
+_INITIAL_CANON_FIELDS = {
+    "project": frozenset({"title", "genre"}),
+    "protagonist": frozenset({"name", "desire", "flaw", "archetype"}),
+    "world": frozenset(
+        {
+            "scale",
+            "factions",
+            "power_system_type",
+            "social_class",
+            "resource_distribution",
+            "currency_system",
+            "currency_exchange",
+            "sect_hierarchy",
+            "cultivation_chain",
+            "cultivation_subtiers",
+        }
+    ),
+    "golden_finger": frozenset(
+        {"name", "type", "visibility", "irreversible_cost"}
+    ),
+    "characters": frozenset(
+        {
+            "protagonist_structure",
+            "heroine_config",
+            "heroine_names",
+            "heroine_role",
+            "co_protagonists",
+            "co_protagonist_roles",
+            "antagonist_tiers",
+            "antagonist_level",
+        }
+    ),
+}
+
 
 def is_craft_table(name: Any) -> bool:
     return str(name or "").strip() in CRAFT_TABLES
@@ -349,8 +386,35 @@ def _sanitize_override_policy(policy: Any) -> Dict[str, List[str]]:
     return cleaned
 
 
+def sanitize_initial_canon(value: Any) -> Dict[str, Dict[str, str]]:
+    """Return the closed, fact-only initialization contract.
+
+    Initialization arguments are author-owned facts, but they are still
+    persisted data and can later be edited.  Rebuild the public view from a
+    small allow-list and run every value through the shared instruction
+    filter.  Empty values are omitted so placeholders never become canon.
+    """
+    if not isinstance(value, dict):
+        return {}
+    result: Dict[str, Dict[str, str]] = {}
+    for section, allowed_fields in _INITIAL_CANON_FIELDS.items():
+        raw_section = value.get(section)
+        if not isinstance(raw_section, dict):
+            continue
+        cleaned_section: Dict[str, str] = {}
+        for key in sorted(allowed_fields):
+            if key not in raw_section:
+                continue
+            cleaned = _safe_text(raw_section.get(key))
+            if cleaned:
+                cleaned_section[key] = cleaned
+        if cleaned_section:
+            result[section] = cleaned_section
+    return result
+
+
 def _sanitize_master(master: Dict[str, Any]) -> Dict[str, Any]:
-    return {
+    cleaned = {
         "meta": _sanitize_meta(master.get("meta")),
         "route": _sanitize_route(master.get("route")),
         # Generic tables and untyped master extensions are design advice, not
@@ -360,6 +424,10 @@ def _sanitize_master(master: Dict[str, Any]) -> Dict[str, Any]:
         "source_trace": [],
         "override_policy": _sanitize_override_policy(master.get("override_policy")),
     }
+    initial_canon = sanitize_initial_canon(master.get("initial_canon"))
+    if initial_canon:
+        cleaned["initial_canon"] = initial_canon
+    return cleaned
 
 
 def _sanitize_chapter(chapter: Dict[str, Any]) -> Dict[str, Any]:

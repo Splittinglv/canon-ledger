@@ -14,6 +14,7 @@ from data_modules.chapter_content_binding import (
 )
 from data_modules.config import DataModulesConfig
 from data_modules.index_manager import IndexManager
+from .review_test_helpers import standard_review
 
 
 _ARTIFACT_KEYS = (
@@ -42,6 +43,11 @@ def _build_commit(service, project_root, **kwargs):
         artifact = bound.get(key)
         if isinstance(artifact, dict):
             artifact = dict(artifact)
+            if key == "review_result" and "blocking_count" in artifact:
+                artifact = standard_review(
+                    binding,
+                    blocking_count=int(artifact.get("blocking_count") or 0),
+                )
             artifact.setdefault("chapter_binding", dict(binding))
             bound[key] = artifact
     return service.build_commit(**bound)
@@ -84,6 +90,47 @@ def test_commit_service_accepts_when_all_checks_pass(tmp_path):
     assert "entity_deltas" not in payload
 
 
+def test_commit_service_rejects_world_rule_without_matching_prose_evidence(tmp_path):
+    chapter_path = tmp_path / "正文" / "第0003章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("港城守卫宣读了一条没有具体内容的宵禁条例。", encoding="utf-8")
+    service = ChapterCommitService(tmp_path)
+
+    with pytest.raises(ValueError, match="world_rule_evidence_untrusted"):
+        _build_commit(
+            service,
+            tmp_path,
+            chapter=3,
+            review_result={"blocking_count": 0},
+            fulfillment_result={
+                "planned_nodes": [],
+                "covered_nodes": [],
+                "missed_nodes": [],
+                "extra_nodes": [],
+            },
+            disambiguation_result={"pending": []},
+            extraction_result={
+                "state_deltas": [],
+                "entity_deltas": [],
+                "accepted_events": [
+                    {
+                        "event_id": "未经正文证实的规则",
+                        "chapter": 3,
+                        "event_type": "world_rule_revealed",
+                        "subject": "港城",
+                        "payload": {
+                            "rule_content": "宵禁后不得点燃蓝灯",
+                            "rule_category": "制度",
+                            "domain": "港城",
+                            "field": "宵禁照明限制",
+                            "evidence_quote": "港城：宵禁后不得点燃蓝灯",
+                        },
+                    }
+                ],
+            },
+        )
+
+
 def test_commit_service_rejects_empty_fulfillment_for_authoritative_nodes(tmp_path):
     contract_path = tmp_path / ".story-system" / "chapters" / "chapter_003.json"
     contract_path.parent.mkdir(parents=True, exist_ok=True)
@@ -92,6 +139,7 @@ def test_commit_service_rejects_empty_fulfillment_for_authoritative_nodes(tmp_pa
             {
                 "meta": {"chapter": 3},
                 "chapter_directive": {
+                    "goal": "确认封蜡缺口的来源",
                     "must_cover_nodes": ["识别封蜡缺口"]
                 },
             },
@@ -120,6 +168,119 @@ def test_commit_service_rejects_empty_fulfillment_for_authoritative_nodes(tmp_pa
                 "accepted_events": [],
             },
         )
+
+
+def test_commit_service_rejects_empty_goal_even_when_called_directly(tmp_path):
+    contract_path = tmp_path / ".story-system" / "chapters" / "chapter_003.json"
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(
+        json.dumps(
+            {
+                "meta": {"chapter": 3},
+                "chapter_directive": {"goal": "", "must_cover_nodes": []},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    service = ChapterCommitService(tmp_path)
+
+    with pytest.raises(ValueError, match="chapter_contract_missing_goal"):
+        _build_commit(
+            service,
+            tmp_path,
+            chapter=3,
+            review_result={"blocking_count": 0},
+            fulfillment_result={
+                "planned_nodes": [],
+                "covered_nodes": [],
+                "missed_nodes": [],
+                "extra_nodes": [],
+            },
+            disambiguation_result={"pending": []},
+            extraction_result={
+                "state_deltas": [],
+                "entity_deltas": [],
+                "accepted_events": [],
+            },
+        )
+
+
+def test_modern_story_system_cannot_delete_chapter_contract_to_bypass_goal(tmp_path):
+    story_root = tmp_path / ".story-system"
+    story_root.mkdir(parents=True)
+    (story_root / "MASTER_SETTING.json").write_text(
+        json.dumps(
+            {
+                "meta": {
+                    "schema_version": "story-system/v1",
+                    "contract_type": "MASTER_SETTING",
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="chapter_contract_missing_goal"):
+        _build_commit(
+            ChapterCommitService(tmp_path),
+            tmp_path,
+            chapter=1,
+            review_result={"blocking_count": 0},
+            fulfillment_result={
+                "planned_nodes": [],
+                "covered_nodes": [],
+                "missed_nodes": [],
+                "extra_nodes": [],
+            },
+            disambiguation_result={"pending": []},
+            extraction_result={
+                "state_deltas": [],
+                "entity_deltas": [],
+                "accepted_events": [],
+            },
+        )
+
+
+def test_accepted_commit_persists_authoritative_goal_in_outline_snapshot(tmp_path):
+    contract_path = tmp_path / ".story-system" / "chapters" / "chapter_003.json"
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(
+        json.dumps(
+            {
+                "meta": {"chapter": 3},
+                "chapter_directive": {
+                    "goal": "在子时前找到账簿并确认伪造者",
+                    "must_cover_nodes": [],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    payload = _build_commit(
+        ChapterCommitService(tmp_path),
+        tmp_path,
+        chapter=3,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+        },
+        disambiguation_result={"pending": []},
+        extraction_result={
+            "state_deltas": [],
+            "entity_deltas": [],
+            "accepted_events": [],
+        },
+    )
+
+    assert payload["meta"]["status"] == "accepted"
+    assert payload["outline_snapshot"]["goal"] == "在子时前找到账簿并确认伪造者"
 
 
 def test_commit_service_rejects_outline_nodes_missing_from_contract(tmp_path):
@@ -182,7 +343,7 @@ def test_build_commit_rejects_artifacts_bound_to_another_chapter(tmp_path):
     with pytest.raises(ChapterBindingError) as exc_info:
         service.build_commit(
             chapter=2,
-            review_result={"blocking_count": 0, **common},
+            review_result=standard_review(chapter_one_binding),
             fulfillment_result={
                 "planned_nodes": [],
                 "covered_nodes": [],
@@ -210,7 +371,7 @@ def test_build_commit_rejects_one_stale_artifact_binding(tmp_path):
     with pytest.raises(ChapterBindingError) as exc_info:
         service.build_commit(
             chapter=3,
-            review_result={"blocking_count": 0, "chapter_binding": binding},
+            review_result=standard_review(binding),
             fulfillment_result={
                 "planned_nodes": [],
                 "covered_nodes": [],
@@ -504,7 +665,7 @@ def test_chapter_commit_cli_builds_and_persists_commit(tmp_path, monkeypatch):
         json.dumps({**payload, "chapter_binding": binding}, ensure_ascii=False),
         encoding="utf-8",
     )
-    _write_artifact(review_path, {"blocking_count": 0})
+    _write_artifact(review_path, standard_review(binding))
     _write_artifact(
         fulfillment_path,
         {

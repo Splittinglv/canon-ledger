@@ -9,6 +9,7 @@ from pathlib import Path
 from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.chapter_content_binding import build_chapter_binding
 from data_modules.story_runtime_sources import load_runtime_sources
+from .review_test_helpers import standard_review
 
 
 def _write_runtime_contracts(project_root: Path, chapter: int) -> None:
@@ -31,6 +32,9 @@ def _write_runtime_contracts(project_root: Path, chapter: int) -> None:
         json.dumps(
             {
                 "meta": {"contract_type": "CHAPTER_BRIEF", "chapter": chapter},
+                "chapter_directive": {
+                    "goal": f"完成第{chapter}章的事实推进",
+                },
             },
             ensure_ascii=False,
         ),
@@ -62,7 +66,7 @@ def _persist_trusted_commit(project_root: Path, chapter: int) -> Path:
 
     payload = ChapterCommitService(project_root).build_commit(
         chapter=chapter,
-        review_result={"blocking_count": 0, "chapter_binding": binding},
+        review_result=standard_review(binding),
         fulfillment_result={
             "planned_nodes": [],
             "covered_nodes": [],
@@ -93,6 +97,21 @@ def test_load_runtime_sources_prefers_latest_accepted_commit(tmp_path):
     assert snapshot.fallback_sources == []
 
 
+def test_load_runtime_sources_blocks_unsynchronized_setting_files(tmp_path):
+    """设定集已有长期事实但 MASTER 未绑定快照时必须 fail closed。"""
+    _write_runtime_contracts(tmp_path, chapter=1)
+    settings_dir = tmp_path / "设定集"
+    settings_dir.mkdir()
+    (settings_dir / "世界观.md").write_text(
+        "# 世界观\n\n## 城门规则\n- 通行条件：持黑铜令者只能从北门入城。\n",
+        encoding="utf-8",
+    )
+
+    snapshot = load_runtime_sources(tmp_path, chapter=1)
+
+    assert "missing_setting_canon" in snapshot.fallback_sources
+
+
 def test_load_runtime_sources_excludes_accepted_commit_after_prose_changes(tmp_path):
     _write_runtime_contracts(tmp_path, chapter=3)
     chapter_path = _persist_trusted_commit(tmp_path, chapter=3)
@@ -115,7 +134,7 @@ def test_load_runtime_sources_exposes_rejected_status_without_rejected_facts(tmp
     service = ChapterCommitService(tmp_path)
     rejected = service.build_commit(
         chapter=3,
-        review_result={"blocking_count": 1, "chapter_binding": binding},
+        review_result=standard_review(binding, blocking_count=1),
         fulfillment_result={
             "planned_nodes": [],
             "covered_nodes": [],

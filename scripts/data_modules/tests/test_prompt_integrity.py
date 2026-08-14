@@ -282,7 +282,9 @@ def test_webnovel_review_skill_uses_unified_reviewer_pipeline():
     assert "subagent_type:" not in skill_text
     assert "review-pipeline" in skill_text
     assert ".webnovel/tmp/review_results.json" in skill_text
-    assert ".webnovel/tmp/review_metrics.json" in skill_text
+    assert ".webnovel/tmp/review_audit.json" in skill_text
+    assert "--save-audit" in skill_text
+    assert "overall_score" not in skill_text
 
     for legacy_agent in (
         "consistency-checker",
@@ -308,7 +310,8 @@ def test_reviewer_chain_requires_chinese_natural_language():
     assert "除 JSON 字段、固定枚举、路径和正文原样引用外" in write_skill
     assert "所有自然语言审查内容使用中文" in review_skill
     assert "所有自然语言审查内容使用中文" in write_skill
-    assert "用户选择 minimal 模式，本轮跳过 reviewer" in write_skill
+    assert "跳过审查凭据" in write_skill
+    assert "--minimal" in write_skill
 
 
 def test_active_skills_use_cursor_task_tool():
@@ -376,14 +379,14 @@ def test_write_skill_final_report_covers_commit_projection_and_backup():
     assert "projection retry" in text
 
 
-def test_review_skill_final_report_covers_metrics_and_blocking_decision():
-    """审查最终报告必须覆盖报告、metrics、blocking 数与用户裁决状态。"""
+def test_review_skill_final_report_covers_audit_and_blocking_decision():
+    """审查最终报告必须覆盖报告、审计记录、阻断数与用户裁决状态。"""
     text = _read_text(SKILLS_DIR / "webnovel-review" / "SKILL.md")
     for required in (
         "审查报告文件",
         ".webnovel/tmp/review_results.json",
-        ".webnovel/tmp/review_metrics.json",
-        "review_metrics",
+        ".webnovel/tmp/review_audit.json",
+        "review_audits",
         "阻断问题数量",
         "用户裁决状态",
         "如果无阻断，明确可以继续写作",
@@ -779,7 +782,7 @@ def test_placeholder_scan_runs_in_both_plan_and_write_skills():
 
 # A 类红线 3：story-system 章级刷新必须传入真实 CHAPTER_GOAL 变量，
 # 不得把 {章纲目标} / 第N章章纲目标 这类占位文本当作 positional query。
-@pytest.mark.parametrize("skill_name", ["webnovel-plan", "webnovel-write"])
+@pytest.mark.parametrize("skill_name", ["webnovel-plan", "webnovel-write", "webnovel-review"])
 def test_story_system_chapter_refresh_uses_real_goal_not_placeholder_query(skill_name: str):
     """红线 3：story-system 的 query 实参是 ${CHAPTER_GOAL} 变量，且禁占位文本写在命令里。"""
     text = _read_text(SKILLS_DIR / skill_name / "SKILL.md")
@@ -787,6 +790,8 @@ def test_story_system_chapter_refresh_uses_real_goal_not_placeholder_query(skill
     assert 'story-system "${CHAPTER_GOAL}"' in text, (
         f"{skill_name}: story-system 未使用真实 ${{CHAPTER_GOAL}} 作为 query 实参"
     )
+    assert 'CHAPTER_GOAL="$(' in text, f"{skill_name}: 未从详细大纲实际赋值 CHAPTER_GOAL"
+    assert "goal else sys.exit(2)" in text, f"{skill_name}: 本章目标为空时没有关闭流程"
     # 占位 query 绝不能作为 story-system 的 positional 实参出现
     for placeholder in ("{章纲目标}", "第N章章纲目标"):
         assert f'story-system "{placeholder}"' not in text, (
@@ -799,7 +804,7 @@ def test_story_system_chapter_refresh_uses_real_goal_not_placeholder_query(skill
 
 
 # A 类红线 4：story-system 章级刷新必须 --persist 且 --emit-runtime-contracts。
-@pytest.mark.parametrize("skill_name", ["webnovel-plan", "webnovel-write"])
+@pytest.mark.parametrize("skill_name", ["webnovel-plan", "webnovel-write", "webnovel-review"])
 def test_story_system_chapter_refresh_persists_runtime_contracts(skill_name: str):
     """红线 4：章级 story-system 刷新必须同时 --persist 与 --emit-runtime-contracts。"""
     text = _read_text(SKILLS_DIR / skill_name / "SKILL.md")
@@ -812,6 +817,15 @@ def test_story_system_chapter_refresh_persists_runtime_contracts(skill_name: str
         f"{skill_name}: 章级 story-system 缺少 --emit-runtime-contracts"
     )
     assert "--chapter" in cmd_tail, f"{skill_name}: 章级 story-system 缺少 --chapter"
+
+
+def test_default_volume_template_only_records_consistency_facts():
+    """默认卷规划模板不应规定固定情节节拍。"""
+    text = _read_text(PLUGIN_ROOT / "templates" / "output" / "大纲-卷节拍表.md")
+    for prescription in ("Fichtean", "All Is Lost", "中段反转（必填）", "爽点密度"):
+        assert prescription not in text
+    for required in ("开卷状态", "角色与关系状态迁移", "伏笔与开放问题", "卷末事实快照"):
+        assert required in text
 
 
 # A 类红线 5：write-gate 三道闸门必须齐全且顺序为 prewrite→precommit→postcommit。
@@ -829,14 +843,26 @@ def test_write_skill_gate_stages_ordered_prewrite_precommit_postcommit():
     )
 
 
-# A 类红线 7：reviewer 原始 JSON 必须经 review-pipeline --save-metrics 落库（write 与 review 两层）。
+# A 类红线 7：reviewer 原始 JSON 必须经 review-pipeline --save-audit 落库（write 与 review 两层）。
 @pytest.mark.parametrize("skill_name", ["webnovel-write", "webnovel-review"])
-def test_review_pipeline_persists_metrics_in_review_chain(skill_name: str):
-    """红线 7：reviewer JSON 经 review-pipeline --save-metrics 落库。"""
+def test_review_pipeline_persists_audit_in_review_chain(skill_name: str):
+    """红线 7：reviewer JSON 经 review-pipeline --save-audit 落库。"""
     text = _read_text(SKILLS_DIR / skill_name / "SKILL.md")
     cmds = _extract_cli_subcommands(text)
     assert "review-pipeline" in cmds, f"{skill_name}: 缺少 review-pipeline CLI 调用"
-    assert "--save-metrics" in text, f"{skill_name}: review-pipeline 未带 --save-metrics 落库"
+    assert "--save-audit" in text, f"{skill_name}: review-pipeline 未带 --save-audit 落库"
+    assert "--save-metrics" not in text, f"{skill_name}: 默认链不应继续写入评分指标"
+
+
+def test_write_skill_resolves_review_mode_before_subagent_tasks():
+    """写章流程必须给子代理传入已经确定的审查模式。"""
+    text = _read_text(SKILLS_DIR / "webnovel-write" / "SKILL.md")
+    assert "${REVIEW_MODE}" not in text, "不得把未赋值的 shell 变量传给子代理"
+    assert text.count("- review_mode={review_mode}") == 2
+    assert "默认命令取 `standard`" in text
+    assert "`--fast` 取 `fast`" in text
+    assert "`--minimal` 取 `minimal`" in text
+    assert "`minimal` 不调用 reviewer" in text
 
 
 # A 类红线 10：postcommit 必须验证 projection 五项；失败只 projections retry。

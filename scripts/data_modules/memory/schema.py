@@ -40,12 +40,12 @@ HARD_CONSTRAINT_CATEGORIES = frozenset(
     }
 )
 
-# Character state is also a current, durable fact.  It is kept separately so
-# callers that need only explicit story constraints can use
-# ``HARD_CONSTRAINT_CATEGORIES``, while storage compaction protects every
-# active state snapshot as well.
+# Character state and exact timeline events are also durable facts.  They are
+# kept separately so callers that need only explicit story constraints can
+# use ``HARD_CONSTRAINT_CATEGORIES``, while storage compaction still protects
+# every active state snapshot and every stable timeline event.
 PERSISTENT_ACTIVE_CATEGORIES = frozenset(
-    {*HARD_CONSTRAINT_CATEGORIES, "character_state"}
+    {*HARD_CONSTRAINT_CATEGORIES, "character_state", "timeline"}
 )
 
 CATEGORY_KEY_RULES: Dict[str, tuple[str, ...]] = {

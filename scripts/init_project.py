@@ -64,6 +64,14 @@ def _write_text_if_missing(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def _write_json_if_missing(path: Path, payload: Dict[str, Any]) -> None:
+    """Create a structured contract without overwriting author edits."""
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, payload, use_lock=True, backup=False)
+
+
 def _apply_label_replacements(text: str, replacements: Dict[str, str]) -> str:
     if not text or not replacements:
         return text
@@ -189,9 +197,8 @@ def _build_master_outline(target_chapters: int, *, chapters_per_volume: int = 50
         lines.extend(
             [
                 f"### 第{v}卷（第{start}-{end}章）",
-                "- 核心冲突：",
-                "- 关键爽点：",
-                "- 卷末高潮：",
+                "- 卷内目标：",
+                "- 预期结束状态：",
                 "- 主要登场角色：",
                 "- 关键伏笔（埋/收）：",
                 "",
@@ -371,6 +378,115 @@ def init_project(
     state_path.parent.mkdir(parents=True, exist_ok=True)
     # 使用原子化写入（初始化不需要备份旧文件）
     atomic_write_json(state_path, state, use_lock=True, backup=False)
+
+    # 首章不能依赖后续 Story System 调用才获得初始化设定。把作者明确填写
+    # 的事实写入闭合 schema；创作风格、文笔、节奏、爽点等字段故意不在
+    # initial_canon 中。后续 story-system 重建 MASTER_SETTING 时会保留它。
+    initial_canon = {
+        "project": {
+            "title": title,
+            "genre": canonical_genre,
+        },
+        "protagonist": {
+            "name": protagonist_name,
+            "desire": protagonist_desire,
+            "flaw": protagonist_flaw,
+            "archetype": protagonist_archetype,
+        },
+        "world": {
+            "scale": world_scale,
+            "factions": factions,
+            "power_system_type": power_system_type,
+            "social_class": social_class,
+            "resource_distribution": resource_distribution,
+            "currency_system": currency_system,
+            "currency_exchange": currency_exchange,
+            "sect_hierarchy": sect_hierarchy,
+            "cultivation_chain": cultivation_chain,
+            "cultivation_subtiers": cultivation_subtiers,
+        },
+        "golden_finger": {
+            "name": golden_finger_name,
+            "type": golden_finger_type,
+            "visibility": gf_visibility,
+            "irreversible_cost": gf_irreversible_cost,
+        },
+        "characters": {
+            "protagonist_structure": protagonist_structure,
+            "heroine_config": heroine_config,
+            "heroine_names": heroine_names,
+            "heroine_role": heroine_role,
+            "co_protagonists": co_protagonists,
+            "co_protagonist_roles": co_protagonist_roles,
+            "antagonist_tiers": antagonist_tiers,
+            "antagonist_level": antagonist_level,
+        },
+    }
+    # 与默认上下文使用同一净化器，避免初始化和运行时形成两套边界。
+    from data_modules.consistency_context import sanitize_initial_canon
+
+    initial_canon = sanitize_initial_canon(initial_canon)
+    story_root = project_path / ".story-system"
+    _write_json_if_missing(
+        story_root / "MASTER_SETTING.json",
+        {
+            "meta": {
+                "schema_version": "story-system/v1",
+                "contract_type": "MASTER_SETTING",
+                "generator_version": "init",
+            },
+            "route": {
+                "primary_genre": canonical_genre,
+                "canonical_genre": canonical_genre,
+                "author_genre_label": genre,
+                "route_source": "author_initialization",
+            },
+            "initial_canon": initial_canon,
+            "override_policy": {
+                "locked": [],
+                "append_only": [],
+                "override_allowed": ["route.primary_genre", "route.canonical_genre"],
+            },
+        },
+    )
+    _write_json_if_missing(
+        story_root / "volumes" / "volume_001.json",
+        {
+            "meta": {
+                "schema_version": "story-system/v1",
+                "contract_type": "VOLUME_BRIEF",
+                "generator_version": "init",
+                "volume": 1,
+            }
+        },
+    )
+    _write_json_if_missing(
+        story_root / "chapters" / "chapter_001.json",
+        {
+            "meta": {
+                "schema_version": "story-system/v1",
+                "contract_type": "CHAPTER_BRIEF",
+                "generator_version": "init",
+                "chapter": 1,
+            },
+            "chapter_directive": {},
+            "override_allowed": {},
+        },
+    )
+    _write_json_if_missing(
+        story_root / "reviews" / "chapter_001.review.json",
+        {
+            "meta": {
+                "schema_version": "story-system/v1",
+                "contract_type": "REVIEW_CONTRACT",
+                "generator_version": "init",
+                "chapter": 1,
+            },
+            "must_check": [],
+            "blocking_rules": [],
+            "review_thresholds": {"blocking_count": 0, "missed_nodes": 0},
+        },
+    )
 
     # 读取内置模板（可选）
     script_dir = Path(__file__).resolve().parent
@@ -568,15 +684,17 @@ def init_project(
     if not antagonist_content:
         antagonist_content = "\n".join(
             [
-                "# 反派设计",
+                "# 对立角色与压力来源",
                 "",
                 f"> 项目：{title}｜创建：{now}",
                 "",
-                f"- 反派等级：{antagonist_level or '（待填写）'}",
-                "- 动机：",
-                "- 资源/势力：",
-                "- 与主角的镜像关系：",
-                "- 终局：",
+                "> 只记录作者已经确定的事实；没有固定层级，也不要求必须存在反派。",
+                "",
+                "- 名称：",
+                "- 类型（角色/组织/环境/规则）：",
+                "- 当前状态：",
+                "- 已知目标：",
+                "- 与主角的事实关系：",
                 "",
             ]
         ).rstrip() + "\n"
@@ -584,19 +702,14 @@ def init_project(
         tier_map = _parse_tier_map(antagonist_tiers)
         if tier_map:
             lines = antagonist_content.splitlines()
-            out_lines = []
+            out_lines: List[str] = []
+            inserted = False
             for line in lines:
-                if line.strip().startswith("| 小反派"):
-                    name = tier_map.get("小反派", "")
-                    out_lines.append(f"| 小反派 | {name} | 前期 | | |")
-                    continue
-                if line.strip().startswith("| 中反派"):
-                    name = tier_map.get("中反派", "")
-                    out_lines.append(f"| 中反派 | {name} | 中期 | | |")
-                    continue
-                if line.strip().startswith("| 大反派"):
-                    name = tier_map.get("大反派", "")
-                    out_lines.append(f"| 大反派 | {name} | 后期 | | |")
+                if not inserted and line.strip() == "| | | | | |":
+                    for label, name in tier_map.items():
+                        if name:
+                            out_lines.append(f"| {name} | 作者指定分类：{label} | | | |")
+                    inserted = True
                     continue
                 out_lines.append(line)
             antagonist_content = "\n".join(out_lines)
@@ -617,6 +730,13 @@ def init_project(
             ]
         )
     _write_text_if_missing(project_path / "设定集" / "文风提示词.md", style_prompt.rstrip() + "\n")
+
+    # 初始化完成时就把作者明确填写的结构化设定绑定到 MASTER_SETTING。
+    # 文风提示词和未填写模板由同步器排除；后续手改设定而未刷新合同时，
+    # load-context 会因哈希不一致而 fail closed。
+    from data_modules.story_contracts import synchronize_setting_canon
+
+    synchronize_setting_canon(project_path)
 
     subagent_models = output_subagent_models.strip() if output_subagent_models else ""
     if not subagent_models:
@@ -766,7 +886,7 @@ def main() -> None:
     parser.add_argument("--heroine-role", default="", help="女主定位（事业线/情感线/对抗线）")
     parser.add_argument("--co-protagonists", default="", help="多主角姓名（逗号分隔）")
     parser.add_argument("--co-protagonist-roles", default="", help="多主角定位（逗号分隔）")
-    parser.add_argument("--antagonist-tiers", default="", help="反派分层（如 小反派:张三;中反派:李四;大反派:王五）")
+    parser.add_argument("--antagonist-tiers", default="", help="用户明确指定的对立角色分类映射（兼容旧参数名）")
     parser.add_argument("--world-scale", default="", help="世界规模")
     parser.add_argument("--factions", default="", help="势力格局/核心势力")
     parser.add_argument("--power-system-type", default="", help="力量体系类型")

@@ -628,9 +628,12 @@ def main() -> None:
     p_review_pipeline.add_argument("--chapter", type=int, required=True, help="目标章节号")
     p_review_pipeline.add_argument("--review-results", required=True, help="reviewer 原始结果 JSON 文件")
     p_review_pipeline.add_argument("--chapter-binding", required=True, help="审查开始前生成的正文内容绑定 JSON")
-    p_review_pipeline.add_argument("--metrics-out", default="", help="metrics 输出文件")
+    p_review_pipeline.add_argument("--audit-out", default="", help="无评分审查审计输出文件")
+    p_review_pipeline.add_argument("--metrics-out", default="", help=argparse.SUPPRESS)
     p_review_pipeline.add_argument("--report-file", default="", help="审查报告路径")
-    p_review_pipeline.add_argument("--save-metrics", action="store_true", help="直接写入 index.db")
+    p_review_pipeline.add_argument("--save-audit", action="store_true", help="把无评分审查审计写入 index.db")
+    p_review_pipeline.add_argument("--save-metrics", action="store_true", help=argparse.SUPPRESS)
+    p_review_pipeline.add_argument("--minimal", action="store_true", help="生成明确跳过审查的 minimal artifact")
 
     p_placeholder_scan = sub.add_parser("placeholder-scan", help="扫描大纲/设定集未补齐占位")
     p_placeholder_scan.add_argument("--format", choices=["json", "text"], default="json", help="输出格式")
@@ -741,12 +744,18 @@ def main() -> None:
             "--review-results", str(args.review_results),
             "--chapter-binding", str(args.chapter_binding),
         ]
+        if args.audit_out:
+            return_args.extend(["--audit-out", str(args.audit_out)])
         if args.metrics_out:
             return_args.extend(["--metrics-out", str(args.metrics_out)])
         if args.report_file:
             return_args.extend(["--report-file", str(args.report_file)])
+        if args.save_audit:
+            return_args.append("--save-audit")
         if args.save_metrics:
             return_args.append("--save-metrics")
+        if args.minimal:
+            return_args.append("--minimal")
         raise SystemExit(_run_script("review_pipeline.py", return_args))
     if tool == "placeholder-scan":
         raise SystemExit(_run_data_module("placeholder_scanner", [*forward_args, "--format", str(args.format)]))

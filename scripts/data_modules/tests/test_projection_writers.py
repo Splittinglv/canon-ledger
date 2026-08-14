@@ -14,6 +14,7 @@ from data_modules.memory_projection_writer import MemoryProjectionWriter
 from data_modules.state_projection_writer import StateProjectionWriter
 from data_modules.summary_projection_writer import SummaryProjectionWriter
 from data_modules.vector_projection_writer import VectorProjectionWriter
+from .review_test_helpers import standard_review
 
 
 def _build_bound_commit(service: ChapterCommitService, **kwargs):
@@ -23,6 +24,11 @@ def _build_bound_commit(service: ChapterCommitService, **kwargs):
     if not chapter_path.exists():
         chapter_path.write_text(f"第{chapter}章测试正文\n", encoding="utf-8")
     binding = build_chapter_binding(service.project_root, chapter)
+    if "blocking_count" in kwargs["review_result"]:
+        kwargs["review_result"] = standard_review(
+            binding,
+            blocking_count=int(kwargs["review_result"].get("blocking_count") or 0),
+        )
     for artifact_name in (
         "review_result",
         "fulfillment_result",
@@ -607,7 +613,7 @@ def test_vector_projection_writer_is_idempotent_for_replay(tmp_path, monkeypatch
         bm25_chunk_count = conn.execute("SELECT COUNT(DISTINCT chunk_id) FROM bm25_index").fetchone()[0]
         doc_count = conn.execute("SELECT COUNT(*) FROM doc_stats").fetchone()[0]
 
-    # Only structured facts are indexed. Summary and scene prose are excluded.
+    # 只索引结构化事实；摘要和场景自由文本必须排除。
     assert vector_count == 2
     assert bm25_chunk_count == 2
     assert doc_count == 2

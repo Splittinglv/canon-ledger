@@ -94,7 +94,7 @@ hook_strength: "strong"
   - `open_loop_closed`：`loop_id`（指向已创建的伏笔）+ `resolution`。
   - `promise_created`：`promise_id`（稳定 ID）+ `content`。
   - `promise_paid_off`：`promise_id`（指向已创建的承诺）+ `resolution`。
-  - `world_rule_revealed`：`rule_content`；可选 `rule_category`、`scope`。
+  - `world_rule_revealed`：必须同时提供 `rule_content`、`rule_category`、`domain`、`field`、`evidence_quote`；`evidence_quote` 必须逐字摘自本章正文，并同时包含 `domain` 与完整 `rule_content`。`rule_category` 只能是自然/物理/地理/时间/力量/法术/科技/制度/法律/社会/习俗/经济/金融/资源/生物/契约/组织/能力之一，`subject` 必须与故事内 `domain` 相同。章节、场景转换、故事推进、收束、反转、悬念、爽点等创作安排不属于世界规则，不得输出为该事件。`scope` 可选。
   - `relationship_changed`：`to_entity` + `relationship_type`。
   - `artifact_obtained`：`artifact_id` + `name` + `owner`。
 

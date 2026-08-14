@@ -132,7 +132,74 @@ class IndexReadingMixin:
                 stats[hook] = stats.get(hook, 0) + 1
             return stats
 
-    # ==================== v5.4 审查指标 ====================
+    # ==================== 事实审查审计 ====================
+
+    def save_review_audit(self, audit: ReviewAudit) -> None:
+        """保存事实审查覆盖范围与问题计数，不保存质量分数。"""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO review_audits
+                (chapter, review_mode, review_status, review_degraded,
+                 reviewed_dimensions, skipped_dimensions, dimension_results,
+                 severity_counts, critical_issues, issues_count, blocking_count,
+                 report_file, notes, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(chapter)
+                DO UPDATE SET
+                    review_mode = excluded.review_mode,
+                    review_status = excluded.review_status,
+                    review_degraded = excluded.review_degraded,
+                    reviewed_dimensions = excluded.reviewed_dimensions,
+                    skipped_dimensions = excluded.skipped_dimensions,
+                    dimension_results = excluded.dimension_results,
+                    severity_counts = excluded.severity_counts,
+                    critical_issues = excluded.critical_issues,
+                    issues_count = excluded.issues_count,
+                    blocking_count = excluded.blocking_count,
+                    report_file = excluded.report_file,
+                    notes = excluded.notes,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    audit.chapter,
+                    audit.review_mode,
+                    audit.review_status,
+                    1 if audit.review_degraded else 0,
+                    json.dumps(audit.reviewed_dimensions, ensure_ascii=False),
+                    json.dumps(audit.skipped_dimensions, ensure_ascii=False),
+                    json.dumps(audit.dimension_results, ensure_ascii=False),
+                    json.dumps(audit.severity_counts, ensure_ascii=False),
+                    json.dumps(audit.critical_issues, ensure_ascii=False),
+                    audit.issues_count,
+                    audit.blocking_count,
+                    audit.report_file,
+                    audit.notes,
+                ),
+            )
+            conn.commit()
+
+    def get_review_audit(self, chapter: int) -> Optional[Dict[str, Any]]:
+        """读取单章事实审查审计记录。"""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM review_audits WHERE chapter = ?", (chapter,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return self._row_to_dict(
+                row,
+                parse_json=[
+                    "reviewed_dimensions",
+                    "skipped_dimensions",
+                    "dimension_results",
+                    "severity_counts",
+                    "critical_issues",
+                ],
+            )
+
+    # ==================== 旧版评分指标（默认链不再写入） ====================
 
     def save_review_metrics(self, metrics: ReviewMetrics) -> None:
         """保存审查指标记录"""
@@ -379,4 +446,3 @@ class IndexReadingMixin:
                 for row in records
             ],
         }
-

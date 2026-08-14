@@ -109,45 +109,8 @@ def compact_scratchpad(data: ScratchpadData, max_items: int = 500) -> Scratchpad
         row for row in data.reader_promises if not _is_resolved_lifecycle(row)
     ]
 
-    # 3) 压缩过旧 timeline（与当前最新章节相距 50 章以上）。
-    timeline = sorted(data.timeline, key=lambda x: x.source_chapter)
-    if timeline:
-        latest_chapter = max(x.source_chapter for x in timeline)
-        old = [x for x in timeline if (latest_chapter - x.source_chapter) > 50]
-        fresh = [x for x in timeline if (latest_chapter - x.source_chapter) <= 50]
-        if len(old) > 1:
-            samples = []
-            for row in old[:8]:
-                label = row.value or row.subject or row.field or row.id
-                if label:
-                    samples.append(str(label))
-            summary_text = "；".join(samples) if samples else "早期关键事件"
-            summary_item = MemoryItem(
-                id=f"timeline-summary-upto-{old[-1].source_chapter}",
-                layer="semantic",
-                category="story_fact",
-                subject="timeline_summary",
-                field=f"<=ch{old[-1].source_chapter}",
-                value=f"早期事件摘要：{summary_text}",
-                payload={
-                    "from_chapter": old[0].source_chapter,
-                    "to_chapter": old[-1].source_chapter,
-                    "items_merged": len(old),
-                },
-                status="active",
-                source_chapter=old[-1].source_chapter,
-                evidence=["compactor:timeline"],
-                updated_at=now_iso(),
-            )
-            replaced = False
-            for i, row in enumerate(list(data.story_facts)):
-                if row.subject == summary_item.subject and row.subject == "timeline_summary":
-                    data.story_facts[i] = summary_item
-                    replaced = True
-                    break
-            if not replaced:
-                data.story_facts.append(summary_item)
-        data.timeline = fresh
+    # 3) 时间线是可追溯的精确事实，不能用摘要替换旧事件。展示层可以按
+    # 预算裁剪，但存储层始终保留每个稳定 timeline_id。
 
     # 4) 若仍超限，按状态和新鲜度做全局截断。所有 active 持久事实
     # （规则、关系、角色状态及生命周期约束）不能为了满足缓存容量而

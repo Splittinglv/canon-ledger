@@ -55,6 +55,28 @@ def test_init_master_outline_does_not_prefill_future_volume_rows(tmp_path, monke
     assert "| 20 |" not in summary
 
 
+def test_init_default_outline_and_opposition_file_do_not_prescribe_plot_formulas(tmp_path, monkeypatch):
+    import init_project as init_project_module
+
+    monkeypatch.setattr(init_project_module, "is_git_available", lambda: False)
+    project_root = tmp_path / "book"
+
+    init_project_module.init_project(
+        str(project_root),
+        title="测试书",
+        genre="仙侠",
+        protagonist_name="陆鸣",
+        target_chapters=50,
+    )
+
+    outline = (project_root / "大纲" / "总纲.md").read_text(encoding="utf-8")
+    opposition = (project_root / "设定集" / "反派设计.md").read_text(encoding="utf-8")
+    for prescription in ("7:3", "爽点里程碑", "小反派", "中反派", "大反派"):
+        assert prescription not in outline
+        assert prescription not in opposition
+    assert "没有固定层级" in opposition
+
+
 def test_init_generates_conditional_protagonist_group_and_heroine(tmp_path, monkeypatch):
     import init_project as init_project_module
 

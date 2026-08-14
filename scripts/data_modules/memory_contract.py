@@ -139,28 +139,36 @@ class MemoryContract(Protocol):
         """写前读取：加载章节上下文包。"""
         ...
 
-    def query_entity(self, entity_id: str) -> Optional[EntitySnapshot]:
-        """查询单个实体快照。"""
+    def query_entity(
+        self, entity_id: str, as_of_chapter: int | None = None
+    ) -> Optional[EntitySnapshot]:
+        """查询单个实体快照；历史写作必须传入截止章节。"""
         ...
 
-    def query_rules(self, domain: str = "") -> List[Rule]:
-        """查询世界规则，可按 domain 过滤。"""
+    def query_rules(
+        self, domain: str = "", as_of_chapter: int | None = None
+    ) -> List[Rule]:
+        """查询世界规则，可按 domain 和截止章节过滤。"""
         ...
 
     def read_summary(self, chapter: int) -> str:
         """读取章节摘要文本。"""
         ...
 
-    def get_open_loops(self, status: str = "active") -> List[OpenLoop]:
-        """查询未闭合伏笔/悬念。"""
+    def get_open_loops(
+        self, status: str = "active", as_of_chapter: int | None = None
+    ) -> List[OpenLoop]:
+        """查询截止指定章节仍未闭合的伏笔/悬念。"""
         ...
 
     def get_lifecycle_obligations(
-        self, status: str = "active"
+        self, status: str = "active", as_of_chapter: int | None = None
     ) -> List[LifecycleObligation]:
         """查询可由 close/payoff 事件明确引用的稳定目标。"""
         ...
 
-    def get_timeline(self, from_ch: int, to_ch: int) -> List[TimelineEvent]:
+    def get_timeline(
+        self, from_ch: int, to_ch: int, as_of_chapter: int | None = None
+    ) -> List[TimelineEvent]:
         """查询章节范围内的时间线事件。"""
         ...

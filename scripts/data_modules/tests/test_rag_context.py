@@ -18,6 +18,7 @@ from data_modules.rag_context import empty_rag_assist, load_rag_assist
 from data_modules.vector_projection_writer import VectorProjectionWriter
 import data_modules.memory_contract_adapter as memory_contract_adapter_module
 import data_modules.rag_context as rag_context_module
+from .review_test_helpers import standard_review
 
 
 _RAG_ASSIST_KEYS = {
@@ -99,7 +100,7 @@ def _write_trusted_commit(project_root: Path, chapter: int = 3) -> dict:
     service = ChapterCommitService(project_root)
     payload = service.build_commit(
         chapter=chapter,
-        review_result={"blocking_count": 0, "chapter_binding": binding},
+        review_result=standard_review(binding),
         fulfillment_result={
             "planned_nodes": [],
             "covered_nodes": [],

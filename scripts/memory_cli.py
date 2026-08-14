@@ -45,7 +45,7 @@ def cmd_load_context(args: argparse.Namespace) -> None:
 
 def cmd_query_entity(args: argparse.Namespace) -> None:
     adapter = _adapter(args.project_root)
-    snap = adapter.query_entity(args.id)
+    snap = adapter.query_entity(args.id, as_of_chapter=args.as_of_chapter)
     if snap is None:
         _json_out({"error": "not_found", "entity_id": args.id})
     else:
@@ -54,7 +54,10 @@ def cmd_query_entity(args: argparse.Namespace) -> None:
 
 def cmd_query_rules(args: argparse.Namespace) -> None:
     adapter = _adapter(args.project_root)
-    rules = adapter.query_rules(domain=args.domain or "")
+    rules = adapter.query_rules(
+        domain=args.domain or "",
+        as_of_chapter=args.as_of_chapter,
+    )
     _json_out([r.to_dict() for r in rules])
 
 
@@ -66,19 +69,29 @@ def cmd_read_summary(args: argparse.Namespace) -> None:
 
 def cmd_get_open_loops(args: argparse.Namespace) -> None:
     adapter = _adapter(args.project_root)
-    loops = adapter.get_open_loops(status=args.status or "active")
+    loops = adapter.get_open_loops(
+        status=args.status or "active",
+        as_of_chapter=args.as_of_chapter,
+    )
     _json_out([l.to_dict() for l in loops])
 
 
 def cmd_get_obligations(args: argparse.Namespace) -> None:
     adapter = _adapter(args.project_root)
-    obligations = adapter.get_lifecycle_obligations(status=args.status or "active")
+    obligations = adapter.get_lifecycle_obligations(
+        status=args.status or "active",
+        as_of_chapter=args.as_of_chapter,
+    )
     _json_out([item.to_dict() for item in obligations])
 
 
 def cmd_get_timeline(args: argparse.Namespace) -> None:
     adapter = _adapter(args.project_root)
-    events = adapter.get_timeline(args.from_ch, args.to_ch)
+    events = adapter.get_timeline(
+        args.from_ch,
+        args.to_ch,
+        as_of_chapter=args.as_of_chapter,
+    )
     _json_out([e.to_dict() for e in events])
 
 
@@ -98,24 +111,39 @@ def main() -> None:
 
     p_entity = sub.add_parser("query-entity", help="查询实体快照")
     p_entity.add_argument("--id", required=True, help="实体 ID")
+    p_entity.add_argument(
+        "--as-of-chapter", type=int, default=None, help="只读取截至该章的事实"
+    )
 
     p_rules = sub.add_parser("query-rules", help="查询世界规则")
     p_rules.add_argument("--domain", default="", help="按 domain 过滤")
+    p_rules.add_argument(
+        "--as-of-chapter", type=int, default=None, help="只读取截至该章的事实"
+    )
 
     p_summary = sub.add_parser("read-summary", help="读取章节摘要")
     p_summary.add_argument("--chapter", type=int, required=True)
 
     p_loops = sub.add_parser("get-open-loops", help="查询未闭合伏笔")
     p_loops.add_argument("--status", default="active", help="状态过滤")
+    p_loops.add_argument(
+        "--as-of-chapter", type=int, default=None, help="按该章时点计算闭合状态"
+    )
 
     p_obligations = sub.add_parser(
         "get-obligations", help="查询可由闭环事件引用的稳定伏笔/承诺 ID"
     )
     p_obligations.add_argument("--status", default="active", help="状态过滤")
+    p_obligations.add_argument(
+        "--as-of-chapter", type=int, default=None, help="按该章时点计算闭合状态"
+    )
 
     p_timeline = sub.add_parser("get-timeline", help="查询时间线事件")
     p_timeline.add_argument("--from", type=int, required=True, dest="from_ch", help="起始章节")
     p_timeline.add_argument("--to", type=int, required=True, dest="to_ch", help="结束章节")
+    p_timeline.add_argument(
+        "--as-of-chapter", type=int, default=None, help="禁止读取该章之后的事实"
+    )
 
     args = parser.parse_args()
     if not args.command:

@@ -33,7 +33,7 @@ def test_project_status_json_shape(tmp_path):
     assert report["project"] == "测试书"
     assert report["phase"] == "chapter_contract_ready"
     assert report["target_chapter"] == 1
-    assert report["next_action"] == "run /webnovel-write 1"
+    assert report["next_action"] == "运行 /webnovel-write 1"
 
 
 def test_project_status_summary_is_short_and_machine_source_is_json(tmp_path):
@@ -43,7 +43,7 @@ def test_project_status_summary_is_short_and_machine_source_is_json(tmp_path):
     summary = format_project_status(report, "summary")
     payload = json.loads(format_project_status(report, "json"))
 
-    assert "phase: init_ready" in summary
+    assert "阶段：init_ready" in summary
     assert payload["schema_version"] == SCHEMA_VERSION
 
 

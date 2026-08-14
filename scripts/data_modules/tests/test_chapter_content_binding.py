@@ -5,6 +5,8 @@ import hashlib
 
 import pytest
 
+from .review_test_helpers import standard_review
+
 from data_modules.chapter_content_binding import (
     SCHEMA_VERSION,
     ChapterBindingError,
@@ -114,7 +116,7 @@ def _commit_envelope(binding: dict, *, chapter: int = 3) -> dict:
         },
         "chapter_binding": binding,
         "provenance": {"chapter_binding": binding},
-        "review_result": {"blocking_count": 0, "chapter_binding": binding},
+        "review_result": standard_review(binding),
         "fulfillment_result": {
             "planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": [],
             "chapter_binding": binding,

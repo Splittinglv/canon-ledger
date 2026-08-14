@@ -35,31 +35,32 @@ def _project_title(project_root: Path) -> str:
         return ""
     project_info = state.get("project_info") if isinstance(state.get("project_info"), dict) else {}
     project = state.get("project") if isinstance(state.get("project"), dict) else {}
-    return str(project_info.get("title") or project.get("title") or "").strip()
+    raw = str(project_info.get("title") or project.get("title") or "")
+    return " ".join(raw.replace("\x00", " ").split())[:120]
 
 
 def next_action_for_phase(snapshot: ProjectPhaseSnapshot) -> str:
     phase = snapshot.phase
     target = snapshot.target_chapter
     if phase == PHASE_NO_PROJECT:
-        return "run /webnovel-init or webnovel.py use <project_root>"
+        return "运行 /webnovel-init，或用 webnovel.py use <项目根目录> 选择项目"
     if phase == PHASE_INIT_SCAFFOLDED:
-        return "run webnovel.py doctor --format text and fix missing init files"
+        return "运行 webnovel.py doctor --format text，并补齐初始化文件"
     if phase == PHASE_INIT_READY:
-        return "run /webnovel-plan or refresh Story System contracts"
+        return "运行 /webnovel-plan，或刷新 Story System 合同"
     if phase == PHASE_PLAN_IN_PROGRESS:
-        return f"finish planning and emit runtime contracts for chapter {target}"
+        return f"完成规划并生成第 {target} 章运行时合同"
     if phase == PHASE_CHAPTER_CONTRACT_READY:
-        return f"run /webnovel-write {target}"
+        return f"运行 /webnovel-write {target}"
     if phase == PHASE_DRAFT_IN_PROGRESS:
-        return f"finish review/data artifacts for chapter {target}"
+        return f"完成第 {target} 章的审查与数据产物"
     if phase == PHASE_READY_TO_COMMIT:
-        return f"run webnovel.py chapter-commit --chapter {target}"
+        return f"运行 webnovel.py chapter-commit --chapter {target}"
     if phase == PHASE_CHAPTER_COMMITTED:
-        return f"continue with chapter {snapshot.latest_accepted_chapter + 1}"
+        return f"继续写第 {snapshot.latest_accepted_chapter + 1} 章"
     if phase == PHASE_PROJECTION_FAILED:
-        return "inspect projection_log / projection_status and repair failed or pending projection"
-    return "run webnovel.py doctor --format text"
+        return "检查 projection_log / projection_status，并修复失败或待处理的投影"
+    return "运行 webnovel.py doctor --format text"
 
 
 def build_project_status(project_root: str | Path | None, chapter: int | None = None) -> dict[str, Any]:
@@ -86,20 +87,20 @@ def format_project_status(report: dict[str, Any], output_format: str = "summary"
     project = report.get("project") or "(未命名项目)"
     root = report.get("project_root") or "(未解析)"
     lines = [
-        f"project: {project}",
-        f"root: {root}",
-        f"phase: {report.get('phase')}",
-        f"latest_accepted_chapter: {report.get('latest_accepted_chapter')}",
-        f"target_chapter: {report.get('target_chapter')}",
-        f"next_action: {report.get('next_action')}",
+        f"项目：{project}",
+        f"根目录：{root}",
+        f"阶段：{report.get('phase')}",
+        f"最近已接受章节：{report.get('latest_accepted_chapter')}",
+        f"目标章节：{report.get('target_chapter')}",
+        f"下一步：{report.get('next_action')}",
     ]
     blocking = report.get("blocking") or []
     warnings = report.get("warnings") or []
     if blocking:
-        lines.append("blocking:")
+        lines.append("阻断项：")
         lines.extend(f"- {item}" for item in blocking)
     if warnings:
-        lines.append("warnings:")
+        lines.append("警告：")
         lines.extend(f"- {item}" for item in warnings)
     return "\n".join(lines)
 

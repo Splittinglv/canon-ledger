@@ -194,7 +194,7 @@ class ChapterReadingPowerMeta:
 
 @dataclass
 class ReviewMetrics:
-    """审查指标记录 (v5.4 引入)"""
+    """旧版评分记录；默认审查链不再写入。"""
 
     start_chapter: int
     end_chapter: int
@@ -202,6 +202,25 @@ class ReviewMetrics:
     dimension_scores: Dict[str, float] = field(default_factory=dict)
     severity_counts: Dict[str, int] = field(default_factory=dict)
     critical_issues: List[str] = field(default_factory=list)
+    report_file: str = ""
+    notes: str = ""
+
+
+@dataclass
+class ReviewAudit:
+    """不含写作质量评分的事实审查记录。"""
+
+    chapter: int
+    review_mode: str
+    review_status: str
+    review_degraded: bool
+    reviewed_dimensions: List[str] = field(default_factory=list)
+    skipped_dimensions: List[str] = field(default_factory=list)
+    dimension_results: List[Dict[str, str]] = field(default_factory=list)
+    severity_counts: Dict[str, int] = field(default_factory=dict)
+    critical_issues: List[str] = field(default_factory=list)
+    issues_count: int = 0
+    blocking_count: int = 0
     report_file: str = ""
     notes: str = ""
 
@@ -554,6 +573,29 @@ class IndexManager(IndexChapterMixin, IndexEntityMixin, IndexDebtMixin, IndexRea
             """)
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_review_metrics_end ON review_metrics(end_chapter)"
+            )
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS review_audits (
+                    chapter INTEGER NOT NULL PRIMARY KEY,
+                    review_mode TEXT NOT NULL,
+                    review_status TEXT NOT NULL,
+                    review_degraded INTEGER NOT NULL DEFAULT 0,
+                    reviewed_dimensions TEXT NOT NULL DEFAULT '[]',
+                    skipped_dimensions TEXT NOT NULL DEFAULT '[]',
+                    dimension_results TEXT NOT NULL DEFAULT '[]',
+                    severity_counts TEXT NOT NULL DEFAULT '{}',
+                    critical_issues TEXT NOT NULL DEFAULT '[]',
+                    issues_count INTEGER NOT NULL DEFAULT 0,
+                    blocking_count INTEGER NOT NULL DEFAULT 0,
+                    report_file TEXT,
+                    notes TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_review_audits_chapter ON review_audits(chapter)"
             )
 
             # RAG 查询日志

@@ -28,6 +28,7 @@ from data_modules.project_phase import (  # noqa: E402
 )
 from data_modules.projection_log import append_projection_run  # noqa: E402
 from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
+from .review_test_helpers import standard_review  # noqa: E402
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -56,7 +57,13 @@ def _make_init_ready(project_root: Path) -> None:
 def _make_contracts(project_root: Path, chapter: int = 1) -> None:
     _write_json(project_root / ".story-system" / "MASTER_SETTING.json", {"meta": {"contract_type": "MASTER_SETTING"}})
     _write_json(project_root / ".story-system" / "volumes" / "volume_001.json", {"meta": {"volume": 1}})
-    _write_json(project_root / ".story-system" / "chapters" / f"chapter_{chapter:03d}.json", {"meta": {"chapter": chapter}})
+    _write_json(
+        project_root / ".story-system" / "chapters" / f"chapter_{chapter:03d}.json",
+        {
+            "meta": {"chapter": chapter},
+            "chapter_directive": {"goal": f"完成第{chapter}章的事实推进"},
+        },
+    )
     _write_json(
         project_root / ".story-system" / "reviews" / f"chapter_{chapter:03d}.review.json",
         {"meta": {"chapter": chapter}},
@@ -84,7 +91,7 @@ def _bound_commit(
         },
         "chapter_binding": binding,
         "provenance": {"chapter_binding": binding},
-        "review_result": {"blocking_count": 0, "chapter_binding": binding},
+        "review_result": standard_review(binding),
         "fulfillment_result": {
             "planned_nodes": [],
             "covered_nodes": [],

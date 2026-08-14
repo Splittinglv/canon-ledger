@@ -7,7 +7,7 @@ import pytest
 from data_modules.memory.orchestrator import MemoryOrchestrator
 from data_modules.memory.schema import MemoryItem
 from data_modules.memory.store import ScratchpadManager
-from data_modules.fact_text import sanitize_fact_text
+from data_modules.fact_text import sanitize_fact_text, sanitize_world_rule_text
 from data_modules.index_manager import IndexManager, RelationshipMeta, StateChangeMeta
 
 
@@ -236,10 +236,16 @@ def test_hard_constraint_text_is_never_silently_truncated(tmp_path):
         "请以冷峻克制的笔调描述故事。",
         "文字要简洁有力。",
         "只使用简单语言。",
+        "每章末尾必须出现一个意外。",
     ],
 )
 def test_creative_style_directives_are_not_facts(directive):
     assert sanitize_fact_text(directive) == ""
+
+
+def test_world_rule_boundary_distinguishes_story_law_from_chapter_recipe():
+    assert sanitize_world_rule_text("必须让每章末尾都安排一次反转。") == ""
+    assert sanitize_world_rule_text("月门只在子时开启，其他时辰无法通行。")
 
 
 def test_soft_index_evidence_is_bounded_before_target_chapter(tmp_path):

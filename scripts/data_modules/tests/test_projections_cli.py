@@ -17,9 +17,9 @@ _ensure_scripts_on_path()
 
 from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
 from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
-from data_modules.projection_log import append_projection_run, read_projection_runs  # noqa: E402
+from data_modules.projection_log import read_projection_runs  # noqa: E402
 from data_modules.projections import replay_projections, retry_projection  # noqa: E402
-from data_modules.vector_projection_writer import VectorProjectionWriter  # noqa: E402
+from .review_test_helpers import standard_review  # noqa: E402
 
 
 def _build_bound_commit(service: ChapterCommitService, **kwargs):
@@ -29,6 +29,11 @@ def _build_bound_commit(service: ChapterCommitService, **kwargs):
     if not chapter_path.exists():
         chapter_path.write_text(f"第{chapter}章测试正文\n", encoding="utf-8")
     binding = build_chapter_binding(service.project_root, chapter)
+    if "blocking_count" in kwargs["review_result"]:
+        kwargs["review_result"] = standard_review(
+            binding,
+            blocking_count=int(kwargs["review_result"].get("blocking_count") or 0),
+        )
     for artifact_name in (
         "review_result",
         "fulfillment_result",
@@ -98,7 +103,7 @@ def test_retry_projection_replays_existing_commit(tmp_path):
     assert read_projection_runs(tmp_path, chapter=3)
 
 
-def test_retry_projection_does_not_rewrite_commit_side_effects(tmp_path):
+def test_retry_projection_rebuilds_event_read_model_from_commit(tmp_path):
     _make_accepted_commit_with_event(tmp_path, chapter=3)
     event_path = tmp_path / ".story-system" / "events" / "chapter_003.events.json"
     assert not event_path.exists()
@@ -107,7 +112,8 @@ def test_retry_projection_does_not_rewrite_commit_side_effects(tmp_path):
 
     assert report["ok"] is True
     assert report["projection_status"]["memory"] in {"done", "skipped"}
-    assert not event_path.exists()
+    assert event_path.is_file()
+    assert json.loads(event_path.read_text(encoding="utf-8"))[0]["subject"] == "韩立"
     assert read_projection_runs(tmp_path, chapter=3)
 
 
@@ -145,6 +151,7 @@ def test_retry_projection_backfills_only_vector_after_key_is_configured(
     tmp_path,
     monkeypatch,
 ):
+    monkeypatch.setenv("EMBED_API_KEY", "")
     (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
     service = ChapterCommitService(tmp_path)
@@ -160,31 +167,17 @@ def test_retry_projection_backfills_only_vector_after_key_is_configured(
         },
         disambiguation_result={"pending": []},
         extraction_result={
-            "state_deltas": [],
+            "state_deltas": [
+                {"entity_id": "旧印", "field": "holder", "new": "主角"}
+            ],
             "entity_deltas": [],
             "accepted_events": [],
             "summary_text": "主角在古井旁找到一枚旧印。",
         },
     )
-    payload["projection_status"] = {
-        "state": "done",
-        "index": "done",
-        "summary": "done",
-        "memory": "skipped",
-        "vector": "skipped",
-    }
-    commit_path = service.persist_commit(payload)
-    append_projection_run(
-        tmp_path,
-        payload,
-        {
-            "vector": {
-                "status": "skipped",
-                "result": {"reason": "bm25_only", "bm25_indexed": 1},
-            }
-        },
-        commit_path=commit_path,
-    )
+    service.persist_commit(payload)
+    payload = service.apply_projections(payload)
+    assert payload["projection_status"]["vector"] == "skipped"
     monkeypatch.setenv("EMBED_API_KEY", "configured-later")
     selected = []
 
@@ -231,15 +224,9 @@ def test_retry_projection_refreshes_legacy_fact_filter_marker(tmp_path, monkeypa
             "summary_text": "药箱仍由掌柜保管。",
         },
     )
-    payload["projection_status"] = {
-        "state": "done",
-        "index": "done",
-        "summary": "done",
-        "memory": "skipped",
-        "vector": "done",
-    }
     service.persist_commit(payload)
-    assert VectorProjectionWriter(tmp_path).apply(payload)["reason"] == "bm25_only"
+    payload = service.apply_projections(payload)
+    assert payload["projection_status"]["vector"] == "skipped"
 
     vector_db = tmp_path / ".webnovel" / "vectors.db"
     with sqlite3.connect(vector_db) as conn:

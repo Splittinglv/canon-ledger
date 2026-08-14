@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
+import os
+import re
+import secrets
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +41,13 @@ SCHEMA_VERSION = "webnovel-run-ledger/v1"
 LEDGER_REL = Path(".webnovel") / "run_ledger.json"
 WRITE_STEPS = ("draft", "review", "data", "commit", "projection", "backup")
 
+LOCAL_BACKUP_RECEIPT_SCHEMA = "webnovel-backup-receipt/v2"
+LOCAL_SNAPSHOT_MANIFEST_SCHEMA = "webnovel-local-snapshot/v1"
+LOCAL_SNAPSHOT_MANIFEST = "snapshot.manifest.json"
+LOCAL_BACKUP_KEY_REL = Path(".webnovel") / "backups" / ".integrity-key"
+LOCAL_SNAPSHOT_ROOTS = ("正文", "大纲", "设定集", ".story-system", ".webnovel")
+_LOCAL_SNAPSHOT_RE = re.compile(r"^snapshot_ch(?P<chapter>\d{4})_[A-Za-z0-9._-]+$")
+
 
 def ledger_path(project_root: str | Path) -> Path:
     return Path(project_root) / LEDGER_REL
@@ -52,6 +63,331 @@ def _read_json(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _canonical_json_bytes(payload: dict[str, Any]) -> bytes:
+    unsigned = {key: value for key, value in payload.items() if key != "signature"}
+    return json.dumps(
+        unsigned,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def backup_integrity_key_path(project_root: str | Path) -> Path:
+    return Path(project_root) / LOCAL_BACKUP_KEY_REL
+
+
+def ensure_backup_integrity_key(project_root: str | Path) -> bytes:
+    """返回项目本地备份签名密钥；仅首次备份时创建。"""
+    path = backup_integrity_key_path(project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        descriptor = -1
+    if descriptor >= 0:
+        try:
+            os.write(descriptor, secrets.token_bytes(32))
+        finally:
+            os.close(descriptor)
+    try:
+        if path.is_symlink() or not path.is_file():
+            return b""
+        key = path.read_bytes()
+        if len(key) < 32:
+            return b""
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+        return key
+    except OSError:
+        return b""
+
+
+def sign_backup_payload(project_root: str | Path, payload: dict[str, Any]) -> dict[str, Any]:
+    key = ensure_backup_integrity_key(project_root)
+    if not key:
+        raise OSError("无法创建或读取本地备份完整性密钥")
+    signed = dict(payload)
+    signed["signature_algorithm"] = "hmac-sha256"
+    signed.pop("signature", None)
+    signed["signature"] = hmac.new(
+        key,
+        _canonical_json_bytes(signed),
+        hashlib.sha256,
+    ).hexdigest()
+    return signed
+
+
+def _backup_signature_trusted(project_root: Path, payload: dict[str, Any]) -> bool:
+    if payload.get("signature_algorithm") != "hmac-sha256":
+        return False
+    signature = str(payload.get("signature") or "")
+    if len(signature) != 64:
+        return False
+    key_path = backup_integrity_key_path(project_root)
+    try:
+        if key_path.is_symlink() or not key_path.is_file():
+            return False
+        key = key_path.read_bytes()
+    except OSError:
+        return False
+    if len(key) < 32:
+        return False
+    expected = hmac.new(key, _canonical_json_bytes(payload), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature, expected)
+
+
+def snapshot_file_entries(snapshot_root: str | Path) -> list[dict[str, Any]] | None:
+    """计算快照的完整文件清单；符号链接或特殊文件一律拒绝。"""
+    root = Path(snapshot_root)
+    entries: list[dict[str, Any]] = []
+    try:
+        for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+            relative = path.relative_to(root).as_posix()
+            if relative == LOCAL_SNAPSHOT_MANIFEST:
+                continue
+            if path.is_symlink():
+                return None
+            if path.is_dir():
+                continue
+            if not path.is_file():
+                return None
+            raw = path.read_bytes()
+            entries.append(
+                {
+                    "path": relative,
+                    "bytes": len(raw),
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                }
+            )
+    except OSError:
+        return None
+    return entries
+
+
+def snapshot_directory_entries(snapshot_root: str | Path) -> list[str] | None:
+    root = Path(snapshot_root)
+    directories: list[str] = []
+    try:
+        for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+            if path.is_symlink():
+                return None
+            if path.is_dir():
+                directories.append(path.relative_to(root).as_posix())
+            elif not path.is_file():
+                return None
+    except OSError:
+        return None
+    return directories
+
+
+def build_local_snapshot_manifest(
+    project_root: str | Path,
+    snapshot_root: str | Path,
+    *,
+    chapter: int,
+    snapshot_name: str,
+    created_at: str,
+) -> dict[str, Any]:
+    snapshot = Path(snapshot_root)
+    entries = snapshot_file_entries(snapshot)
+    directories = snapshot_directory_entries(snapshot)
+    if entries is None or directories is None:
+        raise OSError("本地快照含有不安全的符号链接或特殊文件")
+    root_presence = {
+        name: bool((snapshot / name).is_dir() and not (snapshot / name).is_symlink())
+        for name in LOCAL_SNAPSHOT_ROOTS
+    }
+    return sign_backup_payload(
+        project_root,
+        {
+            "schema_version": LOCAL_SNAPSHOT_MANIFEST_SCHEMA,
+            "snapshot_kind": "complete-project-consistency-state",
+            "chapter": int(chapter),
+            "snapshot": snapshot_name,
+            "created_at": created_at,
+            "root_presence": root_presence,
+            "excluded_paths": [".webnovel/backups"],
+            "directories": directories,
+            "files": entries,
+        },
+    )
+
+
+def _local_snapshot_manifest_trusted(
+    project_root: Path,
+    snapshot_root: Path,
+    manifest: dict[str, Any],
+    *,
+    chapter: int,
+    snapshot_name: str,
+) -> bool:
+    if manifest.get("schema_version") != LOCAL_SNAPSHOT_MANIFEST_SCHEMA:
+        return False
+    if manifest.get("snapshot_kind") != "complete-project-consistency-state":
+        return False
+    try:
+        if int(manifest.get("chapter") or 0) != int(chapter):
+            return False
+    except (TypeError, ValueError):
+        return False
+    if manifest.get("snapshot") != snapshot_name:
+        return False
+    if manifest.get("excluded_paths") != [".webnovel/backups"]:
+        return False
+    if not _backup_signature_trusted(project_root, manifest):
+        return False
+    root_presence = manifest.get("root_presence")
+    if not isinstance(root_presence, dict) or set(root_presence) != set(LOCAL_SNAPSHOT_ROOTS):
+        return False
+    for name in LOCAL_SNAPSHOT_ROOTS:
+        path = snapshot_root / name
+        present = bool(root_presence.get(name))
+        if present != bool(path.is_dir() and not path.is_symlink()):
+            return False
+    allowed_top_level = set(LOCAL_SNAPSHOT_ROOTS) | {LOCAL_SNAPSHOT_MANIFEST}
+    try:
+        if any(path.name not in allowed_top_level for path in snapshot_root.iterdir()):
+            return False
+    except OSError:
+        return False
+    current_entries = snapshot_file_entries(snapshot_root)
+    current_directories = snapshot_directory_entries(snapshot_root)
+    expected_entries = manifest.get("files")
+    expected_directories = manifest.get("directories")
+    return bool(
+        current_entries is not None
+        and current_directories is not None
+        and isinstance(expected_entries, list)
+        and isinstance(expected_directories, list)
+        and current_entries == expected_entries
+        and current_directories == expected_directories
+    )
+
+
+def local_snapshot_manifest_trusted(
+    project_root: str | Path,
+    snapshot_root: str | Path,
+) -> bool:
+    root = Path(project_root)
+    snapshot = Path(snapshot_root)
+    backups_root = root / ".webnovel" / "backups"
+    try:
+        if snapshot.is_symlink() or not snapshot.is_dir():
+            return False
+        if snapshot.resolve().parent != backups_root.resolve():
+            return False
+        manifest = json.loads(
+            (snapshot / LOCAL_SNAPSHOT_MANIFEST).read_text(encoding="utf-8")
+        )
+        chapter = int(manifest.get("chapter") or 0)
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
+        return False
+    return bool(
+        chapter > 0
+        and isinstance(manifest, dict)
+        and _local_snapshot_manifest_trusted(
+            root,
+            snapshot,
+            manifest,
+            chapter=chapter,
+            snapshot_name=snapshot.name,
+        )
+    )
+
+
+def local_snapshot_receipt_trusted(
+    project_root: str | Path,
+    receipt: dict[str, Any],
+    *,
+    chapter: int,
+    require_current_binding: bool,
+) -> bool:
+    """校验本地 receipt、内部 manifest、完整清单及可选正文绑定。"""
+    root = Path(project_root)
+    if receipt.get("schema_version") != LOCAL_BACKUP_RECEIPT_SCHEMA:
+        return False
+    if receipt.get("mode") != "local" or not _backup_signature_trusted(root, receipt):
+        return False
+    try:
+        if int(receipt.get("chapter") or 0) != int(chapter) or int(chapter) <= 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+
+    snapshot_name = str(receipt.get("snapshot") or "")
+    matched = _LOCAL_SNAPSHOT_RE.fullmatch(snapshot_name)
+    if not matched or int(matched.group("chapter")) != int(chapter):
+        return False
+    if receipt.get("manifest_path") != LOCAL_SNAPSHOT_MANIFEST:
+        return False
+    snapshot_root = root / ".webnovel" / "backups" / snapshot_name
+    backups_root = root / ".webnovel" / "backups"
+    try:
+        if snapshot_root.is_symlink() or not snapshot_root.is_dir():
+            return False
+        if snapshot_root.resolve().parent != backups_root.resolve():
+            return False
+        manifest_raw = (snapshot_root / LOCAL_SNAPSHOT_MANIFEST).read_bytes()
+        if hashlib.sha256(manifest_raw).hexdigest() != str(receipt.get("manifest_sha256") or ""):
+            return False
+        manifest = json.loads(manifest_raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(manifest, dict) or not _local_snapshot_manifest_trusted(
+        root,
+        snapshot_root,
+        manifest,
+        chapter=chapter,
+        snapshot_name=snapshot_name,
+    ):
+        return False
+
+    binding = receipt.get("chapter_binding")
+    commit_rel = str(receipt.get("chapter_commit_path") or "")
+    expected_commit_hash = str(receipt.get("chapter_commit_hash") or "")
+    has_binding_proof = bool(isinstance(binding, dict) and commit_rel and expected_commit_hash)
+    if require_current_binding and not has_binding_proof:
+        return False
+    if has_binding_proof:
+        binding_path = str(binding.get("path") or "")
+        if (
+            not binding_path
+            or Path(binding_path).is_absolute()
+            or ".." in Path(binding_path).parts
+            or Path(commit_rel).is_absolute()
+            or ".." in Path(commit_rel).parts
+        ):
+            return False
+        snapshot_commit = _read_json(snapshot_root / commit_rel)
+        snapshot_ok, _snapshot_code = verify_commit_content_binding(
+            snapshot_root,
+            chapter,
+            snapshot_commit,
+        )
+        if (
+            not snapshot_ok
+            or str(((snapshot_commit.get("meta") or {}).get("status") or "")) != "accepted"
+            or commit_hash(snapshot_commit) != expected_commit_hash
+            or snapshot_commit.get("chapter_binding") != binding
+        ):
+            return False
+        if not (snapshot_root / ".webnovel" / "state.json").is_file():
+            return False
+        if require_current_binding:
+            current_commit = _read_json(_commit_path(root, chapter))
+            current_ok, _current_code = verify_commit_content_binding(root, chapter, current_commit)
+            if (
+                not current_ok
+                or commit_hash(current_commit) != expected_commit_hash
+                or current_commit.get("chapter_binding") != binding
+            ):
+                return False
+    return True
 
 
 def load_ledger(project_root: str | Path) -> dict[str, Any]:
@@ -244,7 +580,18 @@ def _commit_bytes_match(expected_hash: str, raw: bytes) -> bool:
 def backup_receipt_trusted(project_root: Path, chapter: int) -> bool:
     backup_dir = project_root / ".webnovel" / "backups"
     receipt = _read_json(backup_dir / f"ch{chapter:04d}.receipt.json")
+    if receipt.get("schema_version") == LOCAL_BACKUP_RECEIPT_SCHEMA:
+        return local_snapshot_receipt_trusted(
+            project_root,
+            receipt,
+            chapter=chapter,
+            require_current_binding=True,
+        )
     if receipt.get("schema_version") != "webnovel-backup-receipt/v1":
+        return False
+    # v1 的本地 receipt 没有完整目录清单和内部签名，任意外部 JSON 加两个
+    # 文件就能伪造“已备份”。旧格式只继续支持由 Git tag 固化的备份点。
+    if str(receipt.get("mode") or "") == "local":
         return False
     try:
         if int(receipt.get("chapter") or 0) != int(chapter):

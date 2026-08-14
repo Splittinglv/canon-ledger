@@ -123,7 +123,7 @@ def test_mark_status_and_stats(tmp_path):
     assert stats["total"] >= 1
 
 
-def test_compactor_enforces_global_limit_and_dedupes_timeline_summary(tmp_path):
+def test_compactor_preserves_exact_timeline_events_even_over_soft_limit(tmp_path):
     cfg = _cfg(tmp_path)
     cfg.memory_compactor_enabled = True
     cfg.memory_compactor_threshold = 3
@@ -175,14 +175,15 @@ def test_compactor_enforces_global_limit_and_dedupes_timeline_summary(tmp_path):
     )
 
     dump1 = manager.dump()
-    total1 = sum(len(v) for k, v in dump1.items() if isinstance(v, list))
-    assert total1 <= 3
-    summary_count1 = sum(
-        1
+    assert {row["id"] for row in dump1["timeline"]} == {
+        "t-old-1",
+        "t-old-2",
+        "t-fresh",
+    }
+    assert not any(
+        row.get("subject") == "timeline_summary"
         for row in dump1.get("story_facts", [])
-        if row.get("subject") == "timeline_summary"
     )
-    assert summary_count1 <= 1
 
     manager.upsert_item(
         MemoryItem(
@@ -196,11 +197,8 @@ def test_compactor_enforces_global_limit_and_dedupes_timeline_summary(tmp_path):
         )
     )
     dump2 = manager.dump()
-    total2 = sum(len(v) for k, v in dump2.items() if isinstance(v, list))
-    assert total2 <= 3
-    summary_count2 = sum(
-        1
-        for row in dump2.get("story_facts", [])
-        if row.get("subject") == "timeline_summary"
-    )
-    assert summary_count2 <= 1
+    assert {row["id"] for row in dump2["timeline"]} == {
+        "t-old-1",
+        "t-old-2",
+        "t-fresh",
+    }

@@ -13,7 +13,10 @@ from ..project_phase import (
     resolve_project_phase,
 )
 from ..story_runtime_sources import load_runtime_sources
-from ..outline_fulfillment import merged_planned_nodes
+from ..outline_fulfillment import (
+    load_authoritative_chapter_goal,
+    merged_planned_nodes,
+)
 from . import gate_report, issue
 
 
@@ -73,6 +76,32 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
     review_contract = contracts.get("review") or {}
     plot_structure = _plot_structure(contracts.get("chapter") or {}, review_contract)
 
+    goal_error = ""
+    try:
+        authoritative_goal = load_authoritative_chapter_goal(
+            project_root,
+            chapter,
+        )
+    except ValueError as exc:
+        authoritative_goal = None
+        goal_error = str(exc)
+    if goal_error:
+        errors.append(
+            issue(
+                "chapter_contract.goal_invalid",
+                message=f"章合同目标无效：{goal_error}",
+                path=str(
+                    project_root
+                    / ".story-system"
+                    / "chapters"
+                    / f"chapter_{chapter:03d}.json"
+                ),
+                impact="章纲目标缺失或失真，正文可能脱离本章任务。",
+                repair="补齐 chapter_directive.goal，并确保它与当前章纲目标一致后重新规划。",
+                details={"validation_code": goal_error},
+            )
+        )
+
     validation = PrewriteValidator(project_root).build(
         chapter=chapter,
         review_contract=review_contract,
@@ -112,5 +141,6 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
             "phase": snapshot.to_dict(),
             "story_runtime": runtime.to_dict(),
             "prewrite_validation": validation,
+            "authoritative_chapter_goal": authoritative_goal or "",
         },
     )

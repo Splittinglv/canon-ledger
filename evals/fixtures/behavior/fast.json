@@ -15,7 +15,7 @@
       "required": [
         "未过充分性闸门，不执行 `webnovel.py init`",
         "用户确认前不得写入",
-        "python -X utf8"
+        "${WEBNOVEL_PYTHON}\" -X utf8"
       ]
     },
     {
@@ -80,7 +80,7 @@
       "description": "`/webnovel-learn` 通过 `project-memory` 命令行写入，不手工编辑 JSON。",
       "required": [
         "project-memory add-pattern",
-        "不删除旧记录，仅追加",
+        "不删除旧规则，仅追加",
         "禁止使用 `Write`"
       ]
     },
@@ -92,7 +92,7 @@
       "required": [
         "只读",
         "/api/story-runtime/health",
-        "python -m dashboard.server"
+        "${WEBNOVEL_PYTHON}\" -m dashboard.server"
       ]
     },
     {

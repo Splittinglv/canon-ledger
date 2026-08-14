@@ -12,6 +12,12 @@ from .chapter_commit_service import ChapterCommitService
 from .chapter_content_binding import verify_commit_content_binding
 from .config import DataModulesConfig
 from .projection_log import commit_hash, latest_projection_run
+from .projection_rebuild import (
+    load_canonical_commits,
+    projection_read_models_missing,
+    projection_snapshot_requires_rebuild,
+    rebuild_all_projections,
+)
 from .vector_projection_writer import VectorProjectionWriter
 
 
@@ -171,6 +177,32 @@ def retry_projection(project_root: str | Path, *, chapter: int) -> dict[str, Any
 
     projection_status = payload.get("projection_status") or {}
     previous_run = latest_projection_run(root, chapter=chapter)
+    failed_or_pending = {
+        name
+        for name, value in projection_status.items()
+        if str(value) in {"pending", "failed"} or str(value).startswith("failed:")
+    }
+    needs_rebuild = (
+        projection_snapshot_requires_rebuild(root, payload)
+        or projection_read_models_missing(root, payload, include_vector=False)
+        or bool(failed_or_pending - {"vector"})
+    )
+    if needs_rebuild:
+        rebuilt = rebuild_all_projections(root, reason=f"retry_chapter_{chapter}")
+        statuses = (rebuilt.get("projection_status") or {}).get(str(chapter), {})
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "action": "retry",
+            "ok": bool(rebuilt.get("ok")),
+            "project_root": str(root),
+            "chapter": chapter,
+            "error": str(rebuilt.get("error") or ""),
+            "commit_path": str(path),
+            "projection_status": dict(statuses or {}),
+            "latest_projection_run": latest_projection_run(root, chapter=chapter),
+            "rebuilt_chapters": list(rebuilt.get("chapters") or []),
+        }
+
     retry_writers = {
         name
         for name in DEFAULT_PROJECTION_STATUS
@@ -219,16 +251,65 @@ def replay_projections(project_root: str | Path, *, start_chapter: int, end_chap
             "error": "invalid_chapter_range",
             "results": [],
         }
-    results = [retry_projection(root, chapter=chapter) for chapter in range(start_chapter, end_chapter + 1)]
+    try:
+        commits = load_canonical_commits(root)
+    except Exception as exc:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "action": "replay",
+            "ok": False,
+            "project_root": str(root),
+            "start_chapter": start_chapter,
+            "end_chapter": end_chapter,
+            "error": getattr(exc, "code", str(exc)),
+            "results": [],
+        }
+    available = {
+        int((payload.get("meta") or {}).get("chapter") or 0)
+        for payload in commits
+    }
+    requested = list(range(start_chapter, end_chapter + 1))
+    missing = [chapter for chapter in requested if chapter not in available]
+    if missing:
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "action": "replay",
+            "ok": False,
+            "project_root": str(root),
+            "start_chapter": start_chapter,
+            "end_chapter": end_chapter,
+            "error": f"missing_commit:{missing[0]}",
+            "results": [],
+        }
+    rebuilt = rebuild_all_projections(
+        root,
+        reason=f"explicit_replay_{start_chapter}_{end_chapter}",
+    )
+    statuses = rebuilt.get("projection_status") or {}
+    results = [
+        {
+            "schema_version": SCHEMA_VERSION,
+            "action": "retry",
+            "ok": bool(rebuilt.get("ok")),
+            "project_root": str(root),
+            "chapter": chapter,
+            "error": str(rebuilt.get("error") or ""),
+            "commit_path": str(_commit_path(root, chapter)),
+            "projection_status": dict(statuses.get(str(chapter)) or {}),
+            "latest_projection_run": latest_projection_run(root, chapter=chapter),
+        }
+        for chapter in requested
+    ]
     return {
         "schema_version": SCHEMA_VERSION,
         "action": "replay",
-        "ok": all(item.get("ok") for item in results),
+        "ok": bool(rebuilt.get("ok")) and all(item.get("ok") for item in results),
         "project_root": str(root),
         "start_chapter": start_chapter,
         "end_chapter": end_chapter,
-        "error": "",
+        "error": str(rebuilt.get("error") or ""),
         "results": results,
+        "rebuilt_chapters": list(rebuilt.get("chapters") or []),
     }
 
 

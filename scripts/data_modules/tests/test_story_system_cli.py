@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import csv
+import hashlib
 import json
 import sys
 
@@ -142,6 +143,23 @@ def test_story_system_persist_preserves_complete_outline_directive(
         ),
         encoding="utf-8",
     )
+    settings_dir = project_root / "设定集"
+    settings_dir.mkdir()
+    worldview_text = (
+        "# 世界观\n\n"
+        "## 核心规则\n"
+        "- 硬约束：潮汐退去前，雾港城门不得开启。\n\n"
+        "## 反馈节奏\n"
+        "- 关键反馈节点：每章必须展示一次潮汐变化。\n\n"
+        "## 镜像对抗\n"
+        "- 反派道路：每章结尾安排一次反转。\n"
+        "- 核心卖点：用冷峻短句制造悬念。\n"
+    )
+    (settings_dir / "世界观.md").write_text(worldview_text, encoding="utf-8")
+    (settings_dir / "文风提示词.md").write_text(
+        "# 文风提示词\n\n冷峻短句，减少修饰。\n",
+        encoding="utf-8",
+    )
     csv_dir = tmp_path / "csv"
     csv_dir.mkdir()
 
@@ -175,6 +193,11 @@ def test_story_system_persist_preserves_complete_outline_directive(
         project_root / ".story-system" / "chapters" / "chapter_003.json"
     )
     persisted = json.loads(chapter_path.read_text(encoding="utf-8"))
+    master = json.loads(
+        (project_root / ".story-system" / "MASTER_SETTING.json").read_text(
+            encoding="utf-8"
+        )
+    )
     review = json.loads(
         (
             project_root
@@ -217,6 +240,21 @@ def test_story_system_persist_preserves_complete_outline_directive(
     assert review["must_check"] == ["识别封蜡缺口", "记下账房暗号"]
     assert review["blocking_rules"] == ["不要提前揭露掌柜身份"]
     assert "章节焦点：让林川在子时前拿到账簿" in markdown
+    assert master["setting_canon"]["sources"] == [
+        {
+            "path": "设定集/世界观.md",
+            "sha256": hashlib.sha256(worldview_text.encode("utf-8")).hexdigest(),
+            "bytes": len(worldview_text.encode("utf-8")),
+        }
+    ]
+    setting_values = [
+        item["value"] for item in master["setting_canon"]["facts"]
+    ]
+    assert "潮汐退去前，雾港城门不得开启。" in setting_values
+    assert "每章必须展示一次潮汐变化。" not in setting_values
+    assert "每章结尾安排一次反转。" not in setting_values
+    assert "用冷峻短句制造悬念。" not in setting_values
+    assert "冷峻短句，减少修饰。" not in setting_values
 
 
 def test_markdown_writer_preserves_manual_notes_outside_markers(tmp_path):

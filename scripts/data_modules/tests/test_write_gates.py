@@ -19,13 +19,14 @@ _ensure_scripts_on_path()
 from data_modules.write_gates import run_write_gate  # noqa: E402
 from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
 from data_modules.projection_log import append_projection_run  # noqa: E402
+from .review_test_helpers import standard_review  # noqa: E402
 
 
 def _write_valid_artifacts(project_root: Path) -> None:
     binding = build_chapter_binding(project_root, 1)
     _write_json(
         project_root / ".webnovel" / "tmp" / "review_results.json",
-        {"blocking_count": 0, "chapter_binding": binding},
+        standard_review(binding),
     )
     _write_json(
         project_root / ".webnovel" / "tmp" / "fulfillment_result.json",
@@ -63,7 +64,7 @@ def _valid_commit_payload(project_root: Path, projection_status: dict) -> dict:
         },
         "chapter_binding": binding,
         "provenance": {"chapter_binding": binding},
-        "review_result": {"blocking_count": 0, "chapter_binding": binding},
+        "review_result": standard_review(binding),
         "fulfillment_result": {
             "planned_nodes": [],
             "covered_nodes": [],
@@ -94,6 +95,28 @@ def test_prewrite_gate_allows_contract_ready_project_with_warning(tmp_path):
     assert report["details"]["prewrite_validation"]["blocking"] is False
 
 
+def test_prewrite_gate_blocks_when_persisted_chapter_goal_is_empty(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_contracts(tmp_path, chapter=1)
+    _write_json(
+        tmp_path / ".story-system" / "chapters" / "chapter_001.json",
+        {
+            "meta": {"chapter": 1},
+            "chapter_directive": {"goal": "", "must_cover_nodes": []},
+        },
+    )
+
+    report = run_write_gate(tmp_path, chapter=1, stage="prewrite")
+
+    assert report["ok"] is False
+    goal_error = next(
+        item
+        for item in report["errors"]
+        if item["code"] == "chapter_contract.goal_invalid"
+    )
+    assert goal_error["details"]["validation_code"] == "chapter_contract_missing_goal"
+
+
 def test_prewrite_gate_merges_canonical_and_legacy_must_cover_nodes(tmp_path):
     _make_init_ready(tmp_path)
     _make_contracts(tmp_path, chapter=1)
@@ -102,6 +125,7 @@ def test_prewrite_gate_merges_canonical_and_legacy_must_cover_nodes(tmp_path):
         {
             "meta": {"chapter": 1},
             "chapter_directive": {
+                "goal": "查清封蜡缺口与账房暗号的联系",
                 "must_cover_nodes": ["识别封蜡缺口"],
                 "mandatory_nodes": ["识别封蜡缺口", "记下账房暗号"],
             },
@@ -161,6 +185,7 @@ def test_precommit_gate_rejects_empty_fulfillment_for_authoritative_nodes(tmp_pa
         {
             "meta": {"chapter": 1},
             "chapter_directive": {
+                "goal": "确认封蜡缺口的来源",
                 "must_cover_nodes": ["识别封蜡缺口"]
             },
         },
@@ -184,7 +209,10 @@ def test_precommit_gate_rejects_malformed_authoritative_nodes(tmp_path):
         tmp_path / ".story-system" / "chapters" / "chapter_001.json",
         {
             "meta": {"chapter": 1},
-            "chapter_directive": {"must_cover_nodes": "识别封蜡缺口"},
+            "chapter_directive": {
+                "goal": "确认封蜡缺口的来源",
+                "must_cover_nodes": "识别封蜡缺口",
+            },
         },
     )
     (tmp_path / "正文" / "第0001章.md").write_text("正文\n", encoding="utf-8")

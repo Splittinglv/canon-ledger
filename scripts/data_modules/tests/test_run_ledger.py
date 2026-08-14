@@ -16,9 +16,11 @@ def _ensure_scripts_on_path() -> None:
 
 _ensure_scripts_on_path()
 
+import backup_manager  # noqa: E402
 from data_modules.run_ledger import build_write_resume_plan, record_write_step  # noqa: E402
 from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
 from data_modules.projection_log import commit_hash  # noqa: E402
+from .review_test_helpers import standard_review  # noqa: E402
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -43,7 +45,7 @@ def _commit_payload(project_root: Path, status: str = "accepted") -> dict:
         },
         "chapter_binding": binding,
         "provenance": {"chapter_binding": binding},
-        "review_result": {"blocking_count": 0, "chapter_binding": binding},
+        "review_result": standard_review(binding),
         "fulfillment_result": {
             "planned_nodes": [],
             "covered_nodes": [],
@@ -71,10 +73,7 @@ def _commit_payload(project_root: Path, status: str = "accepted") -> dict:
 def _write_bound_artifacts(project_root: Path) -> dict[str, Path]:
     binding = build_chapter_binding(project_root, 1)
     payloads = {
-        "review_result": {
-            "blocking_count": 0,
-            "chapter_binding": binding,
-        },
+        "review_result": standard_review(binding),
         "fulfillment_result": {
             "planned_nodes": [],
             "covered_nodes": [],
@@ -127,10 +126,7 @@ def test_write_resume_skips_completed_draft_and_review(tmp_path: Path) -> None:
     review_path = tmp_path / ".webnovel" / "tmp" / "review_results.json"
     _write_json(
         review_path,
-        {
-            "blocking_count": 0,
-            "chapter_binding": build_chapter_binding(tmp_path, 1),
-        },
+        standard_review(build_chapter_binding(tmp_path, 1)),
     )
 
     record_write_step(tmp_path, chapter=1, step="draft", status="completed", outputs={"chapter_file": chapter_file})
@@ -196,7 +192,7 @@ def test_write_resume_reruns_commit_after_rejected_commit(tmp_path: Path) -> Non
     chapter_file.write_text("正文\n", encoding="utf-8")
     review_path = tmp_path / ".webnovel" / "tmp" / "review_results.json"
     binding = build_chapter_binding(tmp_path, 1)
-    _write_json(review_path, {"blocking_count": 1, "chapter_binding": binding})
+    _write_json(review_path, standard_review(binding, blocking_count=1))
     fulfillment_path = tmp_path / ".webnovel" / "tmp" / "fulfillment_result.json"
     disambiguation_path = tmp_path / ".webnovel" / "tmp" / "disambiguation_result.json"
     extraction_path = tmp_path / ".webnovel" / "tmp" / "extraction_result.json"
@@ -276,7 +272,10 @@ def test_write_resume_does_not_skip_critical_steps_for_unbound_accepted_commit(t
     )
 
 
-def test_write_resume_skips_backup_only_with_current_manuscript_receipt(tmp_path: Path) -> None:
+def test_write_resume_skips_backup_only_with_current_manuscript_receipt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     _make_project(tmp_path)
     chapter_file = tmp_path / "正文" / "第0001章.md"
     chapter_file.write_text("正文\n", encoding="utf-8")
@@ -286,28 +285,10 @@ def test_write_resume_skips_backup_only_with_current_manuscript_receipt(tmp_path
         tmp_path / ".story-system" / "commits" / "chapter_001.commit.json",
         commit_payload,
     )
-    backup_dir = tmp_path / ".webnovel" / "backups"
-    snapshot = backup_dir / "snapshot_ch0001_current"
-    snapshot.mkdir(parents=True)
-    snapshot_chapter = snapshot / commit_payload["chapter_binding"]["path"]
-    snapshot_chapter.parent.mkdir(parents=True, exist_ok=True)
-    snapshot_chapter.write_bytes(chapter_file.read_bytes())
-    snapshot_commit = (
-        snapshot / ".story-system" / "commits" / "chapter_001.commit.json"
-    )
-    snapshot_commit.parent.mkdir(parents=True, exist_ok=True)
-    _write_json(snapshot_commit, commit_payload)
-    _write_json(
-        backup_dir / "ch0001.receipt.json",
-        {
-            "schema_version": "webnovel-backup-receipt/v1",
-            "chapter": 1,
-            "chapter_binding": commit_payload["chapter_binding"],
-            "chapter_commit_path": ".story-system/commits/chapter_001.commit.json",
-            "chapter_commit_hash": commit_hash(commit_payload),
-            "mode": "local",
-            "snapshot": "snapshot_ch0001_current",
-        },
+    monkeypatch.setattr(backup_manager, "is_git_available", lambda: False)
+    assert backup_manager.GitBackupManager(str(tmp_path)).backup(
+        1,
+        require_accepted_binding=True,
     )
     record_write_step(
         tmp_path,
@@ -378,13 +359,17 @@ def test_write_resume_rejects_empty_local_snapshot_even_with_matching_receipt(
     _write_json(
         backup_dir / "ch0001.receipt.json",
         {
-            "schema_version": "webnovel-backup-receipt/v1",
+            "schema_version": "webnovel-backup-receipt/v2",
             "chapter": 1,
             "chapter_binding": commit_payload["chapter_binding"],
             "chapter_commit_path": ".story-system/commits/chapter_001.commit.json",
             "chapter_commit_hash": commit_hash(commit_payload),
             "mode": "local",
             "snapshot": "snapshot_ch0001_empty",
+            "manifest_path": "snapshot.manifest.json",
+            "manifest_sha256": "0" * 64,
+            "signature_algorithm": "hmac-sha256",
+            "signature": "0" * 64,
         },
     )
     record_write_step(
@@ -429,8 +414,7 @@ def test_write_resume_rejects_git_receipt_when_tag_does_not_contain_it(
     subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Test Author"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.email", "author@example.com"], cwd=tmp_path, check=True)
-    # Tag a commit that predates the receipt: the working-tree JSON alone is
-    # not evidence that the immutable backup contains the accepted snapshot.
+    # 先给不含 receipt 的旧提交打标签；仅在工作区补一份 JSON 不能证明标签内有备份。
     (tmp_path / ".webnovel" / "backups" / "ch0001.receipt.json").unlink()
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-m", "pre-receipt"], cwd=tmp_path, check=True, capture_output=True)

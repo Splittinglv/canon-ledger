@@ -7,8 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from chapter_outline_loader import volume_num_for_chapter_from_state
+from chapter_paths import volume_num_for_chapter
 
-from .story_contracts import StoryContractPaths, read_json_if_exists
+from .story_contracts import (
+    StoryContractPaths,
+    read_json_if_exists,
+    verify_setting_canon,
+)
 from .chapter_content_binding import verify_commit_content_binding
 
 
@@ -19,6 +24,7 @@ class RuntimeSourceSnapshot:
     latest_commit: dict[str, Any] | None
     latest_accepted_commit: dict[str, Any] | None
     fallback_sources: list[str] = field(default_factory=list)
+    source_errors: dict[str, str] = field(default_factory=dict)
     primary_write_source: str = "chapter_commit"
 
     def to_dict(self) -> dict[str, Any]:
@@ -28,6 +34,7 @@ class RuntimeSourceSnapshot:
             "latest_commit": self.latest_commit,
             "latest_accepted_commit": self.latest_accepted_commit,
             "fallback_sources": list(self.fallback_sources),
+            "source_errors": dict(self.source_errors),
             "primary_write_source": self.primary_write_source,
         }
 
@@ -81,7 +88,10 @@ def commit_status_view(payload: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _volume_for_chapter(project_root: Path, chapter: int) -> int:
-    return volume_num_for_chapter_from_state(project_root, chapter) or 1
+    return (
+        volume_num_for_chapter_from_state(project_root, chapter)
+        or volume_num_for_chapter(chapter)
+    )
 
 
 def _status_only_commit(payload: dict[str, Any], *, binding_error: str) -> dict[str, Any]:
@@ -100,7 +110,14 @@ def _load_latest_commit(
     chapter: int,
 ) -> dict[str, Any] | None:
     for current in range(chapter, 0, -1):
-        payload = read_json_if_exists(paths.commit_json(current))
+        try:
+            payload = read_json_if_exists(paths.commit_json(current))
+        except (OSError, ValueError):
+            return {
+                "meta": {"chapter": current},
+                "projection_status": {},
+                "trust": {"content_binding": False, "reason": "invalid_commit_json"},
+            }
         if payload:
             status = str((payload.get("meta") or {}).get("status") or "")
             trusted, code = verify_commit_content_binding(
@@ -121,7 +138,10 @@ def _load_latest_accepted_commit(
     chapter: int,
 ) -> dict[str, Any] | None:
     for current in range(chapter, 0, -1):
-        payload = read_json_if_exists(paths.commit_json(current))
+        try:
+            payload = read_json_if_exists(paths.commit_json(current))
+        except (OSError, ValueError):
+            continue
         trusted, _code = verify_commit_content_binding(
             project_root,
             current,
@@ -136,29 +156,58 @@ def _load_latest_accepted_commit(
     return None
 
 
-def load_runtime_sources(project_root: Path, chapter: int) -> RuntimeSourceSnapshot:
+def load_runtime_sources(
+    project_root: Path,
+    chapter: int,
+    history_as_of_chapter: int | None = None,
+) -> RuntimeSourceSnapshot:
     project_root = Path(project_root)
     paths = StoryContractPaths.from_project_root(project_root)
     volume = _volume_for_chapter(project_root, chapter)
 
-    contracts = {
-        "master": read_json_if_exists(paths.master_json) or {},
-        "volume": read_json_if_exists(paths.volume_json(volume)) or {},
-        "chapter": read_json_if_exists(paths.chapter_json(chapter)) or {},
-        "review": read_json_if_exists(paths.review_json(chapter)) or {},
+    contract_paths = {
+        "master": paths.master_json,
+        "volume": paths.volume_json(volume),
+        "chapter": paths.chapter_json(chapter),
+        "review": paths.review_json(chapter),
     }
+    contracts: dict[str, dict[str, Any]] = {}
+    source_errors: dict[str, str] = {}
+    for key, path in contract_paths.items():
+        try:
+            payload = read_json_if_exists(path) or {}
+            if payload and not isinstance(payload, dict):
+                raise ValueError("contract_root_must_be_object")
+            contracts[key] = payload
+        except (OSError, ValueError) as exc:
+            contracts[key] = {}
+            source_errors[key] = exc.__class__.__name__
     latest_commit = _load_latest_commit(project_root, paths, chapter)
-    latest_accepted_commit = _load_latest_accepted_commit(
-        project_root,
-        paths,
-        chapter,
+    accepted_as_of = (
+        int(chapter)
+        if history_as_of_chapter is None
+        else max(0, int(history_as_of_chapter))
+    )
+    latest_accepted_commit = (
+        _load_latest_accepted_commit(project_root, paths, accepted_as_of)
+        if accepted_as_of > 0
+        else None
     )
 
     fallback_sources: list[str] = []
     for key, payload in contracts.items():
         if not payload:
-            fallback_sources.append(f"missing_{key}_contract")
-    if latest_accepted_commit is None:
+            prefix = "invalid" if key in source_errors else "missing"
+            fallback_sources.append(f"{prefix}_{key}_contract")
+    master_payload = contracts.get("master") or {}
+    if master_payload:
+        setting_ok, setting_reason = verify_setting_canon(
+            project_root,
+            master_payload.get("setting_canon"),
+        )
+        if not setting_ok:
+            fallback_sources.append(setting_reason)
+    if accepted_as_of > 0 and latest_accepted_commit is None:
         fallback_sources.append("missing_accepted_commit")
 
     return RuntimeSourceSnapshot(
@@ -167,4 +216,5 @@ def load_runtime_sources(project_root: Path, chapter: int) -> RuntimeSourceSnaps
         latest_commit=latest_commit,
         latest_accepted_commit=latest_accepted_commit,
         fallback_sources=fallback_sources,
+        source_errors=source_errors,
     )

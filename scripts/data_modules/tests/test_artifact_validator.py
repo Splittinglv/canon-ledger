@@ -42,7 +42,7 @@ from data_modules.chapter_content_binding import (  # noqa: E402
 
 
 def _dummy_binding(chapter: int = 1) -> dict:
-    """Return a schema-valid binding for payload-only validator tests."""
+    """为只校验产物结构的用例返回合法正文绑定。"""
     return {
         "schema_version": CHAPTER_BINDING_SCHEMA_VERSION,
         "chapter": chapter,
@@ -56,6 +56,42 @@ def _with_binding(payload: dict, *, chapter: int = 1) -> dict:
     return {**payload, "chapter_binding": _dummy_binding(chapter)}
 
 
+def _review_payload(*, chapter: int = 1, blocking: bool = False) -> dict:
+    issues = []
+    if blocking:
+        issues.append(
+            {
+                "severity": "critical",
+                "category": "logic",
+                "description": "本章因果与既有事实冲突。",
+                "evidence": "已提交事实与本章结果互相矛盾。",
+                "blocking": True,
+            }
+        )
+    dimensions = ["setting", "timeline", "continuity", "character", "logic"]
+    return _with_binding(
+        {
+            "chapter": chapter,
+            "review_mode": "standard",
+            "review_status": "completed",
+            "review_skipped": False,
+            "review_degraded": False,
+            "reviewed_dimensions": dimensions,
+            "skipped_dimensions": [],
+            "dimension_results": [
+                {"dimension": dimension, "conclusion": "已完成事实核对。"}
+                for dimension in dimensions
+            ],
+            "issues": issues,
+            "issues_count": len(issues),
+            "blocking_count": len(issues),
+            "has_blocking": bool(issues),
+            "summary": "事实审查已完成。",
+        },
+        chapter=chapter,
+    )
+
+
 def _commit_envelope(*, chapter: int = 1, projection_status: dict | None = None) -> dict:
     binding = _dummy_binding(chapter)
     return {
@@ -66,7 +102,7 @@ def _commit_envelope(*, chapter: int = 1, projection_status: dict | None = None)
         },
         "chapter_binding": dict(binding),
         "provenance": {"chapter_binding": dict(binding)},
-        "review_result": _with_binding({"blocking_count": 0}, chapter=chapter),
+        "review_result": _review_payload(chapter=chapter),
         "fulfillment_result": _with_binding(
             {
                 "planned_nodes": [],
@@ -110,6 +146,28 @@ def test_artifact_validator_reports_missing_artifact(tmp_path):
     assert report["errors"][0]["type"] == ERROR_MISSING
 
 
+def test_审查产物拒绝文风问题分类(tmp_path):
+    payload = _review_payload()
+    payload["issues"] = [
+        {
+            "severity": "medium",
+            "category": "ai_flavor",
+            "location": "第二段",
+            "description": "这不是可验证的长期一致性问题。",
+            "evidence": "该判断只涉及表达偏好。",
+            "fix_hint": "交由作者或模型自行决定。",
+            "blocking": False,
+        }
+    ]
+    payload["issues_count"] = 1
+    path = _write_json(tmp_path / "review_results.json", payload)
+
+    report = validate_review_result(path)
+
+    assert report["ok"] is False
+    assert report["errors"][0]["type"] == ERROR_SCHEMA
+
+
 def test_artifact_validator_reports_schema_errors_for_wrapped_payloads(tmp_path):
     path = _write_json(
         tmp_path / "fulfillment_result.json",
@@ -126,7 +184,7 @@ def test_artifact_validator_reports_schema_errors_for_wrapped_payloads(tmp_path)
 def test_artifact_validator_reports_policy_blockers(tmp_path):
     review = _write_json(
         tmp_path / "review_results.json",
-        _with_binding({"blocking_count": 1}),
+        _review_payload(blocking=True),
     )
     fulfillment = _write_json(
         tmp_path / "fulfillment_result.json",
@@ -169,7 +227,7 @@ def test_artifact_validator_accepts_valid_extraction(tmp_path):
 def test_validate_commit_artifact_files_merges_reports(tmp_path):
     review = _write_json(
         tmp_path / "review_results.json",
-        _with_binding({"blocking_count": 0}),
+        _review_payload(),
     )
     fulfillment = _write_json(
         tmp_path / "fulfillment_result.json",
