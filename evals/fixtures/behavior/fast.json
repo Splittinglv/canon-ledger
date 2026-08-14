@@ -77,10 +77,11 @@
       "id": "skill_learn_contract",
       "type": "skill_contract",
       "skill": "canon-ledger-learn",
-      "description": "`/canon-ledger-learn` 通过 `project-memory` 命令行写入，不手工编辑 JSON。",
+      "description": "`/canon-ledger-learn` 通过 `style-memory` 命令行写入 `设定集/文风提示词.md`，不手工编辑文件。",
       "required": [
-        "project-memory add-pattern",
-        "不删除旧规则，仅追加",
+        "style-memory add-item",
+        "设定集/文风提示词.md",
+        "不写入 `hard_constraints`",
         "禁止使用 `Write`"
       ]
     },

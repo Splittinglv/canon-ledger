@@ -975,7 +975,7 @@ def test_review_pipeline_rejects_changed_manuscript_before_side_effects(tmp_path
     assert not (project_root / "审查报告" / "第20章.md").exists()
 
 
-def test_project_memory_forwards_with_resolved_project_root(monkeypatch, tmp_path):
+def test_style_memory_forwards_with_resolved_project_root(monkeypatch, tmp_path):
     module = _load_canon_ledger_module()
 
     book_root = (tmp_path / "book").resolve()
@@ -998,12 +998,10 @@ def test_project_memory_forwards_with_resolved_project_root(monkeypatch, tmp_pat
             "canon-ledger",
             "--project-root",
             str(tmp_path),
-            "project-memory",
-            "add-pattern",
-            "--pattern-type",
-            "timeline",
-            "--description",
-            "离开霜河城后，后续时间锚不得早于霜月初三。",
+            "style-memory",
+            "add-item",
+            "--text",
+            "对白更口语化，少用排比。",
         ],
     )
 
@@ -1011,21 +1009,19 @@ def test_project_memory_forwards_with_resolved_project_root(monkeypatch, tmp_pat
         module.main()
 
     assert int(exc.value.code or 0) == 0
-    assert called["script_name"] == "project_memory.py"
+    assert called["script_name"] == "style_memory.py"
     assert called["argv"] == [
         "--project-root",
         str(book_root),
-        "add-pattern",
-        "--pattern-type",
-        "timeline",
-        "--description",
-        "离开霜河城后，后续时间锚不得早于霜月初三。",
+        "add-item",
+        "--text",
+        "对白更口语化，少用排比。",
     ]
 
 
-def test_project_memory_rejects_style_content(tmp_path):
+def test_style_memory_writes_style_prompt_and_dedups(tmp_path):
     _ensure_scripts_on_path()
-    import project_memory as project_memory_module
+    import style_memory as style_memory_module
 
     project_root = (tmp_path / "book").resolve()
     (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
@@ -1033,57 +1029,42 @@ def test_project_memory_rejects_style_content(tmp_path):
         json.dumps({"progress": {"current_chapter": 3}}, ensure_ascii=False),
         encoding="utf-8",
     )
+    description = "对白更口语化，少用排比。"
 
-    with pytest.raises(ValueError, match="不能包含文风"):
-        project_memory_module.add_pattern(
-            project_root,
-            pattern_type="timeline",
-            description="正文使用短句，并让对白更口语化。",
-            category="写作规范",
-            importance="high",
-        )
+    first = style_memory_module.add_style_items(project_root, [description])
+    second = style_memory_module.add_style_items(project_root, [description])
 
-    assert not (project_root / ".canon-ledger" / "project_memory.json").exists()
+    style_path = project_root / "设定集" / "文风提示词.md"
+    text = style_path.read_text(encoding="utf-8")
+    assert first["status"] == "success"
+    assert first["path"] == str(style_path)
+    assert first["added"] == [description]
+    assert second["status"] == "skipped"
+    assert second["skipped_duplicates"] == [description]
+    assert text.count(description) == 1
+    assert "作者提示词" in text
     assert not (project_root / ".canon-ledger" / "memory_scratchpad.json").exists()
 
 
-def test_project_memory_writes_a_consumable_consistency_rule(tmp_path):
+def test_style_memory_does_not_write_hard_constraints(tmp_path):
     _ensure_scripts_on_path()
-    import project_memory as project_memory_module
-
-    project_root = (tmp_path / "book").resolve()
-    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
-    (project_root / ".canon-ledger" / "state.json").write_text(
-        json.dumps({"progress": {"current_chapter": 3}}, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    description = "角色离开霜河城后，后续时间锚必须晚于霜月初三。"
-
-    result = project_memory_module.add_pattern(
-        project_root,
-        pattern_type="timeline",
-        description=description,
-        category="时间线",
-        importance="high",
-    )
-
-    memory_path = project_root / ".canon-ledger" / "memory_scratchpad.json"
-    payload = json.loads(memory_path.read_text(encoding="utf-8"))
-    rules = payload["world_rules"]
-    assert result["status"] == "success"
-    assert result["path"] == str(memory_path)
-    assert len(rules) == 1
-    assert rules[0]["value"] == description
-    assert rules[0]["source_chapter"] == 3
-    assert rules[0]["payload"]["origin"] == "/canon-ledger-learn"
-
+    import style_memory as style_memory_module
     from data_modules.config import DataModulesConfig
     from data_modules.memory.orchestrator import MemoryOrchestrator
 
+    project_root = (tmp_path / "book").resolve()
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
+    description = "叙事用限知视角，句式偏短。"
+
+    result = style_memory_module.add_style_items(project_root, [description])
     pack = MemoryOrchestrator(
         DataModulesConfig.from_project_root(project_root)
-    ).build_memory_pack(4, include_soft=False)
-    assert any(
+    ).build_memory_pack(1, include_soft=False)
+
+    assert result["status"] == "success"
+    assert description not in json.dumps(pack, ensure_ascii=False)
+    assert not any(
         item.get("value") == description
         for item in pack.get("hard_constraints") or []
     )

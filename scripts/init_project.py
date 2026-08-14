@@ -694,8 +694,8 @@ def init_project(
     _write_text_if_missing(project_path / "设定集" / "文风提示词.md", style_prompt.rstrip() + "\n")
 
     # 初始化完成时就把作者明确填写的结构化设定绑定到 MASTER_SETTING。
-    # 文风提示词和未填写模板由同步器排除；后续手改设定而未刷新合同时，
-    # load-context 会因哈希不一致而 fail closed。
+    # 文风提示词不属于事实快照；未填写模板由同步器排除。后续手改设定
+    # 而未刷新合同时，load-context 会因哈希不一致而 fail closed。
     from data_modules.story_contracts import synchronize_setting_canon
 
     synchronize_setting_canon(project_path)

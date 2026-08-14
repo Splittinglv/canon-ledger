@@ -32,17 +32,9 @@ _SETTING_LIST_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)、]\s+)(.+?)\s*$")
 _SETTING_LABELED_RE = re.compile(
     r"^\s*(?:[-*+]\s+|\d+[.)、]\s+)(.{1,120}?)[：:]\s*(.*?)\s*$"
 )
-# 只拦章法处方词。世界内事实里的「节奏 / 氛围 / 反转」由
-# `_SETTING_META_CONTROL_RE` 在「每章必须…」这类控制句里处理，不能当子串误杀。
-_SETTING_CRAFT_RE = re.compile(
-    r"(?:文风|文笔|写作|写法|风格|口吻|语气|笔调|行文|句式|段落|"
-    r"叙事视角|镜头|修辞|韵律|提示词|技巧|套路|桥段|爽点|"
-    r"读者|短句|长句|旁白|核心卖点|镜像对抗)"
-)
-_SETTING_META_CONTROL_RE = re.compile(
-    r"(?:每章|每一章|章首|章末|每段|每句|开场|收尾|结尾).{0,24}"
-    r"(?:必须|需要|应该|应当|务必|采用|出现|加入|设置|安排|制造|反转)"
-)
+# 文风只来自固定文件，不靠关键词猜测。其它设定集 Markdown 的结构化
+# 内容一律按事实处理，即使字段或取值里出现「风格 / 写作 / 镜头」等词。
+_STYLE_PROMPT_SOURCE = "设定集/文风提示词.md"
 _SETTING_HARD_RE = re.compile(
     r"(?:硬约束|硬限制|不可违背|禁止事项|禁忌|限制|规则|公理|底线|"
     r"代价|冷却|边界|条件)"
@@ -112,9 +104,8 @@ class StoryContractPaths:
         return self.events_dir / f"chapter_{chapter:03d}.events.json"
 
 
-def _setting_is_craft(*parts: Any) -> bool:
-    text = " ".join(str(part or "") for part in parts)
-    return bool(_SETTING_CRAFT_RE.search(text) or _SETTING_META_CONTROL_RE.search(text))
+def _is_style_prompt_source(relative: str) -> bool:
+    return str(relative or "").replace("\\", "/") == _STYLE_PROMPT_SOURCE
 
 
 def _setting_is_placeholder(value: str) -> bool:
@@ -135,12 +126,12 @@ def _setting_source_files(project_root: Path) -> List[Path]:
         return []
     paths: List[Path] = []
     for path in sorted(settings_root.rglob("*.md")):
-        if path.is_symlink():
-            raise ValueError(f"设定集同步拒绝符号链接：{path.relative_to(root).as_posix()}")
-        if not path.is_file():
-            continue
         relative = path.relative_to(root).as_posix()
-        if _setting_is_craft(relative, path.stem):
+        if _is_style_prompt_source(relative):
+            continue
+        if path.is_symlink():
+            raise ValueError(f"设定集同步拒绝符号链接：{relative}")
+        if not path.is_file():
             continue
         paths.append(path)
     if len(paths) > _SETTING_SOURCE_LIMIT:
@@ -150,7 +141,7 @@ def _setting_source_files(project_root: Path) -> List[Path]:
 
 def _clean_setting_value(raw: Any, *, source: str, line: int) -> str:
     text = re.sub(r"\s+", " ", str(raw or "")).strip()
-    if _setting_is_placeholder(text) or _setting_is_craft(text):
+    if _setting_is_placeholder(text):
         return ""
     if len(text) > _SETTING_VALUE_LIMIT:
         raise ValueError(f"设定事实过长，无法安全同步：{source}:{line}")
@@ -170,8 +161,6 @@ def _setting_fact(
     field: str,
     value: str,
 ) -> Dict[str, Any] | None:
-    if _setting_is_craft(source, section, field, value):
-        return None
     cleaned_value = _clean_setting_value(value, source=source, line=line)
     if not cleaned_value:
         return None
@@ -336,7 +325,7 @@ def _extract_setting_facts(path: Path, project_root: Path) -> List[Dict[str, Any
             if fact is not None:
                 facts.append(fact)
             continue
-        if _SETTING_REFERENCE_SECTION_RE.search(section) or _setting_is_craft(section, stripped):
+        if _SETTING_REFERENCE_SECTION_RE.search(section):
             continue
         if _setting_is_placeholder(stripped):
             continue
@@ -351,7 +340,7 @@ def _extract_setting_facts(path: Path, project_root: Path) -> List[Dict[str, Any
 
 
 def build_setting_canon(project_root: Path) -> Dict[str, Any]:
-    """从设定集构建闭合、可校验且不含创作技法的事实快照。"""
+    """从设定集构建闭合、可校验的事实快照；不含文风提示词文件。"""
     root = Path(project_root).expanduser().resolve()
     sources: List[Dict[str, Any]] = []
     facts: List[Dict[str, Any]] = []
@@ -403,7 +392,7 @@ def sanitize_setting_canon(value: Any) -> Dict[str, Any]:
             or pure.is_absolute()
             or ".." in pure.parts
             or pure.suffix.lower() != ".md"
-            or _setting_is_craft(path)
+            or _is_style_prompt_source(path)
             or not _SETTING_HASH_RE.fullmatch(digest)
             or type(size) is not int
             or size < 0
@@ -447,7 +436,6 @@ def sanitize_setting_canon(value: Any) -> Dict[str, Any]:
             or not section
             or not cleaned_value
             or cleaned_value != raw_value
-            or _setting_is_craft(source, section, field, cleaned_value)
         ):
             return {}
         seen_ids.add(fact_id)

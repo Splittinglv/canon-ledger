@@ -15,7 +15,7 @@ from data_modules.config import DataModulesConfig
 from data_modules.memory_contract_adapter import MemoryContractAdapter
 from data_modules.story_contracts import synchronize_setting_canon
 from init_project import init_project
-from project_memory import add_pattern
+from style_memory import add_style_items
 
 
 _DIMENSIONS = ("setting", "timeline", "continuity", "character", "logic")
@@ -300,7 +300,7 @@ def test_default_context_replays_state_timeline_story_fact_and_question_loop(tmp
     assert pack.sections["runtime_status"]["history_as_of_chapter"] == 1
 
 
-def test_learned_consistency_rule_is_available_to_the_next_chapter(tmp_path):
+def test_learned_style_is_not_a_hard_constraint_or_scratchpad_fact(tmp_path):
     (tmp_path / ".canon-ledger").mkdir(parents=True)
     (tmp_path / ".canon-ledger" / "state.json").write_text(
         json.dumps({"progress": {"current_chapter": 1}}, ensure_ascii=False),
@@ -308,23 +308,23 @@ def test_learned_consistency_rule_is_available_to_the_next_chapter(tmp_path):
     )
     _write_contracts(tmp_path, 1, 2)
     _accepted_commit(tmp_path, 1, {})
-    description = "离开霜河城后，后续时间锚必须晚于霜月初三。"
-    add_pattern(
-        tmp_path,
-        pattern_type="timeline",
-        description=description,
-        source_chapter=1,
-    )
+    description = "对白更口语化，少用排比。"
+    result = add_style_items(tmp_path, [description])
 
     pack = MemoryContractAdapter(
         DataModulesConfig.from_project_root(tmp_path)
     ).load_context(2, budget_tokens=20_000)
+    serialized = json.dumps(pack.to_dict(), ensure_ascii=False)
 
+    assert result["status"] == "success"
+    assert description in (tmp_path / "设定集" / "文风提示词.md").read_text(encoding="utf-8")
     assert pack.completeness["status"] == "complete"
-    assert any(
+    assert description not in serialized
+    assert not any(
         item.get("value") == description
-        for item in pack.sections["hard_constraints"]
+        for item in pack.sections.get("hard_constraints") or []
     )
+    assert not (tmp_path / ".canon-ledger" / "memory_scratchpad.json").exists()
 
 
 def test_historical_context_and_supplementary_queries_never_read_future_commit(tmp_path):

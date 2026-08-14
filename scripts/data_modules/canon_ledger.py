@@ -87,7 +87,7 @@ PASSTHROUGH_TOOLS = {
     "init",
     "story-system",
     "memory-contract",
-    "project-memory",
+    "style-memory",
 }
 
 
@@ -605,8 +605,8 @@ def main() -> None:
     p_memory_contract = sub.add_parser("memory-contract", help="转发到 memory_cli.py")
     p_memory_contract.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_project_memory = sub.add_parser("project-memory", help="转发到 project_memory.py")
-    p_project_memory.add_argument("args", nargs=argparse.REMAINDER)
+    p_style_memory = sub.add_parser("style-memory", help="转发到 style_memory.py")
+    p_style_memory.add_argument("args", nargs=argparse.REMAINDER)
 
     p_review_pipeline = sub.add_parser("review-pipeline", help="转发到 review_pipeline.py")
     p_review_pipeline.add_argument("--chapter", type=int, required=True, help="目标章节号")
@@ -709,8 +709,8 @@ def main() -> None:
         raise SystemExit(_run_script("chapter_commit.py", return_args))
     if tool == "memory-contract":
         raise SystemExit(_run_script("memory_cli.py", [*forward_args, *rest]))
-    if tool == "project-memory":
-        raise SystemExit(_run_script("project_memory.py", [*forward_args, *rest]))
+    if tool == "style-memory":
+        raise SystemExit(_run_script("style_memory.py", [*forward_args, *rest]))
     if tool == "review-pipeline":
         return_args = [
             *forward_args,

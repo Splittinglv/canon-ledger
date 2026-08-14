@@ -30,7 +30,6 @@ from .commit_lineage import (
 from .config import DataModulesConfig
 from .event_log_store import EventLogStore
 from .event_projection_router import EventProjectionRouter
-from .memory.schema import ScratchpadData
 from .override_ledger_service import (
     AmendProposalTrigger,
     ensure_override_ledger_columns,
@@ -418,38 +417,6 @@ def _copy_bound_manuscripts(root: Path, stage_root: Path, commits: list[dict[str
         shutil.copy2(source, target)
 
 
-def _seed_non_projection_memory(
-    root: Path,
-    stage_root: Path,
-) -> None:
-    """把不属于章节投影的作者显式一致性规则带入重建区。"""
-    source_path = root / ".canon-ledger" / "memory_scratchpad.json"
-    raw = read_json_if_exists(source_path)
-    if raw is None:
-        return
-    if not isinstance(raw, dict):
-        raise ProjectionRebuildError("scratchpad_not_object", str(source_path))
-
-    source = ScratchpadData.from_dict(raw)
-    seed = ScratchpadData.empty()
-    # `/canon-ledger-learn` 是作者显式写入的一致性规则，不是章节投影；
-    # 全量重放不能把它当作可丢缓存删除。
-    for item in source.world_rules:
-        payload = item.payload if isinstance(item.payload, dict) else {}
-        if (
-            item.status == "active"
-            and item.id.startswith("author-consistency-")
-            and payload.get("origin") == "/canon-ledger-learn"
-        ):
-            seed.world_rules.append(item)
-
-    if seed.count_items():
-        write_json(
-            stage_root / ".canon-ledger" / "memory_scratchpad.json",
-            seed.to_dict(),
-        )
-
-
 def _prepare_stage(root: Path, commits: list[dict[str, Any]]) -> Path:
     work_parent = root / ".canon-ledger"
     work_parent.mkdir(parents=True, exist_ok=True)
@@ -458,7 +425,6 @@ def _prepare_stage(root: Path, commits: list[dict[str, Any]]) -> Path:
     (stage_root / ".story-system" / "events").mkdir(parents=True, exist_ok=True)
     (stage_root / ".story-system" / "commits").mkdir(parents=True, exist_ok=True)
     _copy_bound_manuscripts(root, stage_root, commits)
-    _seed_non_projection_memory(root, stage_root)
     write_json(stage_root / ".canon-ledger" / "state.json", _state_baseline(root, commits))
     _sqlite_backup(root / ".canon-ledger" / "index.db", stage_root / ".canon-ledger" / "index.db")
     _clear_projection_tables(stage_root)

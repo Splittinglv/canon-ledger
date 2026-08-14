@@ -20,9 +20,6 @@ _ensure_scripts_on_path()
 from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
 from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
 from data_modules.projections import replay_projections  # noqa: E402
-from data_modules.config import DataModulesConfig  # noqa: E402
-from data_modules.memory.store import ScratchpadManager  # noqa: E402
-from project_memory import add_pattern  # noqa: E402
 
 
 _DIMENSIONS = ("setting", "timeline", "continuity", "character", "logic")
@@ -433,31 +430,6 @@ def test_rewriting_history_marks_later_chapters_needs_revalidation(tmp_path):
     assert values == ["钥匙"] or (len(values) == 1 and "钥匙" in values[0])
     assert all("无" not in value and "短刀" not in value for value in values)
     assert indexed_chapters == [1]
-
-
-def test_full_replay_keeps_author_confirmed_consistency_rule(tmp_path):
-    payload = _accepted_commit(
-        tmp_path,
-        chapter=1,
-        body="沈砚在霜月初三离开北城。",
-        extraction={"summary_text": "沈砚离开北城。"},
-    )
-    _commit_and_project(tmp_path, payload)
-    rule = "离开北城后的时间锚必须晚于霜月初三。"
-    add_pattern(
-        tmp_path,
-        pattern_type="timeline",
-        description=rule,
-        source_chapter=1,
-    )
-
-    report = replay_projections(tmp_path, start_chapter=1, end_chapter=1)
-
-    assert report["ok"] is True
-    rows = ScratchpadManager(
-        DataModulesConfig.from_project_root(tmp_path)
-    ).query(category="world_rule", status="active")
-    assert any(item.value == rule for item in rows)
 
 
 def test_export_asof_for_chapter_two_excludes_chapter_two_facts(tmp_path):

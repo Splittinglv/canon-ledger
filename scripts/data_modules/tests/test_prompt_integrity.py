@@ -54,7 +54,7 @@ REGISTERED_CLI_SUBCOMMANDS = {
     "run-ledger", "run-log", "use",
     "index", "state", "rag", "style", "entity", "context", "memory",
     "status", "update-state", "backup", "archive",
-    "init", "extract-context", "memory-contract", "project-memory", "review-pipeline",
+    "init", "extract-context", "memory-contract", "style-memory", "review-pipeline",
     "placeholder-scan", "master-outline-sync",
     "story-system", "chapter-commit", "story-events", "knowledge",
     "subagent-models",
@@ -1085,3 +1085,16 @@ def test_write_and_review_skills_pass_asof_snapshot_and_turn_requirements():
     assert "turn_requirements_file" in context_text
     assert "文风优先级" in context_text
     assert "本轮用户要求 > 全书文风提示词 > 模型默认" in context_text
+
+
+def test_canon_ledger_learn_skill_writes_style_prompt_not_facts():
+    text = _read_text(SKILLS_DIR / "canon-ledger-learn" / "SKILL.md")
+    assert "style-memory add-item" in text
+    assert "设定集/文风提示词.md" in text
+    assert "不写入 `hard_constraints`" in text
+    assert "memory_scratchpad.json" in text
+    assert "本轮用户要求 > `设定集/文风提示词.md` > 模型默认写法" in text
+    assert "project-memory" not in text
+    assert "add-pattern" not in text
+    assert "author-consistency" not in text
+    assert "pattern_type" not in text

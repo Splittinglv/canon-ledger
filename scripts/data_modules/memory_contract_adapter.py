@@ -242,30 +242,17 @@ class MemoryContractAdapter:
                         "reason": "unsafe_hard_constraint_without_ids",
                     }
 
-        # 章节提交是章节事实源；暂存区只补充初始化事实和作者显式学习的约束。
-        def _is_author_consistency_rule(row: Dict[str, Any]) -> bool:
-            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
-            return bool(
-                row.get("category") == "world_rule"
-                and str(row.get("id") or "").startswith("author-consistency-")
-                and payload.get("origin") == "/canon-ledger-learn"
-            )
-
+        # 章节提交是章节事实源；暂存区只补充初始化事实。
         setup_hard = [
             row
             for row in scratchpad_hard
             if int((row or {}).get("source_chapter") or 0) == 0
-            or _is_author_consistency_rule(row)
         ]
         if scratchpad_hard:
             trusted_chapters = set(canonical_history.valid_chapters)
             for row in scratchpad_hard:
                 source_chapter = int((row or {}).get("source_chapter") or 0)
-                if (
-                    source_chapter > 0
-                    and source_chapter not in trusted_chapters
-                    and not _is_author_consistency_rule(row)
-                ):
+                if source_chapter > 0 and source_chapter not in trusted_chapters:
                     omitted_hard_ids.append(str((row or {}).get("id") or "unbound_fact"))
 
         hard_constraints: List[Dict[str, Any]] = []

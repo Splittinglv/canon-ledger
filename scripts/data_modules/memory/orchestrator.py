@@ -330,8 +330,6 @@ class MemoryOrchestrator:
             scope = sanitize_fact_atom(raw_payload.get("scope"), max_chars=80)
             if scope:
                 payload["scope"] = scope
-            if str(raw_payload.get("origin") or "") == "/canon-ledger-learn":
-                payload["origin"] = "/canon-ledger-learn"
         elif item.category in {"open_loop", "reader_promise"}:
             lifecycle_id = sanitize_fact_atom(
                 raw_payload.get("lifecycle_id") or item.id,

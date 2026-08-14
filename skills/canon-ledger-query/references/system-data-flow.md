@@ -63,8 +63,8 @@ purpose: 项目初始化和状态查询时加载，理解 CanonLedger 当前数�
 
 - 写作上下文以章合同、初始化合同和已绑定提交为准。
 - `state.json`、`index.db`、`memory_scratchpad.json`、`vectors.db` 与摘要不得反向覆盖提交事实。
-- 自由文本摘要与项目记忆默认不作为硬约束注入。
-- `/canon-ledger-learn` 写入的作者显式一致性规则可随投影重建保留。
+- 自由文本摘要默认不作为硬约束注入。
+- `/canon-ledger-learn` 只写入 `设定集/文风提示词.md`，不进入事实快照、硬约束或 scratchpad。
 - 章提交替换、投影缺失或清空后，按章节顺序重放 accepted commits 即可恢复读模型。
 
 ## 查询速查

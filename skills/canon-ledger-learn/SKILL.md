@@ -1,6 +1,6 @@
 ---
 name: canon-ledger-learn
-description: 把当前书里好用的写法沉淀进项目长期记忆。用户说记住这个写法、沉淀经验或 /canon-ledger-learn 时使用。
+description: 把用户明确要求记住的文风、口吻、句式或写作偏好写入本书 设定集/文风提示词.md。用户说记住这个文风、沉淀写法或 /canon-ledger-learn 时使用。
 ---
 
 # /canon-ledger-learn
@@ -98,37 +98,38 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_le
 
 ## 目标
 
-提取可复用的跨章事实处理方式（伏笔回收、时间线衔接、设定执行、人物一致性），通过统一命令写成 `.canon-ledger/memory_scratchpad.json` 中可被默认上下文实际读取的结构化规则。口吻、句式、文笔偏好请写进 `设定集/文风提示词.md`，不要当作项目记忆。
+只学习本书的长期文风和写作偏好。用户明确要求记住的口吻、句式、叙事方式或文笔习惯，整理成简洁条目后写入 `设定集/文风提示词.md`。
+
+优先级：本轮用户要求 > `设定集/文风提示词.md` > 模型默认写法。
 
 ## 执行流程
 
-1. 读取 `"$PROJECT_ROOT/.canon-ledger/state.json"` 的 `progress.current_chapter` 作为当前章节号；缺失时由统一命令按全局规则处理。
-2. 解析用户输入（`/canon-ledger-learn` 后的经验文本；为空则取本次对话中用户明确认可的事实处理方式），归类 `pattern_type`（仅允许 `foreshadow` / `timeline` / `setting` / `character`）。无法归类就停止并请用户明确，不得塞进 `other`。对话、口吻、节奏、桥段和文笔内容改写入文风提示词，不进长期一致性记忆。
-3. 调用 `project-memory add-pattern` 写入，不得手写或拼接 JSON：
+1. 读取用户在 `/canon-ledger-learn` 后给出的文风要求；若命令参数为空，则取本次对话中用户明确要求记住的文风、口吻、句式、叙事方式或写作偏好。没有明确文风要求就停止并询问，不要把剧情、设定、伏笔或时间线写成文风。
+2. 保留用户原意，整理成简洁条目；一条偏好对应一条 `--text`。不要用关键词表过滤或改写用户原话。
+3. 调用 `style-memory add-item` 写入，不得手写或拼接 `设定集/文风提示词.md`：
 
 ```bash
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" project-memory add-pattern \
-  --pattern-type "{pattern_type}" \
-  --description "{用户输入或提炼后的完整描述}" \
-  --category "{分类，可空}" \
-  --importance "{high|medium|low}"
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" style-memory add-item \
+  --text "{第一条文风偏好}" \
+  --text "{第二条文风偏好}"
 ```
 
 ## 约束
 
-- 不删除旧规则，仅追加；同一 `pattern_type` + `description` 会稳定去重。
-- 命令会拒绝文风、文笔、句式、桥段和模型控制文本；不得为了通过校验改写用户原意。
-- 禁止使用 `Write` 或手工编辑 `.canon-ledger/memory_scratchpad.json`。
+- 只写入 `设定集/文风提示词.md` 的「作者提示词」标题下；命令会保留文件中其他人工内容，并对完全相同的条目去重。
+- 不写入 `hard_constraints`，不写入 `.canon-ledger/memory_scratchpad.json`。
+- 禁止使用 `Write` 或手工编辑文风提示词与记忆 JSON。
+- 设定、伏笔、时间线和人物事实请改设定集或等章末提交提炼，不要走本命令。
 
 ## 成功标准
 
-- `memory_scratchpad.json` 中存在对应的 active `world_rule`，下一章 `memory-contract load-context` 能读到它。
-- 输出包含 `status: success` 和完整 `learned` 对象；重复规则返回 `status: skipped`。
+- `设定集/文风提示词.md` 的「作者提示词」下出现对应条目；重复条目返回 `status: skipped`。
+- 输出包含 `status: success` 或 `status: skipped`，以及 `added` / `skipped_duplicates`。
+- 本轮写作仍以当前对话里的用户要求为先，再读全书文风提示词。
 
 ## 失败恢复
 
 | 故障 | 恢复方式 |
 |------|---------|
-| 旧 `project_memory.json` 存在 | 不再把其中自由文本注入写作上下文；需要的事实由用户重新确认后写入结构化规则 |
-| 长期记忆 JSON 损坏 | fail closed，不写入并建议运行 `/canon-ledger-doctor` |
-| 输入属于文风或无法归类 | 停止；文风写入 `设定集/文风提示词.md`，事实请用户明确类型 |
+| 文风提示词无法写入 | fail closed，不改文件并建议检查 `设定集/` 权限或运行 `/canon-ledger-doctor` |
+| 输入是设定/剧情而不是文风 | 停止；事实写入设定集，文风才使用本命令 |

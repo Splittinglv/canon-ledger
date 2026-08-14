@@ -60,7 +60,7 @@
 | Skill | 说明 |
 |-------|------|
 | canon-ledger-dashboard | 只读面板启动流程，不加载独立 reference；核心校验接口是 `/api/story-runtime/health` 与 `/api/preflight` |
-| canon-ledger-learn | 只读 state 后追加 `.canon-ledger/project_memory.json`，不加载独立 reference 或 CSV |
+| canon-ledger-learn | 只读 state 后追加 `设定集/文风提示词.md`，不加载独立 reference 或 CSV |
 
 ## 当前非直接调用项
 

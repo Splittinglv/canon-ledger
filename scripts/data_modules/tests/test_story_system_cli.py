@@ -275,9 +275,9 @@ def test_story_system_persist_preserves_complete_outline_directive(
     assert "北境战争节奏由月相决定。" in setting_values
     assert "常年笼罩死寂氛围。" in setting_values
     assert "契约反转会反噬立约者。" in setting_values
-    assert "每章必须展示一次潮汐变化。" not in setting_values
-    assert "每章结尾安排一次反转。" not in setting_values
-    assert "用冷峻短句制造悬念。" not in setting_values
+    assert "每章必须展示一次潮汐变化。" in setting_values
+    assert "每章结尾安排一次反转。" in setting_values
+    assert "用冷峻短句制造悬念。" in setting_values
     assert "冷峻短句，减少修饰。" not in setting_values
     volume = json.loads(
         (project_root / ".story-system" / "volumes" / "volume_001.json").read_text(
