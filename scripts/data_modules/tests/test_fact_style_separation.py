@@ -100,3 +100,26 @@ def test_python_ast_has_no_author_consistency_or_project_memory_identifiers():
             relative = path.relative_to(PLUGIN_ROOT).as_posix()
             found.append(f"{relative}: {', '.join(overlap)}")
     assert found == []
+
+
+SETTING_CRAFT_FIELDS = (
+    "读者第一印象",
+    "核心卖点",
+    "战斗节奏特点",
+    "读者可感知",
+    "POV 分配",
+    "防止抢戏",
+)
+
+
+def test_setting_templates_do_not_prompt_writing_craft_fields():
+    root = PLUGIN_ROOT / "templates" / "output"
+    hits: list[str] = []
+    for path in sorted(root.glob("设定集-*.md")):
+        if path.name == "设定集-文风提示词.md":
+            continue
+        text = path.read_text(encoding="utf-8")
+        for marker in SETTING_CRAFT_FIELDS:
+            if marker in text:
+                hits.append(f"{path.name}: {marker}")
+    assert hits == []

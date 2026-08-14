@@ -615,6 +615,8 @@ def test_context_agent_consumes_all_hard_constraints_before_budgeted_evidence():
     assert "文风优先级" in text
     assert "本轮用户要求" in text
     assert "设定集/文风提示词.md" in text
+    assert "style-memory show" in text
+    assert "符号链接" in text
     assert "不要降级到会混入" in text
 
 
@@ -1090,10 +1092,14 @@ def test_write_and_review_skills_pass_asof_snapshot_and_turn_requirements():
 def test_canon_ledger_learn_skill_writes_style_prompt_not_facts():
     text = _read_text(SKILLS_DIR / "canon-ledger-learn" / "SKILL.md")
     assert "style-memory add-item" in text
+    assert "--input-file" in text
+    assert "style-learn.json" in text
+    assert "用户原文不得放进命令" in text
     assert "设定集/文风提示词.md" in text
     assert "不写入 `hard_constraints`" in text
     assert "memory_scratchpad.json" in text
     assert "本轮用户要求 > `设定集/文风提示词.md` > 模型默认写法" in text
+    assert "--text" not in text
     assert "project-memory" not in text
     assert "add-pattern" not in text
     assert "author-consistency" not in text

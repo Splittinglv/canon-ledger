@@ -1000,8 +1000,8 @@ def test_style_memory_forwards_with_resolved_project_root(monkeypatch, tmp_path)
             str(tmp_path),
             "style-memory",
             "add-item",
-            "--text",
-            "对白更口语化，少用排比。",
+            "--input-file",
+            ".canon-ledger/tmp/style-learn.json",
         ],
     )
 
@@ -1014,8 +1014,8 @@ def test_style_memory_forwards_with_resolved_project_root(monkeypatch, tmp_path)
         "--project-root",
         str(book_root),
         "add-item",
-        "--text",
-        "对白更口语化，少用排比。",
+        "--input-file",
+        ".canon-ledger/tmp/style-learn.json",
     ]
 
 

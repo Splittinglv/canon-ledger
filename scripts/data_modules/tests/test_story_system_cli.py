@@ -166,12 +166,7 @@ def test_story_system_persist_preserves_complete_outline_directive(
         "- 本书题材是仙侠修真。\n"
         "- 潮汐：北境战争节奏由月相决定。\n"
         "- 禁地：常年笼罩死寂氛围。\n"
-        "- 血契：契约反转会反噬立约者。\n\n"
-        "## 反馈节奏\n"
-        "- 关键反馈节点：每章必须展示一次潮汐变化。\n\n"
-        "## 镜像对抗\n"
-        "- 反派道路：每章结尾安排一次反转。\n"
-        "- 核心卖点：用冷峻短句制造悬念。\n"
+        "- 血契：契约反转会反噬立约者。\n"
     )
     (settings_dir / "世界观.md").write_text(worldview_text, encoding="utf-8")
     (settings_dir / "文风提示词.md").write_text(
@@ -275,9 +270,6 @@ def test_story_system_persist_preserves_complete_outline_directive(
     assert "北境战争节奏由月相决定。" in setting_values
     assert "常年笼罩死寂氛围。" in setting_values
     assert "契约反转会反噬立约者。" in setting_values
-    assert "每章必须展示一次潮汐变化。" in setting_values
-    assert "每章结尾安排一次反转。" in setting_values
-    assert "用冷峻短句制造悬念。" in setting_values
     assert "冷峻短句，减少修饰。" not in setting_values
     volume = json.loads(
         (project_root / ".story-system" / "volumes" / "volume_001.json").read_text(

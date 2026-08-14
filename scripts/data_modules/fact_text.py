@@ -223,6 +223,20 @@ def _is_jailbreak(text: str) -> bool:
     return any(pattern.search(text) for pattern in _JAILBREAK_PATTERNS)
 
 
+def contains_jailbreak(value: Any) -> bool:
+    """True when any sentence looks like a prompt-injection, without rewriting text."""
+    text = _strip_controls(value)
+    if not text:
+        return False
+    if _is_jailbreak(text):
+        return True
+    for fragment in re.split(r"(?:\r?\n)+|(?<=[。！？!?；;])", text):
+        piece = fragment.strip()
+        if piece and _is_jailbreak(piece):
+            return True
+    return False
+
+
 def normalize_author_text(value: Any, *, max_chars: int = 1200) -> str:
     """Keep author-owned wording. No style vocabulary, no jailbreak filter.
 

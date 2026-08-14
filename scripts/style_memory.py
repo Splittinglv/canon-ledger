@@ -13,12 +13,12 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
 from runtime_compat import enable_windows_utf8_stdio
-from data_modules.fact_text import normalize_author_text, sanitize_fact_text
+from data_modules.fact_text import contains_jailbreak, normalize_author_text
 
 try:
-    from security_utils import _replace_with_retry
+    from security_utils import _replace_with_retry, resolve_inside_project
 except ImportError:  # pragma: no cover
-    from scripts.security_utils import _replace_with_retry
+    from scripts.security_utils import _replace_with_retry, resolve_inside_project
 
 
 STYLE_PROMPT_RELATIVE = Path("设定集") / "文风提示词.md"
@@ -29,6 +29,7 @@ PLACEHOLDER_RE = re.compile(r"^（在此填写")
 _ITEM_LIMIT = 200
 _ITEM_MAX_CHARS = 500
 _FILE_SIZE_LIMIT = 2 * 1024 * 1024
+_INPUT_SIZE_LIMIT = 64 * 1024
 _DEFAULT_TEMPLATE = """# 文风提示词
 
 > 本文件由作者手改，插件**不会**用网文腔、Anti-AI 词库或风格适配覆盖它。
@@ -37,6 +38,7 @@ _DEFAULT_TEMPLATE = """# 文风提示词
 
 <!--
 可以写：叙事视角、句长偏好、对话习惯、禁忌修辞、想贴近的作品、是否文言/白话。
+多主角时也可写 POV 分配、轮换和防止抢戏。
 可以留空：留空则按当前模型默认文风写。
 不要在这里写剧情、设定、伏笔——那些走大纲和设定集。
 -->
@@ -50,8 +52,7 @@ _DEFAULT_TEMPLATE = """# 文风提示词
 def _style_prompt_path(project_root: Path) -> Path:
     root = project_root.expanduser().resolve()
     target = root / STYLE_PROMPT_RELATIVE
-    if target.is_symlink():
-        raise ValueError(f"拒绝写入符号链接：{STYLE_PROMPT_RELATIVE.as_posix()}")
+    resolve_inside_project(root, target, reject_leaf_symlink=True)
     return target
 
 
@@ -97,6 +98,29 @@ def _default_template() -> str:
     return _DEFAULT_TEMPLATE if _DEFAULT_TEMPLATE.endswith("\n") else _DEFAULT_TEMPLATE + "\n"
 
 
+class _SizeLimitExceeded(ValueError):
+    pass
+
+
+def _read_path_bytes_limited(path: Path, limit: int) -> bytes:
+    if path.stat().st_size > limit:
+        raise _SizeLimitExceeded
+    with path.open("rb") as handle:
+        data = handle.read(limit + 1)
+    if len(data) > limit:
+        raise _SizeLimitExceeded
+    return data
+
+
+def _read_stdin_bytes_limited(limit: int) -> bytes:
+    stream = getattr(sys.stdin, "buffer", sys.stdin)
+    raw = stream.read(limit + 1)
+    data = raw.encode("utf-8") if isinstance(raw, str) else bytes(raw)
+    if len(data) > limit:
+        raise _SizeLimitExceeded
+    return data
+
+
 def _normalize_item(raw: Any) -> str:
     text = " ".join(str(raw or "").split())
     if not text:
@@ -106,7 +130,7 @@ def _normalize_item(raw: Any) -> str:
     normalized = normalize_author_text(text, max_chars=_ITEM_MAX_CHARS)
     if not normalized:
         raise ValueError("文风条目不能为空")
-    if sanitize_fact_text(normalized, max_chars=_ITEM_MAX_CHARS) != normalized:
+    if contains_jailbreak(normalized):
         raise ValueError("文风条目含有试图覆盖写作合同或系统提示的指令，已拒绝写入。")
     return normalized
 
@@ -146,9 +170,12 @@ def _read_style_prompt(path: Path) -> str:
         return _default_template()
     if not path.is_file():
         raise ValueError(f"文风提示词不是普通文件：{STYLE_PROMPT_RELATIVE.as_posix()}")
-    raw = path.read_bytes()
-    if len(raw) > _FILE_SIZE_LIMIT:
-        raise ValueError(f"文风提示词超过上限：最多 {_FILE_SIZE_LIMIT} 字节")
+    try:
+        raw = _read_path_bytes_limited(path, _FILE_SIZE_LIMIT)
+    except _SizeLimitExceeded as exc:
+        raise ValueError(f"文风提示词超过上限：最多 {_FILE_SIZE_LIMIT} 字节") from exc
+    except OSError as exc:
+        raise ValueError("无法读取文风提示词") from exc
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -231,6 +258,7 @@ def add_style_items(project_root: Path, items: Iterable[Any]) -> Dict[str, Any]:
             rewritten.append("")
         rewritten.extend(remainder)
     text = "\n".join(rewritten).rstrip() + "\n"
+    resolve_inside_project(project_root, path, reject_leaf_symlink=True)
     _atomic_write_text(path, text)
     return {
         "status": "success",
@@ -241,24 +269,121 @@ def add_style_items(project_root: Path, items: Iterable[Any]) -> Dict[str, Any]:
     }
 
 
+def _extract_author_prompt(text: str) -> str:
+    lines = str(text or "").splitlines()
+    span = _author_span(lines)
+    if span is None:
+        return ""
+    start, end, _level = span
+    body = "\n".join(lines[start + 1 : end])
+    body = re.sub(r"<!--.*?(?:-->|$)", "", body, flags=re.DOTALL)
+    kept = [
+        line
+        for line in body.splitlines()
+        if not PLACEHOLDER_RE.match(line.strip())
+    ]
+    return "\n".join(kept).strip()
+
+
+def show_style_prompt(project_root: Path) -> Dict[str, Any]:
+    """Return only the author prompt section when its path stays inside the project."""
+    root = Path(project_root).expanduser().resolve()
+    target = root / STYLE_PROMPT_RELATIVE
+    try:
+        resolve_inside_project(root, target, reject_leaf_symlink=True)
+    except ValueError:
+        return {"status": "missing", "reason": "unsafe_path", "text": ""}
+    if target.is_symlink() or not target.is_file():
+        return {"status": "missing", "reason": "not_found", "text": ""}
+    try:
+        raw = _read_path_bytes_limited(target, _FILE_SIZE_LIMIT)
+        text = raw.decode("utf-8")
+    except _SizeLimitExceeded:
+        return {"status": "missing", "reason": "too_large", "text": ""}
+    except (OSError, UnicodeDecodeError):
+        return {"status": "missing", "reason": "unreadable", "text": ""}
+    return {
+        "status": "ok",
+        "path": str(target),
+        "text": _extract_author_prompt(text),
+    }
+
+
+def _parse_items_payload(raw: str) -> list[Any]:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("文风输入必须是 JSON 对象 {\"items\": [...]} 或字符串数组") from exc
+    if isinstance(payload, dict):
+        items = payload.get("items")
+        extra = set(payload) - {"items"}
+        if extra:
+            raise ValueError("文风输入 JSON 只能包含 items 字段")
+        if not isinstance(items, list):
+            raise ValueError("文风输入 items 必须是字符串数组")
+    elif isinstance(payload, list):
+        items = payload
+    else:
+        raise ValueError("文风输入必须是 JSON 对象 {\"items\": [...]} 或字符串数组")
+    if not all(isinstance(item, str) for item in items):
+        raise ValueError("文风条目必须是字符串")
+    return items
+
+
+def load_items_from_input_file(project_root: Path, input_file: str) -> list[Any]:
+    if input_file == "-":
+        try:
+            data = _read_stdin_bytes_limited(_INPUT_SIZE_LIMIT)
+        except _SizeLimitExceeded as exc:
+            raise ValueError(f"文风输入超过上限：最多 {_INPUT_SIZE_LIMIT} 字节")
+        try:
+            raw = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("文风输入不是 UTF-8") from exc
+        return _parse_items_payload(raw)
+
+    root = Path(project_root).expanduser().resolve()
+    source = Path(input_file)
+    if not source.is_absolute():
+        source = root / source
+    resolve_inside_project(root, source, reject_leaf_symlink=True)
+    if source.is_symlink() or not source.is_file():
+        raise ValueError("文风输入文件不存在或不是普通文件")
+    try:
+        data = _read_path_bytes_limited(source, _INPUT_SIZE_LIMIT)
+    except _SizeLimitExceeded as exc:
+        raise ValueError(f"文风输入超过上限：最多 {_INPUT_SIZE_LIMIT} 字节")
+    except OSError as exc:
+        raise ValueError("无法读取文风输入文件") from exc
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("文风输入不是 UTF-8") from exc
+    return _parse_items_payload(text)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="写入本书长期文风提示词")
     parser.add_argument("--project-root", required=True)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    add = sub.add_parser("add-item", help="追加一条或多条文风偏好")
+    add = sub.add_parser("add-item", help="从 JSON 文件或标准输入追加文风偏好")
     add.add_argument(
-        "--text",
-        action="append",
-        dest="texts",
+        "--input-file",
         required=True,
-        help="要记住的文风、口吻、句式或写作偏好，可重复",
+        help="项目内 JSON 文件，或 - 表示 stdin；用户原文不得放进命令参数",
     )
+    sub.add_parser("show", help="安全读取文风提示词；越出项目则视为缺失")
 
     args = parser.parse_args()
     try:
         if args.command == "add-item":
-            result = add_style_items(Path(args.project_root), args.texts)
+            items = load_items_from_input_file(Path(args.project_root), args.input_file)
+            result = add_style_items(Path(args.project_root), items)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return
+        if args.command == "show":
+            result = show_style_prompt(Path(args.project_root))
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return
     except ValueError as exc:

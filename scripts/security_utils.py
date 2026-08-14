@@ -334,6 +334,46 @@ def git_graceful_operation(
         return False, "", False
 
 
+def resolve_inside_project(
+    project_root: Union[str, Path],
+    path: Union[str, Path],
+    *,
+    reject_leaf_symlink: bool = False,
+) -> Path:
+    """Resolve ``path`` and require it plus symlink ancestors stay in the project.
+
+    ``path`` may be absolute or relative to ``project_root``. Missing files are
+    allowed; existing symlink parents and the final resolve() target must still
+    be inside the resolved project root.
+    """
+    root = Path(project_root).expanduser().resolve()
+    raw = Path(path)
+    if not raw.is_absolute():
+        raw = root / raw
+    if reject_leaf_symlink and raw.is_symlink():
+        raise ValueError(f"拒绝符号链接：{raw}")
+
+    cursor = raw
+    for _ in range(64):
+        if cursor.is_symlink():
+            try:
+                cursor.resolve().relative_to(root)
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"拒绝符号链接越出项目：{cursor}") from exc
+        if cursor == root or cursor.parent == cursor:
+            break
+        cursor = cursor.parent
+    else:
+        raise ValueError("路径层级过深")
+
+    try:
+        resolved = raw.resolve()
+        resolved.relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"路径必须位于项目内：{raw}") from exc
+    return resolved
+
+
 # ============================================================================
 # 原子化文件写入（防止并发冲突和数据损坏）
 # ============================================================================

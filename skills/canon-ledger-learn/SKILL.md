@@ -105,20 +105,25 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_le
 ## 执行流程
 
 1. 读取用户在 `/canon-ledger-learn` 后给出的文风要求；若命令参数为空，则取本次对话中用户明确要求记住的文风、口吻、句式、叙事方式或写作偏好。没有明确文风要求就停止并询问，不要把剧情、设定、伏笔或时间线写成文风。
-2. 保留用户原意，整理成简洁条目；一条偏好对应一条 `--text`。不要用关键词表过滤或改写用户原话。
-3. 调用 `style-memory add-item` 写入，不得手写或拼接 `设定集/文风提示词.md`：
+2. 保留用户原意，整理成简洁条目。不要用关键词表过滤或改写用户原话。
+3. 用 `Write` 把 JSON 写到 `${PROJECT_ROOT}/.canon-ledger/tmp/style-learn.json`。用户原文只出现在该文件里，用户原文不得放进命令。JSON 形如：
+
+```json
+{"items": ["第一条文风偏好", "第二条文风偏好"]}
+```
+
+4. 调用 `style-memory add-item` 写入，不得手写或拼接 `设定集/文风提示词.md`：
 
 ```bash
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" style-memory add-item \
-  --text "{第一条文风偏好}" \
-  --text "{第二条文风偏好}"
+  --input-file "${PROJECT_ROOT}/.canon-ledger/tmp/style-learn.json"
 ```
 
 ## 约束
 
 - 只写入 `设定集/文风提示词.md` 的「作者提示词」标题下；命令会保留文件中其他人工内容，并对完全相同的条目去重。
 - 不写入 `hard_constraints`，不写入 `.canon-ledger/memory_scratchpad.json`。
-- 禁止使用 `Write` 或手工编辑文风提示词与记忆 JSON。
+- `Write` 只允许用于 `.canon-ledger/tmp/style-learn.json`。禁止用 `Write` 或手工编辑 `设定集/文风提示词.md` 与记忆 JSON。
 - 设定、伏笔、时间线和人物事实请改设定集或等章末提交提炼，不要走本命令。
 
 ## 成功标准

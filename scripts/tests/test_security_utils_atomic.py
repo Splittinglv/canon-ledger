@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import security_utils
-from security_utils import AtomicWriteError, atomic_write_json, read_json_safe
+from security_utils import AtomicWriteError, atomic_write_json, read_json_safe, resolve_inside_project
 
 
 def test_atomic_write_retries_transient_permission_error(tmp_path, monkeypatch):
@@ -96,3 +96,54 @@ def test_atomic_write_survives_real_windows_file_hold(tmp_path):
         t.join()
 
     assert read_json_safe(target) == {"new": 1}
+
+
+def _symlink_or_skip(target: Path, link: Path, *, target_is_directory: bool = False) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except OSError:
+        pytest.skip("无法创建符号链接")
+
+
+def test_resolve_inside_project_rejects_leaf_symlink_outside(tmp_path):
+    inside = tmp_path / "book"
+    inside.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    link = inside / "alias.txt"
+    _symlink_or_skip(outside, link)
+    with pytest.raises(ValueError, match="符号链接"):
+        resolve_inside_project(inside, link, reject_leaf_symlink=True)
+
+
+def test_resolve_inside_project_rejects_parent_directory_symlink_outside(tmp_path):
+    project = tmp_path / "book"
+    project.mkdir()
+    outside = tmp_path / "outside_dir"
+    outside.mkdir()
+    (outside / "file.txt").write_text("secret", encoding="utf-8")
+    nested = project / "设定集"
+    _symlink_or_skip(outside, nested, target_is_directory=True)
+    with pytest.raises(ValueError, match="越出项目|必须位于项目内"):
+        resolve_inside_project(project, nested / "file.txt")
+
+
+def test_resolve_inside_project_rejects_leaf_symlink_target_outside_without_flag(tmp_path):
+    inside = tmp_path / "book"
+    inside.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    link = inside / "alias.txt"
+    _symlink_or_skip(outside, link)
+    with pytest.raises(ValueError, match="越出项目|必须位于项目内"):
+        resolve_inside_project(inside, link, reject_leaf_symlink=False)
+
+
+def test_resolve_inside_project_accepts_real_file_inside(tmp_path):
+    project = tmp_path / "book"
+    target = project / "设定集" / "文风提示词.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("ok", encoding="utf-8")
+    resolved = resolve_inside_project(project, target, reject_leaf_symlink=True)
+    assert resolved == target.resolve()
+    resolved.relative_to(project.resolve())

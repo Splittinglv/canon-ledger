@@ -14,9 +14,9 @@ from .consistency_context import sanitize_initial_canon, sanitize_story_contract
 from .fact_text import normalize_author_text, sanitize_fact_atom
 
 try:
-    from security_utils import atomic_write_json
+    from security_utils import atomic_write_json, resolve_inside_project
 except ImportError:  # pragma: no cover
-    from scripts.security_utils import atomic_write_json
+    from scripts.security_utils import atomic_write_json, resolve_inside_project
 
 
 MARKER_BEGIN = "<!-- STORY-SYSTEM:BEGIN -->"
@@ -122,13 +122,27 @@ def _setting_is_placeholder(value: str) -> bool:
 def _setting_source_files(project_root: Path) -> List[Path]:
     root = Path(project_root).expanduser().resolve()
     settings_root = root / "设定集"
+    if not settings_root.exists():
+        return []
+    try:
+        resolve_inside_project(root, settings_root)
+    except ValueError as exc:
+        raise ValueError(f"设定集同步拒绝符号链接：设定集") from exc
     if not settings_root.is_dir():
         return []
     paths: List[Path] = []
     for path in sorted(settings_root.rglob("*.md")):
         relative = path.relative_to(root).as_posix()
+        # 文风是可选输入且由 style-memory show 单独执行安全读取；即使该
+        # 固定路径本身是不安全的符号链接，也只按“无文风”处理，不阻断事实合同。
         if _is_style_prompt_source(relative):
             continue
+        try:
+            resolve_inside_project(root, path)
+        except ValueError as exc:
+            raise ValueError(
+                f"设定集同步拒绝符号链接：{path}"
+            ) from exc
         if path.is_symlink():
             raise ValueError(f"设定集同步拒绝符号链接：{relative}")
         if not path.is_file():
