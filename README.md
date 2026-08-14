@@ -6,7 +6,7 @@
 
 记住故事事实，不替你决定文风。
 
-**叙典 CanonLedger** 是由 **Splittinglv** 独立维护的长篇小说一致性引擎。它让 AI 写到几百章后仍然记得住设定、接得住伏笔、守得住章纲；具体的写作风格和文笔由作者与当前模型自定义。
+**叙典 CanonLedger** 是长篇小说一致性引擎。它让 AI 写到几百章后仍然记得住设定、接得住伏笔、守得住章纲；具体的写作风格和文笔由作者与当前模型自定义。
 
 项目最初基于 [lingfengQAQ/webnovel-writer](https://github.com/lingfengQAQ/webnovel-writer) v6.2.1 移植，自 2026-08-13 起由 Splittinglv 独立维护，不跟踪上游后续版本，也不是上游的官方产品。历史派生范围和许可信息见 [NOTICE.md](NOTICE.md) 与 [ATTRIBUTION.md](ATTRIBUTION.md)。当前可访问的仓库仍为 [Splittinglv/webnovel-writer-cursor](https://github.com/Splittinglv/webnovel-writer-cursor)，仓库地址可在后续版本独立迁移。
 
