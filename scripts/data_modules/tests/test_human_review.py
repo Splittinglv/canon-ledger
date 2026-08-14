@@ -109,7 +109,8 @@ def test_decision_does_not_survive_chapter_content_change(tmp_path):
     )
 
     assert result["events"] == []
-    assert result["unresolved"][0]["decision_id"] == "confirm-alice-location"
+    # 队列里的 decision_id 一律带章节前缀；record 也接受无歧义短 ID。
+    assert result["unresolved"][0]["decision_id"] == "ch0003-confirm-alice-location"
     assert service.list_items(3)[0]["status"] == "pending"
 
 
@@ -158,4 +159,115 @@ def test_human_can_ignore_a_candidate(tmp_path):
 
     assert result["events"] == []
     assert result["unresolved"] == []
-    assert result["resolved_decision_ids"] == ["confirm-alice-location"]
+    assert result["resolved_decision_ids"] == ["ch0003-confirm-alice-location"]
+
+
+def test_replace_must_keep_event_identity_and_carry_evidence(tmp_path):
+    """replace 只能改措辞：事件类型与主体锁定，且必须携带正文证据。"""
+    import pytest
+
+    binding = _binding(tmp_path)
+    service = HumanReviewService(tmp_path)
+    service.apply_decisions(3, binding, _pending(), [_presence_event()])
+
+    retyped = _presence_event()
+    retyped["event_type"] = "custody_changed"
+    retyped["payload"] = {
+        "from_holder": "",
+        "to_holder": "alice",
+        "evidence_quote": "爱丽丝抵达北城。",
+    }
+    with pytest.raises(ValueError, match="must_keep_event_type"):
+        service.record(
+            {
+                "decisions": [
+                    {
+                        "decision_id": "confirm-alice-location",
+                        "action": "replace",
+                        "replacement_event": retyped,
+                    }
+                ]
+            }
+        )
+
+    resubjected = _presence_event()
+    resubjected["subject"] = "bob"
+    with pytest.raises(ValueError, match="must_keep_subject"):
+        service.record(
+            {
+                "decisions": [
+                    {
+                        "decision_id": "confirm-alice-location",
+                        "action": "replace",
+                        "replacement_event": resubjected,
+                    }
+                ]
+            }
+        )
+
+    unevidenced = _presence_event(quote="")
+    with pytest.raises(ValueError, match="missing_evidence|evidence"):
+        service.record(
+            {
+                "decisions": [
+                    {
+                        "decision_id": "confirm-alice-location",
+                        "action": "replace",
+                        "replacement_event": unevidenced,
+                    }
+                ]
+            }
+        )
+
+
+def test_short_decision_id_across_chapters_is_ambiguous(tmp_path):
+    """两章各有一条同名短 ID 时，用短 ID 裁决必须确定性报错。"""
+    import pytest
+
+    service = HumanReviewService(tmp_path)
+    binding_three = _binding(tmp_path, chapter=3)
+    binding_four = _binding(tmp_path, chapter=4, text="爱丽丝再度抵达北城。")
+    event_four = _presence_event(quote="爱丽丝再度抵达北城。")
+    event_four["chapter"] = 4
+    service.apply_decisions(3, binding_three, _pending(), [_presence_event()])
+    service.apply_decisions(4, binding_four, _pending(), [event_four])
+
+    with pytest.raises(ValueError, match="human_review_decision_id_ambiguous"):
+        service.record(
+            {
+                "decisions": [
+                    {"decision_id": "confirm-alice-location", "action": "confirm"}
+                ]
+            }
+        )
+
+    resolved = service.record(
+        {
+            "decisions": [
+                {
+                    "decision_id": "ch0003-confirm-alice-location",
+                    "action": "confirm",
+                }
+            ]
+        }
+    )
+    assert resolved["recorded"] == ["ch0003-confirm-alice-location"]
+
+
+def test_verified_event_survives_repeated_replays(tmp_path):
+    """已裁决 verified 的事件在第二次、第三次重放时不得降级回 supported。"""
+    binding = _binding(tmp_path)
+    service = HumanReviewService(tmp_path)
+    service.apply_decisions(3, binding, _pending(), [_presence_event()])
+    service.record(
+        {
+            "decisions": [
+                {"decision_id": "confirm-alice-location", "action": "confirm"}
+            ]
+        }
+    )
+
+    for _ in range(3):
+        result = service.apply_decisions(3, binding, _pending(), [_presence_event()])
+        assert result["events"][0]["verification"] == "verified"
+        assert result["verified_event_ids"] == ["alice-location"]

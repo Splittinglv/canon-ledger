@@ -81,7 +81,7 @@ else:
 
 
 SCHEMA_VERSION = "canon-ledger-user-report/v1"
-VALID_STAGES = ("init", "plan", "write", "review")
+VALID_STAGES = ("init", "plan", "write", "review", "confirm")
 VALID_FORMATS = ("text", "json")
 
 STATUS_COMPLETED = "completed"
@@ -994,6 +994,209 @@ def build_plan_report(project_root: Path, *, chapter: int | None = None, volume:
     return report
 
 
+def build_confirm_report(
+    project_root: Path,
+    *,
+    chapter: int | None = None,
+    volume: int | None = None,
+) -> dict[str, Any]:
+    from .human_review import HumanReviewService
+
+    report = _new_report(project_root, stage="confirm", chapter=chapter, volume=volume)
+    core_files = 0
+    service = HumanReviewService(project_root)
+    try:
+        items = service.list_items(chapter=chapter)
+    except ValueError as exc:
+        items = []
+        _add_manual_issue(
+            report,
+            "must_handle",
+            code="human_review_ledger_invalid",
+            title="裁决账本无法读取",
+            reason=f"人工确认裁决账本损坏或格式不完整（{exc}）。",
+            impact="已有裁决不能被复用，重放提交会把相关候选事实继续留在待确认队列。",
+            next_action="运行 `/canon-ledger-doctor` 查看详情。",
+            command="/canon-ledger-doctor",
+            source="human_review",
+            path=_rel(project_root, service.ledger_path),
+        )
+    pending = [item for item in items if item.get("status") == "pending"]
+    resolved = [item for item in items if item.get("status") != "pending"]
+    queue_path = (
+        service.queue_path(int(chapter)) if chapter else service.queue_root
+    )
+    _add_file(
+        report,
+        label="人工确认队列",
+        path=_rel(project_root, queue_path),
+        status="completed",
+        note=f"已裁决 {len(resolved)} 条，待确认 {len(pending)} 条",
+    )
+    core_files += 1
+
+    pending_chapters = sorted(
+        {int(item.get("chapter") or 0) for item in pending if item.get("chapter")}
+    )
+    if pending:
+        listed = "、".join(str(item) for item in pending_chapters) or str(chapter or "")
+        _add_manual_issue(
+            report,
+            "needs_confirmation",
+            code="human_review_pending",
+            title="仍有候选事实等待作者确认",
+            reason=f"第 {listed} 章还有 {len(pending)} 条待确认项。",
+            impact="未确认的候选事实不会进入正史，相关维度保持待验证状态。",
+            next_action="继续运行确认命令逐条裁决。",
+            command=(
+                f"/canon-ledger-confirm {pending_chapters[0]}"
+                if pending_chapters
+                else "/canon-ledger-confirm"
+            ),
+            source="human_review",
+            path=_rel(project_root, queue_path),
+        )
+
+    # 已落库的裁决只有重放进本章提交后才真正生效。区分「已裁决」与
+    # 「已生效」，否则只 resolve 未 replay 也会被误报为完成。
+    resolved_by_chapter: dict[int, list[dict[str, Any]]] = {}
+    for item in resolved:
+        item_chapter = int(item.get("chapter") or 0)
+        if item_chapter > 0:
+            resolved_by_chapter.setdefault(item_chapter, []).append(item)
+    unapplied_by_chapter: list[tuple[int, int]] = []
+    for item_chapter, chapter_items in sorted(resolved_by_chapter.items()):
+        commit_payload, commit_error = _read_json(
+            _commit_path(project_root, item_chapter)
+        )
+        applied_ids: set[str] = set()
+        if not commit_error and isinstance(commit_payload, dict):
+            provenance = commit_payload.get("provenance") or {}
+            human_review = (
+                provenance.get("human_review")
+                if isinstance(provenance.get("human_review"), dict)
+                else {}
+            )
+            applied_ids = {
+                str(value)
+                for value in (human_review.get("resolved_decision_ids") or [])
+            }
+        missing = [
+            item
+            for item in chapter_items
+            if str(item.get("decision_id") or "") not in applied_ids
+        ]
+        if missing:
+            unapplied_by_chapter.append((item_chapter, len(missing)))
+    if unapplied_by_chapter:
+        listed = "、".join(
+            f"第 {item_chapter} 章 {count} 条"
+            for item_chapter, count in unapplied_by_chapter
+        )
+        first_chapter = unapplied_by_chapter[0][0]
+        _add_manual_issue(
+            report,
+            "must_handle",
+            code="human_review_decisions_not_replayed",
+            title="裁决已保存但尚未生效",
+            reason=f"{listed}裁决还没有重放进本章提交。",
+            impact="正史中的这些候选事实仍是未生效状态，已保存的裁决不会自动生效。",
+            next_action="重新运行确认命令完成本章重放。",
+            command=f"/canon-ledger-confirm {first_chapter}",
+            source="human_review",
+            path=_rel(project_root, queue_path),
+        )
+
+    if chapter:
+        commit_path = _commit_path(project_root, int(chapter))
+        commit_payload, commit_error = _read_json(commit_path)
+        if commit_error:
+            _add_file(
+                report,
+                label="本章事实提交",
+                path=_rel(project_root, commit_path),
+                status="missing",
+                note="未生成 commit",
+            )
+            _add_classified_issue(
+                report,
+                {"code": "missing_artifact", "message": "chapter commit missing"},
+                source="chapter_commit",
+                path=_rel(project_root, commit_path),
+                message="chapter commit missing",
+            )
+        else:
+            core_files += 1
+            status = str((commit_payload.get("meta") or {}).get("status") or "")
+            binding_trusted, binding_code = verify_commit_content_binding(
+                project_root,
+                int(chapter),
+                commit_payload,
+            )
+            _add_file(
+                report,
+                label="本章事实提交",
+                path=_rel(project_root, commit_path),
+                status=(
+                    "completed"
+                    if status == "accepted" and binding_trusted
+                    else "failed"
+                ),
+                note=(
+                    f"status={status or 'missing'}"
+                    + ("" if binding_trusted else f", binding={binding_code}")
+                ),
+            )
+            if not binding_trusted:
+                _add_manual_issue(
+                    report,
+                    "must_handle",
+                    code="chapter_commit_stale",
+                    title="正文已改动，裁决不能重放",
+                    reason=f"本章提交与当前正文不一致（{binding_code}）。",
+                    impact="旧裁决绑定旧正文哈希，重放提交会失败。",
+                    next_action="基于当前正文重新走完整写作链。",
+                    command=f"/canon-ledger-write {chapter}",
+                    source="chapter_commit",
+                    path=_rel(project_root, commit_path),
+                    message=binding_code,
+                )
+            elif status == "accepted":
+                _add_projection_issues(
+                    report, project_root, int(chapter), commit_payload
+                )
+
+    report["overall_status"] = _status_from_issues(report, core_file_count=core_files)
+    if report["issues"]["must_handle"]:
+        pass
+    elif pending:
+        report["next_actions"].append(
+            {
+                "label": "继续裁决",
+                "description": "还有待确认项，可以继续逐条裁决。",
+                "command": (
+                    f"/canon-ledger-confirm {pending_chapters[0]}"
+                    if pending_chapters
+                    else "/canon-ledger-confirm"
+                ),
+            }
+        )
+    else:
+        next_chapter = int(chapter or 0) + 1
+        report["next_actions"].append(
+            {
+                "label": "继续写作",
+                "description": (
+                    f"待确认项已清空，可以继续写第 {next_chapter} 章。"
+                    if chapter
+                    else "待确认项已清空，可以继续写作。"
+                ),
+                "command": f"/canon-ledger-write {next_chapter}" if chapter else "",
+            }
+        )
+    return report
+
+
 def build_user_report(
     project_root: str | Path,
     *,
@@ -1016,6 +1219,8 @@ def build_user_report(
             status = build_project_status(root)
             chapter = int(status.get("target_chapter") or 0)
         return build_review_report(root, chapter=int(chapter or 0), volume=volume)
+    if stage == "confirm":
+        return build_confirm_report(root, chapter=chapter, volume=volume)
     if stage == "init":
         return build_init_report(root, chapter=chapter, volume=volume)
     return build_plan_report(root, chapter=chapter, volume=volume)

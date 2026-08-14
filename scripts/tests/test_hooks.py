@@ -568,6 +568,7 @@ def test_guard_rejects_staged_external_python_script_bypass():
         "python3 /tmp/改设定.py",
         'python3 "$待执行脚本"',
         'python3 "$_EXPORTER" --format json',
+        'python3 -X utf8 "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py"',
         "python3 -m runpy /tmp/改设定.py",
         "printf 'print(1)' | python3 -",
         "node /tmp/改设定.js",
@@ -578,6 +579,29 @@ def test_guard_rejects_external_dynamic_or_untrusted_interpreter_scripts(command
     proc = _run_guard({"tool_name": "Bash", "tool_input": {"command": command}})
 
     assert proc.returncode == 2
+
+
+def test_guard_allows_only_verbatim_bootstrap_block_from_skills():
+    """hint 路径执行 bootstrap_env.py 仅放行与随包 SKILL.md 逐字一致的引导块。"""
+    pattern = re.compile(r"^```(?:bash|sh)\s*$\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
+    text = (PLUGIN_ROOT / "skills" / "canon-ledger-write" / "SKILL.md").read_text(encoding="utf-8")
+    block = next(
+        match.group(1).strip()
+        for match in pattern.finditer(text)
+        if "_PLUGIN_ROOT_HINT" in match.group(1)
+    )
+    assert "scripts/bootstrap_env.py" in block
+
+    verbatim = _run_guard({"tool_name": "Bash", "tool_input": {"command": block}})
+    assert verbatim.returncode == 0
+
+    tampered_command = block.replace(
+        'bootstrap_env.py")"',
+        'bootstrap_env.py" --unsafe)"',
+    )
+    assert tampered_command != block
+    tampered = _run_guard({"tool_name": "Bash", "tool_input": {"command": tampered_command}})
+    assert tampered.returncode == 2
 
 
 def test_guard_allows_trusted_plugin_script_entrypoints():
@@ -676,6 +700,65 @@ def test_guard_allows_trusted_sensitive_cli_with_shell_line_continuations(comman
     )
 
     assert proc.returncode == 0
+
+
+def _env_guard_lines() -> tuple[str, str]:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_hooks_guard_runtime_write", GUARD)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+        return module._ENV_GUARD_G1, module._ENV_GUARD_G2
+    finally:
+        sys.modules.pop(spec.name, None)
+
+
+def test_guard_treats_canonical_env_guard_line_as_transparent_prefix():
+    """规范守卫行只是断链自检，不得改变其后命令的放行判定。"""
+    guard_g1, guard_g2 = _env_guard_lines()
+    env = {**os.environ, "SCRIPTS_DIR": str(PLUGIN_ROOT / "scripts")}
+    trusted_commit = (
+        '"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" '
+        '--project-root "${PROJECT_ROOT}" chapter-commit --chapter 12 '
+        '--review-result "${PROJECT_ROOT}/.canon-ledger/tmp/review_results.json"'
+    )
+    for guard_line in (guard_g1, guard_g2):
+        proc = _run_guard(
+            {"tool_name": "Bash", "tool_input": {"command": f"{guard_line}\n{trusted_commit}"}},
+            env=env,
+        )
+        assert proc.returncode == 0, f"守卫行前缀导致可信提交入口被拦：{proc.stdout}"
+
+
+def test_guard_env_guard_prefix_does_not_whitelist_dangerous_rest():
+    """守卫行之后的命令仍要过完整判定：裸命令会拒绝的，加前缀后照样拒绝。"""
+    guard_g1, _ = _env_guard_lines()
+    dangerous = 'rm -rf "${PROJECT_ROOT}/.canon-ledger/"*'
+    bare = _run_guard({"tool_name": "Bash", "tool_input": {"command": dangerous}})
+    assert bare.returncode == 2, "基线失效：裸删除命令未被拒绝"
+
+    proc = _run_guard(
+        {"tool_name": "Bash", "tool_input": {"command": f"{guard_g1}\n{dangerous}"}}
+    )
+    assert proc.returncode == 2
+
+
+def test_guard_rejects_tampered_env_guard_variants():
+    """改写过的守卫行不享受剥离豁免：夹带命令替换必须被全文扫描拦下。"""
+    guard_g1, _ = _env_guard_lines()
+    tampered = guard_g1.replace(
+        "环境未就绪", '$(rm -rf "${PROJECT_ROOT}/.canon-ledger")'
+    )
+    follow_up = (
+        'cat "${PROJECT_ROOT}/.canon-ledger/tmp/chapter_binding.json"'
+    )
+    proc = _run_guard(
+        {"tool_name": "Bash", "tool_input": {"command": f"{tampered}\n{follow_up}"}}
+    )
+
+    assert proc.returncode == 2
 
 
 def test_guard_blocks_direct_chapter_commit_script_bypass():

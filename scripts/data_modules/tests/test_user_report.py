@@ -470,3 +470,84 @@ def test_write_report_ignores_projection_log_for_another_commit(tmp_path: Path) 
         item["title"] == "故事资料更新失败"
         for item in report["issues"]["must_handle"]
     )
+
+
+def _queue_pending_item(project_root: Path, chapter: int = 3) -> None:
+    from data_modules.human_review import HumanReviewService
+
+    chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("爱丽丝抵达北城。", encoding="utf-8")
+    binding = build_chapter_binding(project_root, chapter)
+    HumanReviewService(project_root).persist_queue(
+        chapter,
+        binding,
+        [
+            {
+                "decision_id": "alice-location-check",
+                "category": "presence",
+                "candidate_event_id": "alice-location",
+                "reason": "这是否是实际抵达需要作者确认",
+            }
+        ],
+    )
+
+
+def test_confirm_report_surfaces_pending_queue(tmp_path: Path) -> None:
+    _make_project(tmp_path)
+    _queue_pending_item(tmp_path, chapter=3)
+
+    report = build_user_report(tmp_path, stage="confirm")
+
+    assert report["overall_status"] == "partial"
+    assert any(
+        item["code"] == "human_review_pending"
+        for item in report["issues"]["needs_confirmation"]
+    )
+    assert any(
+        "/canon-ledger-confirm 3" in str(item.get("command") or "")
+        for item in report["next_actions"]
+    )
+
+
+def test_confirm_report_completes_after_all_decisions(tmp_path: Path) -> None:
+    from data_modules.human_review import HumanReviewService
+
+    _make_project(tmp_path)
+    _queue_pending_item(tmp_path, chapter=3)
+    HumanReviewService(tmp_path).record(
+        {
+            "decisions": [
+                {"decision_id": "alice-location-check", "action": "confirm"}
+            ]
+        }
+    )
+
+    # 裁决只落库、还没重放进本章提交时，不得报告完成。
+    saved_only = build_user_report(tmp_path, stage="confirm")
+    assert saved_only["overall_status"] == "needs_user"
+    assert any(
+        item["code"] == "human_review_decisions_not_replayed"
+        for item in saved_only["issues"]["must_handle"]
+    )
+
+    commit_path = tmp_path / ".story-system" / "commits" / "chapter_003.commit.json"
+    commit_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        commit_path,
+        {
+            "meta": {"chapter": 3, "status": "accepted"},
+            "provenance": {
+                "human_review": {
+                    "resolved_decision_ids": ["ch0003-alice-location-check"]
+                }
+            },
+        },
+    )
+
+    report = build_user_report(tmp_path, stage="confirm")
+    text = render_user_report_text(report)
+
+    assert report["overall_status"] == "completed"
+    assert not report["issues"]["needs_confirmation"]
+    assert "待确认 0 条" in text

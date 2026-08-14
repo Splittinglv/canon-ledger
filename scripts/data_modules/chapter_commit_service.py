@@ -41,6 +41,77 @@ from .outline_fulfillment import (
 )
 
 
+def _delta_declared_old(delta: dict[str, Any]) -> tuple[bool, Any]:
+    for key in ("old", "old_value", "from"):
+        if key in delta and delta.get(key) not in (None, ""):
+            return True, delta.get(key)
+    return False, None
+
+
+def _information_conflict_items(
+    chapter: int,
+    probes: list[dict[str, Any] | None],
+    history: Any,
+) -> list[dict[str, Any]]:
+    """Deterministically catch an ``information_id`` reused for different facts.
+
+    Two claims under one ID in the same chapter are a data bug and fail the
+    commit.  A claim that differs from the recorded canon is routed to the
+    human queue: the author decides whether it is a rewording (confirm keeps
+    the recorded claim), a correction (replace), or noise (ignore).
+    """
+    seen: dict[str, tuple[str, str]] = {}
+    items: list[dict[str, Any]] = []
+    for probe in probes:
+        if not isinstance(probe, dict):
+            continue
+        if str(probe.get("event_type") or "") != "knowledge_state_changed":
+            continue
+        payload = probe.get("payload") if isinstance(probe.get("payload"), dict) else {}
+        information_id = str(payload.get("information_id") or "").strip()
+        claim = str(
+            payload.get("canonical_claim") or payload.get("content") or ""
+        ).strip()
+        event_id = str(probe.get("event_id") or "").strip()
+        if not information_id or not claim:
+            continue
+        prior = seen.get(information_id)
+        if prior is not None and prior[0] != claim:
+            raise ValueError(
+                f"information_id_conflict_in_chapter:{information_id}:"
+                f"{prior[1]}:{event_id}"
+            )
+        seen[information_id] = (claim, event_id)
+        existing = history.information.get(information_id) or {}
+        existing_claim = str(
+            existing.get("canonical_claim") or existing.get("content") or ""
+        ).strip()
+        if not existing_claim or existing_claim == claim:
+            continue
+        source_chapter = existing.get("source_chapter")
+        items.append(
+            {
+                "source": "information_id_conflict",
+                "category": "knowledge_identity",
+                "dimension": "knowledge",
+                "candidate_event_id": event_id,
+                "candidate_event": probe,
+                "evidence_quote": str(payload.get("evidence_quote") or ""),
+                "existing_fact": (
+                    f"信息 {information_id} 既往表述（第 {source_chapter} 章起）："
+                    f"{existing_claim}"
+                ),
+                "reason": (
+                    f"信息 {information_id} 的本章表述与既往记录不同：可能是同一信息换了说法，"
+                    "也可能是模型把另一条信息误用了同一个 ID。confirm=是同一信息，"
+                    "并以本章新表述为准更正正史；replace=作者亲自改写本条表述；"
+                    "ignore=本章不记录这条候选（另一条信息请让模型改用新 ID 重新提交）。"
+                ),
+            }
+        )
+    return items
+
+
 class ChapterCommitService:
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
@@ -49,6 +120,7 @@ class ChapterCommitService:
         self,
         chapter: int,
         accepted_events: list[dict[str, Any]],
+        history: Any,
     ) -> None:
         """Reject a mechanically impossible holder chain before projection.
 
@@ -56,9 +128,6 @@ class ChapterCommitService:
         off-page holder. Once custody has been recorded, every later transfer
         must start from that exact holder, including an explicitly unheld item.
         """
-        from .canonical_history import load_canonical_history
-
-        history = load_canonical_history(self.project_root, max(0, chapter - 1))
         holders: dict[str, str] = {
             artifact_id: str((row or {}).get("holder_id") or "")
             for artifact_id, row in history.custody.items()
@@ -85,6 +154,110 @@ class ChapterCommitService:
                 )
             recorded.add(artifact_id)
             holders[artifact_id] = to_holder
+
+    @staticmethod
+    def _normalized_probe(
+        chapter: int,
+        event: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Strictly normalized, verification-free copy of one candidate event."""
+        from .chapter_commit_schema import normalize_accepted_events
+
+        stripped = {
+            key: value for key, value in dict(event).items() if key != "verification"
+        }
+        try:
+            normalized = normalize_accepted_events(int(chapter), [stripped])[0]
+        except (TypeError, ValueError):
+            return None
+        normalized.pop("verification", None)
+        return normalized
+
+    def _validate_state_delta_chain(
+        self,
+        state_deltas: list[Any],
+        history: Any,
+    ) -> None:
+        """A delta touching a recorded field must declare the matching old value.
+
+        state_deltas enter canon without prose evidence, so this chain check is
+        the only deterministic guard against silently overwriting a recorded
+        value with a contradicting one.
+        """
+        recorded: dict[tuple[str, str], Any] = {}
+        for change in history.state_changes:
+            if not isinstance(change, dict):
+                continue
+            key = (
+                str(change.get("entity_id") or "").strip(),
+                str(change.get("field") or "").strip(),
+            )
+            if key[0] and key[1]:
+                recorded[key] = change.get("new")
+        for delta in state_deltas:
+            if not isinstance(delta, dict):
+                continue
+            entity = str(delta.get("entity_id") or delta.get("subject") or "").strip()
+            field_name = str(
+                delta.get("field") or delta.get("field_path") or ""
+            ).strip()
+            if not entity or not field_name:
+                continue
+            key = (entity, field_name)
+            if key not in recorded:
+                continue
+            prior = recorded[key]
+            declared_present, declared = _delta_declared_old(delta)
+            if not declared_present:
+                raise ValueError(
+                    f"state_delta_missing_old:{entity}:{field_name}:"
+                    f"recorded={prior}"
+                )
+            if str(declared).strip() != str(prior).strip():
+                raise ValueError(
+                    f"state_delta_conflict:{entity}:{field_name}:"
+                    f"recorded_old={prior}:declared_old={declared}"
+                )
+
+    def _validate_entity_type_stability(
+        self,
+        entity_deltas: list[Any],
+        history: Any,
+    ) -> None:
+        """Reject a delta that silently retypes a recorded entity.
+
+        Renames and tier promotions are legitimate narrative evolution, but an
+        entity flipping type (角色→物品 …) means the extractor reused an ID for
+        something else.  Entities that only carry the seeded default type are
+        skipped to avoid false positives.
+        """
+        default_type = "角色"
+        for delta in entity_deltas:
+            if not isinstance(delta, dict):
+                continue
+            if (delta.get("from_entity") or delta.get("from")) and (
+                delta.get("to_entity") or delta.get("to")
+            ):
+                continue
+            entity_id = str(delta.get("entity_id") or delta.get("id") or "").strip()
+            if not entity_id:
+                continue
+            declared = str(
+                delta.get("entity_type") or delta.get("type") or ""
+            ).strip()
+            if not declared:
+                continue
+            row = history.entities.get(entity_id) or {}
+            recorded_type = str(row.get("type") or "").strip()
+            if (
+                recorded_type
+                and recorded_type != default_type
+                and declared != recorded_type
+            ):
+                raise ValueError(
+                    f"entity_type_conflict:{entity_id}:"
+                    f"recorded={recorded_type}:declared={declared}"
+                )
 
     def build_commit(
         self,
@@ -146,13 +319,46 @@ class ChapterCommitService:
         if fulfillment_errors:
             raise ValueError(fulfillment_errors[0])
 
+        from .canonical_history import load_canonical_history
         from .human_review import HumanReviewService
+
+        history = load_canonical_history(self.project_root, max(0, chapter - 1))
+        raw_candidates = [dict(event) for event in extraction.accepted_events]
+        probes: list[dict[str, Any] | None] = []
+        for index, event in enumerate(raw_candidates):
+            probe = self._normalized_probe(chapter, event)
+            if probe is None:
+                # An event that cannot normalize either gets dropped by a
+                # recorded decision or fails the commit later with its own
+                # schema error; it cannot be conflict-checked here.
+                probes.append(None)
+                continue
+            if not str(event.get("event_id") or "").strip():
+                # Give the raw event its deterministic ID now so an unresolved
+                # conflict can drop exactly this event from the commit.
+                raw_candidates[index]["event_id"] = str(probe.get("event_id") or "")
+            probes.append(probe)
+        conflict_items = _information_conflict_items(chapter, probes, history)
+        pending_input = [
+            dict(item) if isinstance(item, dict) else item
+            for item in disambiguation.pending
+        ]
+        queued_event_ids = {
+            str(item.get("candidate_event_id") or item.get("event_id") or "").strip()
+            for item in pending_input
+            if isinstance(item, dict)
+        }
+        merged_pending = pending_input + [
+            item
+            for item in conflict_items
+            if item["candidate_event_id"] not in queued_event_ids
+        ]
 
         human_review = HumanReviewService(self.project_root).apply_decisions(
             chapter,
             chapter_binding,
-            list(disambiguation.pending),
-            list(extraction.accepted_events),
+            merged_pending,
+            raw_candidates,
         )
         unresolved = list(human_review["unresolved"])
         blocking_pending = [
@@ -178,19 +384,32 @@ class ChapterCommitService:
                 self.project_root,
                 evidence_envelope,
             )
+            consistency_types = {
+                "knowledge_state_changed",
+                "presence_observed",
+                "custody_changed",
+            }
             for index, event in enumerate(accepted_events):
-                if str(event.get("event_type") or "") not in {
-                    "knowledge_state_changed",
-                    "presence_observed",
-                    "custody_changed",
-                }:
-                    continue
-                if not event_evidence_in_chapter(event, bound_chapter_text):
+                event_payload = (
+                    event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                )
+                quote = str(event_payload.get("evidence_quote") or "").strip()
+                is_consistency = str(event.get("event_type") or "") in consistency_types
+                # Consistency events must always bind to the prose; any other
+                # event that claims a quote must also actually quote this
+                # chapter, so no event type can carry fabricated evidence.
+                if (is_consistency or quote) and not event_evidence_in_chapter(
+                    event, bound_chapter_text
+                ):
                     raise ValueError(
                         f"accepted_events[{index}].payload.evidence_quote "
                         "is not present in the bound chapter"
                     )
-            self._validate_custody_transitions(chapter, accepted_events)
+            self._validate_custody_transitions(chapter, accepted_events, history)
+            self._validate_state_delta_chain(list(extraction.state_deltas), history)
+            self._validate_entity_type_stability(
+                list(extraction.entity_deltas), history
+            )
         extraction_payload = extraction.model_dump()
         extraction_payload["accepted_events"] = accepted_events
         coverage = dict(extraction_payload.get("fact_coverage") or {})

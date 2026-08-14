@@ -593,6 +593,15 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
                     or (existing_information or {}).get("content")
                     or canonical_claim
                 )
+                if (
+                    existing_information
+                    and event_verification == "verified"
+                    and canonical_claim
+                    and canonical_claim != content
+                ):
+                    # 人工裁决过的表述是最高优先级来源：replace/confirm 之后的
+                    # verified 事件可以更正既往表述，未经裁决的模型换述不行。
+                    content = canonical_claim
                 valid_information = (
                     bool(subject)
                     and bool(information_id)
@@ -617,6 +626,11 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
                     )
                     if event_verification == "verified":
                         information_row["verification"] = "verified"
+                        if content and str(
+                            information_row.get("canonical_claim") or ""
+                        ) != content:
+                            information_row["canonical_claim"] = content
+                            information_row["content"] = content
                     knowledge_by_entity.setdefault(subject, {})[information_id] = {
                         "event_id": event_id,
                         "sequence": int(event.get("sequence") or _sequence),

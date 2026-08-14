@@ -638,6 +638,49 @@ def test_prewrite_blocks_when_prior_chapter_needs_revalidation(tmp_path):
     )
 
 
+def test_prewrite_blocks_when_prior_commit_never_reached_read_models(tmp_path):
+    """前章 accepted commit 未写入读模型（投影缺口）时，新章写作必须被拦。"""
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=2)
+    chapter_path = tmp_path / "正文" / "第0001章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("第一章正文。", encoding="utf-8")
+    binding = build_chapter_binding(tmp_path, 1)
+    commits = tmp_path / ".story-system" / "commits"
+    commits.mkdir(parents=True, exist_ok=True)
+    (commits / "chapter_001.commit.json").write_text(
+        json.dumps(
+            {
+                "meta": {
+                    "schema_version": "story-system/v1",
+                    "chapter": 1,
+                    "status": "accepted",
+                    "validation_status": "valid",
+                },
+                "chapter_binding": binding,
+                "provenance": {"chapter_binding": binding},
+                "extraction_result": {
+                    "accepted_events": [],
+                    "state_deltas": [],
+                    "entity_deltas": [],
+                    "chapter_binding": binding,
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+
+    assert report["ok"] is False
+    gap_errors = [
+        item for item in report["errors"] if item["code"] == "projection_coverage_gap"
+    ]
+    assert gap_errors
+    assert "projections retry" in gap_errors[0]["repair"]
+
+
 def test_prewrite_allows_revalidating_the_earliest_stale_chapter(tmp_path):
     _make_init_ready(tmp_path)
     _make_current_contracts(tmp_path, chapter=1)

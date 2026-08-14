@@ -46,66 +46,13 @@ description: 初始化长篇小说项目：分阶段收集书名、题材、主�
 ```bash
 # 这段引导仅适用于 POSIX shell（sh/bash/zsh）；Windows 请使用 Git Bash 或 WSL。
 # 缓存安装必须使用 Cursor 注入的插件根；不扫描缓存目录寻找可执行脚本。
+# bootstrap_env.py 输出固定六行数据协议：逐行 read 赋值，禁止 eval/source 执行输出。
 _PLUGIN_ROOT_HINT="${CANON_LEDGER_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-}}"
 if [ -z "$_PLUGIN_ROOT_HINT" ]; then
   _PLUGIN_ROOT_HINT="${HOME}/.cursor/plugins/local/canon-ledger"
 fi
-_EXPORTER="$(python3 -X utf8 -c '
-import json, sys
-from pathlib import Path
-try:
-    root = Path(sys.argv[1]).expanduser().resolve()
-    manifest = json.loads((root / ".cursor-plugin" / "plugin.json").read_text(encoding="utf-8"))
-    exporter = (root / "scripts" / "export_cursor_env.py").resolve()
-except (OSError, ValueError, json.JSONDecodeError):
-    raise SystemExit(1)
-if manifest.get("name") != "canon-ledger":
-    raise SystemExit(1)
-if exporter.parent.parent != root or not exporter.is_file() or not (root / "scripts" / "canon_ledger.py").is_file():
-    raise SystemExit(1)
-print(exporter)
-' "$_PLUGIN_ROOT_HINT")" || {
+_ENV_LINES="$(python3 -X utf8 "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py")" || {
   echo "ERROR: 插件根不可信或安装不完整。请使用 Cursor 注入的插件根，或安装到 ~/.cursor/plugins/local/canon-ledger" >&2
-  exit 1
-}
-_ENV_JSON="$(python3 -X utf8 "$_EXPORTER" --format json)" || exit 1
-_ENV_LINES="$(printf '%s' "$_ENV_JSON" | python3 -X utf8 -c '
-import json, sys
-from pathlib import Path
-keys = (
-    "CANON_LEDGER_PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT",
-    "SCRIPTS_DIR", "WORKSPACE_ROOT", "CURSOR_PROJECT_DIR",
-)
-try:
-    payload = json.load(sys.stdin)
-    environment = payload["environment"]
-    python_executable = payload["python_executable"]
-except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-    raise SystemExit(1)
-if payload.get("schema_version") != "canon-ledger-cursor-env/v1" or not isinstance(environment, dict):
-    raise SystemExit(1)
-if set(environment) != set(keys):
-    raise SystemExit(1)
-values = [environment[key] for key in keys]
-if any(not isinstance(value, str) or not value or any(char in value for char in "\x00\r\n") for value in values):
-    raise SystemExit(1)
-if (
-    not isinstance(python_executable, str)
-    or not python_executable
-    or any(char in python_executable for char in "\x00\r\n")
-    or not Path(python_executable).is_absolute()
-    or not Path(python_executable).is_file()
-):
-    raise SystemExit(1)
-if (
-    values[1] != values[0]
-    or values[2] != str(Path(values[0]) / "scripts")
-    or values[4] != values[3]
-):
-    raise SystemExit(1)
-sys.stdout.write("\n".join([*values, python_executable]) + "\n")
-')" || {
-  echo "ERROR: export_cursor_env.py 返回了无效环境协议" >&2
   exit 1
 }
 _ENV_PARSE_OK=1
@@ -124,11 +71,14 @@ if [ "$_ENV_PARSE_OK" -ne 1 ]; then
   exit 1
 fi
 export CANON_LEDGER_PLUGIN_ROOT CURSOR_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR CANON_LEDGER_PYTHON
-unset _PLUGIN_ROOT_HINT _EXPORTER _ENV_JSON _ENV_LINES _ENV_PARSE_OK
+unset _PLUGIN_ROOT_HINT _ENV_LINES _ENV_PARSE_OK
+```
+
+```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
 export SKILL_ROOT="${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-init"
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${WORKSPACE_ROOT}" subagent-models --format json
 ```
-
 拆书子代理模型可选。读取 JSON 里 `agents["deconstruction-agent"]`：`pass_to_task=true` 时，调用 Task 必须传入该 `model` slug；否则不要传 `model`。本轮用户点名优先于配置文件。新书尚未创建时，这条命令仍可用（回退到 `~/.cursor/canon-ledger/subagent-models.json`，最后回退 inherit）。
 
 必须做：
@@ -241,6 +191,7 @@ canonical 题材集合（写入 `project_info.genre`）：都市、玄幻、仙�
 - 初始化前必须展示并确认 `WORKSPACE_ROOT`、`PROJECT_SLUG`、`PROJECT_ROOT`。
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
 PROJECT_SLUG="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import re,sys; title=sys.argv[1].strip(); slug=re.sub(r'[\\\\/:*?\"<>|]+','',title); slug=re.sub(r'\\s+','-',slug).strip('-'); print(('proj-' + slug) if (not slug or slug.startswith('.')) else slug)" "{title}")"
 PROJECT_ROOT="${WORKSPACE_ROOT}/${PROJECT_SLUG}"
 echo "WORKSPACE_ROOT=${WORKSPACE_ROOT}"
@@ -255,6 +206,7 @@ echo "PROJECT_ROOT=${PROJECT_ROOT}"
 参数全部来自上面的采集对象（书名/题材/主角/金手指/世界观/反派/创意约束等），逐字段映射为 `canon_ledger.py init` 的 `--*` 选项；完整字段清单见 `references/init-collection-schema.md`，可用 `"${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py" init --help` 核对选项名。
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py" init \
   "${PROJECT_ROOT}" "{title}" "{genre}" \
   --protagonist-name "{protagonist_name}" \
@@ -286,6 +238,7 @@ echo "PROJECT_ROOT=${PROJECT_ROOT}"
 init 完成后立即生成 MASTER_SETTING，让后续 plan 有调性/禁忌参照。此处不传 `--chapter`（只生成 `MASTER_SETTING.json` 和 `anti_patterns.json`），也不传 `--emit-runtime-contracts`（还没有卷/章级数据）；plan 拆到具体章节时再生成 volume/chapter/review 合同。
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 GENRE="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import json,os; root=os.environ['PROJECT_ROOT']; s=json.load(open(root + '/.canon-ledger/state.json',encoding='utf-8')); pi=s.get('project_info',{}); print(pi.get('genre') or s.get('project',{}).get('genre',''))")"
 
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" \
@@ -295,6 +248,7 @@ GENRE="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import json,os; root=os.environ['P
 ## 验证与交付
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 test -f "${PROJECT_ROOT}/.canon-ledger/state.json"
 find "${PROJECT_ROOT}/设定集" -maxdepth 1 -type f -name "*.md"
 test -f "${PROJECT_ROOT}/大纲/总纲.md"
@@ -321,6 +275,7 @@ test "$(basename "${PROJECT_ROOT}")" = "${PROJECT_SLUG}"
 初始化开始前先说明本次会经历：收集故事核心 -> 确认创意约束 -> 生成项目骨架 -> 写入初始故事档案 -> 验证能否进入规划。过程提示用作者语言，不直接输出原始 JSON、traceback 或长命令日志；技术详情写入 `.canon-ledger/logs/run_last.log`：
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" run-log \
   --event init-progress \
   --payload-json "{\"stage\": \"init\"}" \
@@ -334,6 +289,7 @@ test "$(basename "${PROJECT_ROOT}")" = "${PROJECT_SLUG}"
 不可恢复故障才在最终报告提示 `.canon-ledger/logs/run_last.log`；平时只保留日志，不打扰作者。收尾必须调用作者报告 helper：
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" user-report \
   --stage init \
   --format text

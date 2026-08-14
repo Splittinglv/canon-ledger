@@ -88,10 +88,34 @@ TRUSTED_SCRIPTS_ENV_TOKENS = {
     "$CURSOR_PLUGIN_ROOT/scripts": ("CURSOR_PLUGIN_ROOT", "scripts"),
 }
 TRUSTED_PLUGIN_SCRIPT_NAMES = {
+    "bootstrap_env.py",
     "canon_ledger.py",
     "export_cursor_env.py",
     "reference_search.py",
 }
+BOOTSTRAP_SCRIPT_TOKENS = {
+    "$_PLUGIN_ROOT_HINT/scripts/bootstrap_env.py",
+    "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py",
+}
+# Skill 代码块的首行环境守卫（POSIX 空操作 + ${VAR:?} 参数校验）。
+# 只有与随包文本完全一致的守卫行会被剥离；改写过的变体不享受豁免。
+_ENV_GUARD_G1 = (
+    ': "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md '
+    '开头的环境引导代码块，再重试本块}"'
+)
+_ENV_GUARD_G2 = (
+    _ENV_GUARD_G1
+    + ' "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill '
+    '解析项目根的代码块，再重试本块}"'
+)
+ENV_GUARD_LINES = {_ENV_GUARD_G1, _ENV_GUARD_G2}
+
+
+def _strip_env_guard_lines(command: str) -> str:
+    lines = command.strip().splitlines()
+    while lines and lines[0].strip() in ENV_GUARD_LINES:
+        lines = lines[1:]
+    return "\n".join(lines).strip()
 
 
 @dataclass(frozen=True)
@@ -545,10 +569,15 @@ def _trusted_plugin_script(token: str) -> Path | None:
     return resolved
 
 
-def _has_validated_exporter_bootstrap(command: str) -> bool:
-    """Match an exact shipped bootstrap that derives ``_EXPORTER`` read-only."""
+def _has_validated_bootstrap_block(command: str) -> bool:
+    """Match an exact shipped bootstrap block that runs ``bootstrap_env.py``.
+
+    The hint-prefixed bootstrap may only run as the verbatim block shipped in
+    a SKILL.md code fence; any edited variant loses the exemption and falls
+    back to the strict path checks.
+    """
     candidate = command.strip()
-    if '_EXPORTER="$(python3 -X utf8 -c' not in candidate or '$_EXPORTER' not in candidate:
+    if "/scripts/bootstrap_env.py" not in candidate or "_PLUGIN_ROOT_HINT" not in candidate:
         return False
     fence_pattern = re.compile(
         r"^```(?:bash|sh)\s*$\n(.*?)^```\s*$",
@@ -563,8 +592,8 @@ def _has_validated_exporter_bootstrap(command: str) -> bool:
                 shipped = match.group(1).strip()
                 if (
                     shipped == candidate
-                    and '_EXPORTER="$(python3 -X utf8 -c' in shipped
-                    and '$_EXPORTER' in shipped
+                    and "/scripts/bootstrap_env.py" in shipped
+                    and "_PLUGIN_ROOT_HINT" in shipped
                 ):
                     return True
     except OSError:
@@ -605,10 +634,10 @@ def _python_script_execution_is_trusted(
             remaining[2:],
         )
     script = remaining[0]
-    if script in {"$_EXPORTER", "${_EXPORTER}"}:
+    if script in BOOTSTRAP_SCRIPT_TOKENS:
         return (
-            remaining[1:] == ["--format", "json"]
-            and _has_validated_exporter_bootstrap(complete_command)
+            remaining[1:] == []
+            and _has_validated_bootstrap_block(complete_command)
         )
     return _trusted_plugin_script(script) is not None
 
@@ -997,6 +1026,10 @@ def _command_is_read_only_protected(
             or words[0].value.replace("\\", "/") in TRUSTED_PYTHON_ENV_TOKENS
         ):
             continue
+        if executable == ":":
+            # POSIX no-op；重定向已在上方统一拒绝，${VAR:?} 展开无副作用，
+            # 嵌套 $() 会作为独立命令另行校验。
+            continue
         if executable in {"test", "["}:
             if executable == "[" and (not values or values[-1] != "]"):
                 return False
@@ -1146,6 +1179,9 @@ def _command_mentions_protected_runtime(command: str) -> bool:
 
 
 def _looks_like_runtime_bypass(command: str, *, base_directory: Path) -> bool:
+    # 规范守卫行是 skill 代码块的首行断链自检（: "${VAR:?...}"），对判定透明；
+    # 仅剥离与随包文本逐字一致的行，改写过的变体不享受豁免、照常全文扫描。
+    command = _strip_env_guard_lines(command)
     if _command_is_runtime_safe(command):
         return False
     if _command_is_read_only_protected(command):

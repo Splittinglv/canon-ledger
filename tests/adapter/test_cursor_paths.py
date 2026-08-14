@@ -136,12 +136,11 @@ def test_export_cursor_env_prints_json_data(monkeypatch, tmp_path):
 def test_all_skills_parse_cursor_environment_as_data_without_cache_discovery():
     skill_files = sorted((PLUGIN_ROOT / "skills").glob("canon-ledger-*/SKILL.md"))
 
-    assert len(skill_files) == 8
+    assert len(skill_files) == 9
     for skill_file in skill_files:
         text = skill_file.read_text(encoding="utf-8")
-        assert "canon-ledger-cursor-env/v1" in text, skill_file
-        assert 'payload["python_executable"]' in text, skill_file
-        assert 'CANON_LEDGER_PYTHON' in text, skill_file
+        assert "scripts/bootstrap_env.py" in text, skill_file
+        assert "IFS= read -r CANON_LEDGER_PYTHON" in text, skill_file
         assert '"${CANON_LEDGER_PYTHON}"' in text, skill_file
         assert "WEBNOVEL_" not in text, skill_file
         assert "CLAUDE" not in text.upper(), skill_file

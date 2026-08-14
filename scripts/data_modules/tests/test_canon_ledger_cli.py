@@ -388,7 +388,8 @@ def test_human_review_cli_lists_and_records_decisions(
         module.main()
     assert int(exc.value.code or 0) == 0
     listed = json.loads(capsys.readouterr().out)
-    assert listed["pending"][0]["decision_id"] == "alice-location-check"
+    # 队列 ID 带章节前缀防跨章串单；resolve 仍接受无歧义短 ID。
+    assert listed["pending"][0]["decision_id"] == "ch0003-alice-location-check"
 
     decisions_path = project_root / "human-decisions.json"
     decisions_path.write_text(
@@ -422,7 +423,7 @@ def test_human_review_cli_lists_and_records_decisions(
         module.main()
     assert int(exc.value.code or 0) == 0
     resolved = json.loads(capsys.readouterr().out)
-    assert resolved["recorded"] == ["alice-location-check"]
+    assert resolved["recorded"] == ["ch0003-alice-location-check"]
     assert "chapter-commit" in resolved["next_action"]
     assert service.list_items(3)[0]["status"] == "ignore"
 

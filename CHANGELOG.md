@@ -1,5 +1,38 @@
 # 更新日志
 
+## v7.1.0 - 人工确认走对话、提交链与确认链全链路加固
+
+发版范围：`v7.0.2..v7.1.0`。
+
+### 给作者看的变化
+
+- 新增 `/canon-ledger-confirm N`：章末排队的歧义候选事实（谁知道了什么、谁在哪、东西在谁手里）现在直接在对话里逐条确认，看证据原文选 confirm / ignore / replace 即可，不再需要手写裁决 JSON、跑 CLI、再手动重跑提交。
+- 裁决保存后系统自动重放本章提交：已确认事实升级为 `verified` 进入正史，故事资料自动重建；正文改过的章节会被拒绝重放并提示重新走写作链。
+- 提交不再静默半途而废：提交时故事资料（读模型）没跟上正史会立刻报错并给出修复命令，下次写作前也会检查这种缺口并阻断，不会出现「正文提交了、资料悄悄缺一块」。
+- 确认真正生效才算完成：确认报告区分「已裁决未生效」与「已生效」，只保存裁决没有重放会被点名要求补重放；重复运行确认不会把已确认事实降级回未确认。
+- 确认单与内容双重绑定：正文改动或候选事实变化后，旧裁决自动失效回待确认；不同章节的同名确认单不会串单，短编号有歧义时直接报错。
+- replace 裁决锁定事件类型与主体，替换表述必须携带正文证据，杜绝借「替换」注入无证据事实。
+- 同一信息编号在同一章出现两种说法会直接报错；跨章说法不一致会转人工确认，作者裁决后以确认的说法为准更正故事资料。
+- 静默写入护栏：状态变化（境界、位置等）改动已记录字段时必须声明旧值且与记录一致；实体不能悄悄变类型；所有带证据引用的事实必须真的出现在本章正文里。
+- 写章和审查的最终报告在有待确认项时会直接给出 `/canon-ledger-confirm N` 命令。
+- 起草约束更明确：占位正文、时间无故回跳、上章未闭合问题无承接、能力道具情报超出记录，都会在起草阶段就被要求避免。
+- Skill 命令块自带环境自检：调用器没有在同一个 shell 会话里先跑环境引导时，会得到一条明确的中文报错，而不是变量为空的随机失败。
+
+### 给维护者
+
+- 新增 `chapter-commit --chapter N --from-last-commit`：从该章 commit 文件内保存的四份 artifact 重放 `build_commit`，与四个 artifact 路径参数互斥；重放前仍校验正文绑定，失效即拒绝。
+- `chapter_commit.py`：`apply_projections` 抛异常，或 accepted commit 的投影状态存在 `pending`/`failed:*` 时非零退出，并输出 `projections retry --chapter N` 修复指引。
+- 新增 `projection_rebuild.projection_coverage_gaps`：检测 accepted commit 未进投影清单（或快照哈希不符）的缺口；prewrite gate 以 `projection_coverage_gap` 阻断新章写作，`projection_snapshot_requires_rebuild` 在前缀有洞时强制整体重建。
+- `human_review`：裁决账本记录 `candidate_fingerprint` 与 `verified_event_id/sha256`；`decision_id` 统一按 `chNNNN-` 章节命名空间（`resolve` 接受无歧义短 ID，多章同名报 `ambiguous`）；`replace` 校验事件类型、主体不变且携带 `evidence_quote`；重放按已记录内容哈希保持 `verified` 不降级。
+- `chapter_commit_service`：新增 `_information_conflict_items`（同章两种 claim 硬错、跨章 claim 不一致生成合成待确认项转人工）、`_validate_state_delta_chain`（旧值链校验）、`_validate_entity_type_stability`（实体类型稳定性）；证据入章校验扩展到所有带 `evidence_quote` 的事件类型。
+- `canonical_history`：人工裁决产生的 `verified` 知识事件可更正 information 行的 `canonical_claim`（人工表述优先于模型换述）。
+- `user-report` 新增 `confirm` 阶段，并对比 commit provenance 的 `resolved_decision_ids` 报告「裁决已保存但尚未生效」。
+- 新增受信引导脚本 `scripts/bootstrap_env.py`：复用 `export_cursor_env.py` 的清单校验，输出六行行协议。9 个 SKILL.md 的约 80 行引导样板收敛为逐字一致的 28 行短样板，新增 prompt_integrity 一致性测试防再漂移。
+- 9 个 SKILL.md 的全部 59 个非引导 bash 块首行注入 `: "${VAR:?…}"` 环境守卫行（用到 `PROJECT_ROOT` 的块额外校验之）；`hooks/guard_runtime_write.py` 将与随包文本逐字一致的守卫行视为判定透明前缀，改写变体不享受豁免；prompt_integrity 与 hooks 测试固化该契约。
+- `hooks/guard_runtime_write.py`：`TRUSTED_PLUGIN_SCRIPT_NAMES` 加入 `bootstrap_env.py`，`$_EXPORTER` 旧分支替换为 `_has_validated_bootstrap_block`（hint 路径执行仅放行与随包 SKILL.md 逐字一致的引导块）。
+- `human-review` 子命令登记进 prompt_integrity 的 CLI 注册表。
+- 删除挂空的 `references/shared/core-constraints.md`，其防幻觉硬约束并入 write skill Step 2，loading map 登记删除记录。
+
 ## v7.0.2 - 收口残留的写法口径并保住设定事实
 
 发版范围：`v7.0.1..v7.0.2`。

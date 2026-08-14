@@ -28,66 +28,13 @@ description: 基于总纲规划卷纲、时间线和章纲，并把新增设定�
 ```bash
 # 这段引导仅适用于 POSIX shell（sh/bash/zsh）；Windows 请使用 Git Bash 或 WSL。
 # 缓存安装必须使用 Cursor 注入的插件根；不扫描缓存目录寻找可执行脚本。
+# bootstrap_env.py 输出固定六行数据协议：逐行 read 赋值，禁止 eval/source 执行输出。
 _PLUGIN_ROOT_HINT="${CANON_LEDGER_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-}}"
 if [ -z "$_PLUGIN_ROOT_HINT" ]; then
   _PLUGIN_ROOT_HINT="${HOME}/.cursor/plugins/local/canon-ledger"
 fi
-_EXPORTER="$(python3 -X utf8 -c '
-import json, sys
-from pathlib import Path
-try:
-    root = Path(sys.argv[1]).expanduser().resolve()
-    manifest = json.loads((root / ".cursor-plugin" / "plugin.json").read_text(encoding="utf-8"))
-    exporter = (root / "scripts" / "export_cursor_env.py").resolve()
-except (OSError, ValueError, json.JSONDecodeError):
-    raise SystemExit(1)
-if manifest.get("name") != "canon-ledger":
-    raise SystemExit(1)
-if exporter.parent.parent != root or not exporter.is_file() or not (root / "scripts" / "canon_ledger.py").is_file():
-    raise SystemExit(1)
-print(exporter)
-' "$_PLUGIN_ROOT_HINT")" || {
+_ENV_LINES="$(python3 -X utf8 "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py")" || {
   echo "ERROR: 插件根不可信或安装不完整。请使用 Cursor 注入的插件根，或安装到 ~/.cursor/plugins/local/canon-ledger" >&2
-  exit 1
-}
-_ENV_JSON="$(python3 -X utf8 "$_EXPORTER" --format json)" || exit 1
-_ENV_LINES="$(printf '%s' "$_ENV_JSON" | python3 -X utf8 -c '
-import json, sys
-from pathlib import Path
-keys = (
-    "CANON_LEDGER_PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT",
-    "SCRIPTS_DIR", "WORKSPACE_ROOT", "CURSOR_PROJECT_DIR",
-)
-try:
-    payload = json.load(sys.stdin)
-    environment = payload["environment"]
-    python_executable = payload["python_executable"]
-except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-    raise SystemExit(1)
-if payload.get("schema_version") != "canon-ledger-cursor-env/v1" or not isinstance(environment, dict):
-    raise SystemExit(1)
-if set(environment) != set(keys):
-    raise SystemExit(1)
-values = [environment[key] for key in keys]
-if any(not isinstance(value, str) or not value or any(char in value for char in "\x00\r\n") for value in values):
-    raise SystemExit(1)
-if (
-    not isinstance(python_executable, str)
-    or not python_executable
-    or any(char in python_executable for char in "\x00\r\n")
-    or not Path(python_executable).is_absolute()
-    or not Path(python_executable).is_file()
-):
-    raise SystemExit(1)
-if (
-    values[1] != values[0]
-    or values[2] != str(Path(values[0]) / "scripts")
-    or values[4] != values[3]
-):
-    raise SystemExit(1)
-sys.stdout.write("\n".join([*values, python_executable]) + "\n")
-')" || {
-  echo "ERROR: export_cursor_env.py 返回了无效环境协议" >&2
   exit 1
 }
 _ENV_PARSE_OK=1
@@ -106,13 +53,16 @@ if [ "$_ENV_PARSE_OK" -ne 1 ]; then
   exit 1
 fi
 export CANON_LEDGER_PLUGIN_ROOT CURSOR_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR CANON_LEDGER_PYTHON
-unset _PLUGIN_ROOT_HINT _EXPORTER _ENV_JSON _ENV_LINES _ENV_PARSE_OK
+unset _PLUGIN_ROOT_HINT _ENV_LINES _ENV_PARSE_OK
+```
+
+```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
 export SKILL_ROOT="${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-plan"
 export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${WORKSPACE_ROOT}" where)"
 
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" placeholder-scan --format text
 ```
-
 规划开始 / 结束都运行 `placeholder-scan`；plan 阶段发现占位先警告并补齐相关文件，进入写章前不得保留当前章相关实体的 `[待...]` / `暂名` / `{占位}`。
 
 ## 读取策略（按阶段触发，不预读全部 reference）
@@ -128,6 +78,7 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py"
 CSV 检索只用于命名区分，不 `cat` 整表。插件只随包发布命名规则、人设与关系、金手指与设定三张一致性表，不提供写法、桥段或爽点表。
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill plan --table 命名规则 --query "角色命名" --genre "${GENRE}"
 ```
 
@@ -136,6 +87,7 @@ CSV 检索只用于命名区分，不 `cat` 整表。插件只随包发布命名
 ### Step 1：加载项目数据并确认前置条件
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 # 项目配置/投影状态（兼容读取，不作为写后事实真源）
 cat "$PROJECT_ROOT/.canon-ledger/state.json"
 
@@ -151,6 +103,7 @@ GENRE="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import json; s=json.load(open('${P
 **跨卷状态读取**（已有已完成卷，即 `.canon-ledger/summaries/` 下有文件时必须执行）：
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 # 最近 5 章摘要
 for ch in $(seq $((START_CH - 5)) $((START_CH - 1))); do
   cat "$PROJECT_ROOT/.canon-ledger/summaries/ch$(printf '%04d' $ch).md" 2>/dev/null
@@ -265,6 +218,7 @@ done
 执行最小总纲写回（只更新 `大纲/总纲.md` 的 V+1 卷名 / 卷内目标 / 预期结束状态与伏笔表，不生成下一卷详细大纲 / 卷内事实规划表 / 时间线 / 章纲）：
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py" --project-root "$PROJECT_ROOT" master-outline-sync \
   --volume {volume_id} \
   --writeback-file "大纲/第{volume_id}卷-总纲写回.json" \
@@ -274,6 +228,7 @@ done
 更新状态：
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py" --project-root "$PROJECT_ROOT" update-state -- \
   --volume-planned {volume_id} \
   --chapters-range "{start}-{end}"
@@ -284,6 +239,7 @@ done
 genre 从 `state.json` 初始化配置快照读取；写前主链真源是 `.story-system/` 合同树。必须先从详细大纲解析真实 `CHAPTER_GOAL`，禁止传 `{章纲目标}` / `第N章章纲目标` 这类占位文本。
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 GENRE="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import json; s=json.load(open('${PROJECT_ROOT}/.canon-ledger/state.json',encoding='utf-8')); pi=s.get('project_info',{}); print(pi.get('genre') or s.get('project',{}).get('genre',''))")"
 CHAPTER_GOAL="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); from chapter_outline_loader import load_chapter_execution_directive; directive=load_chapter_execution_directive(Path(sys.argv[2]),int(sys.argv[3])); goal=str(directive.get('goal') or '').strip(); print(goal) if goal else sys.exit(2)" "${SCRIPTS_DIR}" "${PROJECT_ROOT}" "{chapter_num}")" || {
   echo "错误：详细大纲缺少本章真实目标，停止刷新合同。" >&2
@@ -317,6 +273,7 @@ CHAPTER_GOAL="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import sys; from pathlib im
 规划开始前先说明本次会经历：检查总纲与设定 -> 生成卷内事实规划表 -> 生成时间线 -> 拆章纲 -> 写回新增设定 -> 刷新写作合同。过程提示用作者语言，不直接输出原始 JSON、traceback 或长命令日志；技术详情写入 `.canon-ledger/logs/run_last.log`：
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" run-log \
   --event plan-progress \
   --payload-json "{\"stage\": \"plan\", \"volume\": {volume_id}}" \
@@ -330,6 +287,7 @@ CHAPTER_GOAL="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import sys; from pathlib im
 不可恢复故障才在最终报告提示 `.canon-ledger/logs/run_last.log`；平时只保留日志，不打扰作者。收尾必须调用作者报告 helper：
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" user-report \
   --stage plan \
   --volume {volume_id} \

@@ -88,6 +88,30 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
             )
         )
 
+    from ..projection_rebuild import projection_coverage_gaps
+
+    coverage_gaps = projection_coverage_gaps(project_root, before_chapter=chapter)
+    if coverage_gaps:
+        first_gap = coverage_gaps[0]
+        errors.append(
+            issue(
+                "projection_coverage_gap",
+                message=(
+                    f"第 {first_gap['chapter']} 章的已接受提交尚未完整写入读模型"
+                    f"（{first_gap['reason']}）"
+                ),
+                impact=(
+                    "正史事实与读模型当前不一致，继续写作会用缺失前文事实的"
+                    "旧读模型做审查与抽取。"
+                ),
+                repair=(
+                    f"先补齐投影：canon_ledger.py projections retry "
+                    f"--chapter {first_gap['chapter']}"
+                ),
+                details={"gaps": coverage_gaps},
+            )
+        )
+
     runtime = load_runtime_sources(project_root, chapter)
     contracts = runtime.contracts
     story_contract = {

@@ -24,6 +24,7 @@ from filelock import FileLock
 from .chapter_content_binding import verify_commit_content_binding
 from .commit_artifacts import extraction_list, extraction_text
 from .commit_lineage import (
+    VALIDATION_NEEDS_REVALIDATION,
     canonical_snapshot_hash,
     stamp_and_partition_commits,
 )
@@ -131,6 +132,55 @@ def _manifest_entries(commits: list[dict[str, Any]]) -> dict[str, str]:
     }
 
 
+def projection_coverage_gaps(
+    project_root: str | Path,
+    *,
+    before_chapter: int | None = None,
+) -> list[dict[str, Any]]:
+    """Accepted commits whose facts are not reflected by installed read models.
+
+    A crash or writer failure can leave an accepted commit on disk while the
+    projection manifest never records it.  Canonical history would then include
+    facts that every derived read model is missing.  This check makes that
+    fracture detectable (write gates) and repairable (rebuild triggers).
+    """
+    root = Path(project_root).expanduser().resolve()
+    manifest = read_json_if_exists(projection_manifest_path(root))
+    chapters: dict[str, Any] = {}
+    if isinstance(manifest, dict) and manifest.get("schema_version") == MANIFEST_SCHEMA:
+        raw_chapters = manifest.get("chapters")
+        if isinstance(raw_chapters, dict):
+            chapters = raw_chapters
+    gaps: list[dict[str, Any]] = []
+    for path in sorted(_commit_dir(root).glob("chapter_*.commit.json")):
+        chapter = _chapter_from_filename(path)
+        if chapter <= 0:
+            continue
+        if before_chapter is not None and chapter >= int(before_chapter):
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            gaps.append({"chapter": chapter, "reason": "invalid_commit_json"})
+            continue
+        if not isinstance(payload, dict):
+            gaps.append({"chapter": chapter, "reason": "commit_not_object"})
+            continue
+        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        if str(meta.get("status") or "") != "accepted":
+            continue
+        if str(meta.get("validation_status") or "") == VALIDATION_NEEDS_REVALIDATION:
+            # A rewritten-prefix chapter is handled by the revalidation gate,
+            # not by projection retries.
+            continue
+        recorded = str(chapters.get(str(chapter)) or "")
+        if not recorded:
+            gaps.append({"chapter": chapter, "reason": "projection_not_recorded"})
+        elif recorded != canonical_snapshot_hash(payload):
+            gaps.append({"chapter": chapter, "reason": "projection_snapshot_mismatch"})
+    return gaps
+
+
 def projection_snapshot_requires_rebuild(
     project_root: str | Path,
     payload: dict[str, Any],
@@ -171,6 +221,11 @@ def projection_snapshot_requires_rebuild(
     if not isinstance(chapters, dict):
         return True
     chapter = str(int((payload.get("meta") or {}).get("chapter") or 0))
+    # An earlier accepted commit that never reached the read models leaves a
+    # hole in the ordered prefix; appending on top would stamp facts derived
+    # from an incomplete canon, so rebuild first.
+    if projection_coverage_gaps(project_root, before_chapter=int(chapter)):
+        return True
     previous = str(chapters.get(chapter) or "")
     if previous:
         return previous != canonical_snapshot_hash(payload)

@@ -545,7 +545,7 @@ def main() -> None:
     p_projection_replay.set_defaults(func=cmd_projections)
 
     p_user_report = sub.add_parser("user-report", help="渲染作者友好的最终报告")
-    p_user_report.add_argument("--stage", choices=["init", "plan", "write", "review"], required=True, help="报告阶段")
+    p_user_report.add_argument("--stage", choices=["init", "plan", "write", "review", "confirm"], required=True, help="报告阶段")
     p_user_report.add_argument("--chapter", type=int, default=None, help="目标章节号")
     p_user_report.add_argument("--volume", type=int, default=None, help="目标卷号")
     p_user_report.add_argument("--format", choices=["text", "json"], default="text", help="输出格式")
@@ -651,6 +651,11 @@ def main() -> None:
 
     p_commit = sub.add_parser("chapter-commit", help="转发到 chapter_commit.py")
     p_commit.add_argument("--chapter", type=int, required=True, help="目标章节号")
+    p_commit.add_argument(
+        "--from-last-commit",
+        action="store_true",
+        help="从本章上次提交文件重放（人工裁决后重新提交，与四个 artifact 参数互斥）",
+    )
     p_commit.add_argument("--review-result", default="", help="review_result JSON 文件")
     p_commit.add_argument("--fulfillment-result", default="", help="fulfillment_result JSON 文件")
     p_commit.add_argument("--disambiguation-result", default="", help="disambiguation_result JSON 文件")
@@ -752,6 +757,8 @@ def main() -> None:
         raise SystemExit(_run_script("story_events.py", return_args))
     if tool == "chapter-commit":
         return_args = [*forward_args, "--chapter", str(args.chapter)]
+        if args.from_last_commit:
+            return_args.append("--from-last-commit")
         if args.review_result:
             return_args.extend(["--review-result", str(args.review_result)])
         if args.fulfillment_result:

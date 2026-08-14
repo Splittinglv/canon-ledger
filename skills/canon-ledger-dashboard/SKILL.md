@@ -18,66 +18,13 @@ description: 启动只读可视化面板，浏览项目状态、实体图谱、�
 ```bash
 # 这段引导仅适用于 POSIX shell（sh/bash/zsh）；Windows 请使用 Git Bash 或 WSL。
 # 缓存安装必须使用 Cursor 注入的插件根；不扫描缓存目录寻找可执行脚本。
+# bootstrap_env.py 输出固定六行数据协议：逐行 read 赋值，禁止 eval/source 执行输出。
 _PLUGIN_ROOT_HINT="${CANON_LEDGER_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-}}"
 if [ -z "$_PLUGIN_ROOT_HINT" ]; then
   _PLUGIN_ROOT_HINT="${HOME}/.cursor/plugins/local/canon-ledger"
 fi
-_EXPORTER="$(python3 -X utf8 -c '
-import json, sys
-from pathlib import Path
-try:
-    root = Path(sys.argv[1]).expanduser().resolve()
-    manifest = json.loads((root / ".cursor-plugin" / "plugin.json").read_text(encoding="utf-8"))
-    exporter = (root / "scripts" / "export_cursor_env.py").resolve()
-except (OSError, ValueError, json.JSONDecodeError):
-    raise SystemExit(1)
-if manifest.get("name") != "canon-ledger":
-    raise SystemExit(1)
-if exporter.parent.parent != root or not exporter.is_file() or not (root / "scripts" / "canon_ledger.py").is_file():
-    raise SystemExit(1)
-print(exporter)
-' "$_PLUGIN_ROOT_HINT")" || {
+_ENV_LINES="$(python3 -X utf8 "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py")" || {
   echo "ERROR: 插件根不可信或安装不完整。请使用 Cursor 注入的插件根，或安装到 ~/.cursor/plugins/local/canon-ledger" >&2
-  exit 1
-}
-_ENV_JSON="$(python3 -X utf8 "$_EXPORTER" --format json)" || exit 1
-_ENV_LINES="$(printf '%s' "$_ENV_JSON" | python3 -X utf8 -c '
-import json, sys
-from pathlib import Path
-keys = (
-    "CANON_LEDGER_PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT",
-    "SCRIPTS_DIR", "WORKSPACE_ROOT", "CURSOR_PROJECT_DIR",
-)
-try:
-    payload = json.load(sys.stdin)
-    environment = payload["environment"]
-    python_executable = payload["python_executable"]
-except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-    raise SystemExit(1)
-if payload.get("schema_version") != "canon-ledger-cursor-env/v1" or not isinstance(environment, dict):
-    raise SystemExit(1)
-if set(environment) != set(keys):
-    raise SystemExit(1)
-values = [environment[key] for key in keys]
-if any(not isinstance(value, str) or not value or any(char in value for char in "\x00\r\n") for value in values):
-    raise SystemExit(1)
-if (
-    not isinstance(python_executable, str)
-    or not python_executable
-    or any(char in python_executable for char in "\x00\r\n")
-    or not Path(python_executable).is_absolute()
-    or not Path(python_executable).is_file()
-):
-    raise SystemExit(1)
-if (
-    values[1] != values[0]
-    or values[2] != str(Path(values[0]) / "scripts")
-    or values[4] != values[3]
-):
-    raise SystemExit(1)
-sys.stdout.write("\n".join([*values, python_executable]) + "\n")
-')" || {
-  echo "ERROR: export_cursor_env.py 返回了无效环境协议" >&2
   exit 1
 }
 _ENV_PARSE_OK=1
@@ -96,7 +43,11 @@ if [ "$_ENV_PARSE_OK" -ne 1 ]; then
   exit 1
 fi
 export CANON_LEDGER_PLUGIN_ROOT CURSOR_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR CANON_LEDGER_PYTHON
-unset _PLUGIN_ROOT_HINT _EXPORTER _ENV_JSON _ENV_LINES _ENV_PARSE_OK
+unset _PLUGIN_ROOT_HINT _ENV_LINES _ENV_PARSE_OK
+```
+
+```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
 export SKILL_ROOT="${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-dashboard"
 export DASHBOARD_DIR="${CANON_LEDGER_PLUGIN_ROOT}/dashboard"
 if [ ! -d "${DASHBOARD_DIR}" ]; then
@@ -104,10 +55,10 @@ if [ ! -d "${DASHBOARD_DIR}" ]; then
   exit 1
 fi
 ```
-
 ### Step 2：解析项目根目录
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
 export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${WORKSPACE_ROOT}" where)"
 echo "项目路径: ${PROJECT_ROOT}"
 ```
@@ -117,6 +68,7 @@ echo "项目路径: ${PROJECT_ROOT}"
 ### Step 3：校验前端产物与依赖
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
 if [ -n "${PYTHONPATH:-}" ]; then
   export PYTHONPATH="${CANON_LEDGER_PLUGIN_ROOT}:${PYTHONPATH}"
 else
@@ -132,12 +84,14 @@ fi
 不默认安装依赖。仅当 Step 4 因缺依赖启动失败时，提示用户手动执行：
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" -m pip install -r "${DASHBOARD_DIR}/requirements.txt"
 ```
 
 ### Step 4：启动 Dashboard
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" -m dashboard.server --project-root "${PROJECT_ROOT}"
 ```
 

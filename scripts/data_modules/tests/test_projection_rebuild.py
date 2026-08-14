@@ -384,7 +384,7 @@ def test_rewriting_history_marks_later_chapters_needs_revalidation(tmp_path):
         body="周宁在追逐中丢失兵器，只能空手返回。",
         extraction={
             "state_deltas": [
-                {"entity_id": "周宁", "field": "weapon", "new": "无"}
+                {"entity_id": "周宁", "field": "weapon", "old": "短刀", "new": "无"}
             ],
             "entity_deltas": [
                 {"entity_id": "周宁", "canonical_name": "周宁", "entity_type": "角色"}
@@ -471,7 +471,7 @@ def test_export_asof_for_chapter_two_excludes_chapter_two_facts(tmp_path):
             body="周宁用钥匙打开暗门，悬念落地。",
             extraction={
                 "state_deltas": [
-                    {"entity_id": "周宁", "field": "weapon", "new": "无"}
+                    {"entity_id": "周宁", "field": "weapon", "old": "钥匙", "new": "无"}
                 ],
                 "accepted_events": [
                     {
@@ -495,3 +495,42 @@ def test_export_asof_for_chapter_two_excludes_chapter_two_facts(tmp_path):
     obligation_ids = [item.get("id") for item in snapshot["obligations"]]
     assert "loop-key" in obligation_ids
     assert all(item.get("status") == "active" for item in snapshot["obligations"])
+
+
+def test_coverage_gap_from_crashed_projection_is_detected_and_repaired(tmp_path):
+    """accepted commit 落盘但投影中断：缺口必须可检测、可修复。"""
+    from data_modules.projection_rebuild import projection_coverage_gaps
+    from data_modules.projections import retry_projection
+
+    first = _accepted_commit(
+        tmp_path,
+        chapter=1,
+        body="周宁从柜中取出一柄短刀。",
+        extraction={
+            "state_deltas": [
+                {"entity_id": "周宁", "field": "weapon", "new": "短刀"}
+            ],
+            "entity_deltas": [
+                {"entity_id": "周宁", "canonical_name": "周宁", "entity_type": "角色"}
+            ],
+        },
+    )
+    # 模拟 chapter_commit 在 persist 之后、投影之前崩溃。
+    ChapterCommitService(tmp_path).persist_commit(first)
+
+    gaps = projection_coverage_gaps(tmp_path)
+    assert [(gap["chapter"], gap["reason"]) for gap in gaps] == [
+        (1, "projection_not_recorded")
+    ]
+    assert projection_coverage_gaps(tmp_path, before_chapter=2) == gaps
+    # 缺口在当前章之前才算断链；写第 1 章本身不受影响。
+    assert projection_coverage_gaps(tmp_path, before_chapter=1) == []
+
+    report = retry_projection(tmp_path, chapter=1)
+    assert report["ok"] is True
+    assert projection_coverage_gaps(tmp_path) == []
+
+    state = json.loads(
+        (tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8")
+    )
+    assert state["entity_state"]["周宁"]["weapon"] == "短刀"

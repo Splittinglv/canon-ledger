@@ -32,6 +32,7 @@ AUTHOR_REPORT_SKILLS = (
     "canon-ledger-plan",
     "canon-ledger-write",
     "canon-ledger-review",
+    "canon-ledger-confirm",
 )
 SUBAGENT_RUN_FIELDS = (
     '"status": "completed | partial | failed | skipped"',
@@ -51,6 +52,7 @@ SUBAGENT_PROMPT_FILES = (
 # canon_ledger.py 注册的子命令（从 add_parser 提取）
 REGISTERED_CLI_SUBCOMMANDS = {
     "where", "preflight", "project-status", "doctor", "write-gate", "chapter-binding", "projections", "user-report",
+    "human-review",
     "run-ledger", "run-log", "use",
     "index", "state", "rag", "style", "entity", "context", "memory",
     "status", "update-state", "backup", "archive",
@@ -708,8 +710,84 @@ def test_canon_ledger_write_skill_routes_step2_through_writing_brief():
     assert "写作任务书" in text
     assert "context-agent" in text
     assert "Step 0.5" not in text
-    assert 'cat "${SKILL_ROOT}/../../references/shared/core-constraints.md"' not in text
+    assert "core-constraints" not in text
     assert 'cat "${SKILL_ROOT}/references/anti-ai-guide.md"' not in text
+
+
+def test_all_skill_bootstrap_blocks_are_verbatim_identical():
+    """所有 SKILL.md 的环境引导代码块必须逐字一致，防止再漂移。
+
+    hooks/guard_runtime_write.py 依靠与随包 SKILL.md 引导块逐字比对来放行
+    bootstrap_env.py 的 hint 路径执行；任何单文件漂移都会同时破坏放行与可维护性。
+    """
+    fence = re.compile(r"^```(?:bash|sh)\s*$\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
+    blocks: dict[str, str] = {}
+    for skill_path in SKILL_FILES:
+        text = skill_path.read_text(encoding="utf-8")
+        for match in fence.finditer(text):
+            body = match.group(1)
+            if "_PLUGIN_ROOT_HINT" in body:
+                blocks[skill_path.parent.name] = body
+                break
+        else:
+            pytest.fail(f"{skill_path.parent.name} 缺少环境引导代码块")
+
+    reference_name, reference = sorted(blocks.items())[0]
+    assert "scripts/bootstrap_env.py" in reference
+    assert not re.search(r"(?m)^\s*(?:eval|source)\s+", reference)
+    drifted = [name for name, body in sorted(blocks.items()) if body != reference]
+    assert not drifted, f"引导块与 {reference_name} 不一致：{'、'.join(drifted)}"
+
+
+def test_every_non_bootstrap_bash_block_starts_with_env_guard():
+    """每个非引导 bash 块首行必须是规范环境守卫行。
+
+    守卫行（: "${VAR:?…}"）把「调用器换了 shell、引导块没在本会话跑过」的
+    静默断链变成一条确定性中文报错。守卫文本必须与
+    hooks/guard_runtime_write.py 的 ENV_GUARD_LINES 逐字一致，hook 才会把它
+    当作透明前缀剥离；任何漂移都会导致真实块被误拦。
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "_hooks_guard_runtime_write", PLUGIN_ROOT / "hooks" / "guard_runtime_write.py"
+    )
+    guard_module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = guard_module
+    try:
+        spec.loader.exec_module(guard_module)
+        hook_guards: set[str] = set(guard_module.ENV_GUARD_LINES)
+        guard_python_only = guard_module._ENV_GUARD_G1
+        guard_with_project_root = guard_module._ENV_GUARD_G2
+    finally:
+        sys.modules.pop(spec.name, None)
+
+    fence = re.compile(r"^```bash\s*$\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
+    problems: list[str] = []
+    for skill_path in SKILL_FILES:
+        text = skill_path.read_text(encoding="utf-8")
+        for index, match in enumerate(fence.finditer(text), 1):
+            body = match.group(1)
+            if "_PLUGIN_ROOT_HINT" in body:
+                continue
+            label = f"{skill_path.parent.name} 第 {index} 个 bash 块"
+            first_line = body.lstrip("\n").split("\n", 1)[0]
+            if first_line not in hook_guards:
+                problems.append(f"{label}：首行不是规范守卫行")
+                continue
+            rest = body.split("\n", 1)[1] if "\n" in body else ""
+            uses_project_root = bool(re.search(r"\$\{?PROJECT_ROOT", rest))
+            assigns_project_root = bool(
+                re.search(r"^(?:export\s+)?PROJECT_ROOT=", rest, re.MULTILINE)
+            )
+            expected = (
+                guard_with_project_root
+                if uses_project_root and not assigns_project_root
+                else guard_python_only
+            )
+            if first_line != expected:
+                problems.append(f"{label}：守卫行与变量用法不匹配")
+    assert not problems, "；".join(problems)
 
 
 def test_context_agent_and_write_skill_form_isolated_write_chain():

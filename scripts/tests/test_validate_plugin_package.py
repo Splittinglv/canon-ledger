@@ -22,6 +22,7 @@ from validate_plugin_package import validate_package  # noqa: E402
 SOURCE_ROOT = SCRIPTS_DIR.parent
 PRODUCT_REPOSITORY_URL = "https://github.com/Splittinglv/canon-ledger"
 CORE_SURFACES = (
+    "confirm",
     "dashboard",
     "doctor",
     "init",

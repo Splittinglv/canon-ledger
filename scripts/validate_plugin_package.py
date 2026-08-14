@@ -22,6 +22,7 @@ KEBAB_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SEMVER_RE = sync_plugin_version.VERSION_PATTERN
 LOCAL_ABSOLUTE_RE = re.compile(r"(?i)(?:[a-z]:\\users\\|/users/[^/\s]+/|/home/[^/\s]+/)")
 CORE_SURFACES = (
+    "confirm",
     "dashboard",
     "doctor",
     "init",
@@ -703,9 +704,9 @@ def _check_core_identity_surfaces(root: Path, issues: list[dict[str, str]]) -> N
         issues.append(
             _issue(
                 "identity.command_set",
-                message=f"命令集必须恰好包含 8 个 CanonLedger 核心命令，当前为：{sorted(actual_commands)}",
+                message=f"命令集必须恰好包含 {len(expected_names)} 个 CanonLedger 核心命令，当前为：{sorted(actual_commands)}",
                 path=str(command_root),
-                repair="恢复 canon-ledger-dashboard/doctor/init/learn/plan/query/review/write。",
+                repair="恢复 canon-ledger-confirm/dashboard/doctor/init/learn/plan/query/review/write。",
             )
         )
     for name in sorted(expected_names):
@@ -732,9 +733,9 @@ def _check_core_identity_surfaces(root: Path, issues: list[dict[str, str]]) -> N
         issues.append(
             _issue(
                 "identity.skill_set",
-                message=f"Skill 集必须恰好包含 8 个 CanonLedger 核心 Skill，当前为：{sorted(actual_skills)}",
+                message=f"Skill 集必须恰好包含 {len(expected_names)} 个 CanonLedger 核心 Skill，当前为：{sorted(actual_skills)}",
                 path=str(skill_root),
-                repair="恢复 8 个 canon-ledger-* Skill。",
+                repair=f"恢复 {len(expected_names)} 个 canon-ledger-* Skill。",
             )
         )
     for name in sorted(expected_names):

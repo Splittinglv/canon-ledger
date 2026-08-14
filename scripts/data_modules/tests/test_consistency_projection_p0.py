@@ -892,7 +892,11 @@ def test_retry_rebuilds_canonical_corpus_and_keeps_newer_state(tmp_path):
     _commit(
         tmp_path,
         10,
-        {"state_deltas": [{"entity_id": "hero", "field": "realm", "new": "金丹"}]},
+        {
+            "state_deltas": [
+                {"entity_id": "hero", "field": "realm", "old": "炼气", "new": "金丹"}
+            ]
+        },
     )
 
     old["projection_status"]["state"] = "failed:temporary"

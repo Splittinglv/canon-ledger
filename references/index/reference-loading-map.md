@@ -69,6 +69,7 @@
 | 文件 | 现状 |
 |------|------|
 | 原 `optional/canon-ledger-craft/` 下写法/追读力/Anti-AI/润色 md | 已从插件删除 |
+| 原 `references/shared/core-constraints.md` | 已从插件删除。其中仍有价值的防幻觉硬约束（禁止占位正文、时间不回跳、未闭合问题承接、能力/道具/情报不超记录）已并入 `skills/canon-ledger-write/SKILL.md` Step 2 起草段 |
 | CSV `场景写法` / `写作技法` / `桥段套路` / `爽点与节奏` / `裁决规则` / `题材与调性推理` | 已从插件删除。`reference_search` 仍保留表名黑名单，用于挡住作者自行放入 `references/csv/` 的写法类表 |
 | `skills/canon-ledger-plan/references/outlining/conflict-design.md` | 文件仍在，但 plan skill 明确不加载冲突设计教程 |
 | `skills/canon-ledger-review/references/common-mistakes.md` | 未在当前 review 流程中直接加载 |

@@ -369,7 +369,12 @@ def test_historical_context_and_supplementary_queries_never_read_future_commit(t
         2,
         {
             "state_deltas": [
-                {"entity_id": "linzhou", "field": "location", "new": "南港"}
+                {
+                    "entity_id": "linzhou",
+                    "field": "location",
+                    "old": "北城",
+                    "new": "南港",
+                }
             ],
             "accepted_events": [
                 {
@@ -508,7 +513,9 @@ def test_asof_replays_knowledge_physical_presence_and_custody(tmp_path):
                     "subject": "baizhi",
                     "payload": {
                         "information_id": "clocktower-secret-door",
-                        "canonical_claim": "钟楼下方藏有密门",
+                        # 与第 1 章既往表述一致：这里验证同一信息扩散给新实体，
+                        # 表述不一致的场景由 information_id 冲突专测覆盖。
+                        "canonical_claim": "密门在钟楼下",
                         "evidence_fragment": "密门就在钟楼下面",
                         "state": "known",
                         "source_kind": "told",

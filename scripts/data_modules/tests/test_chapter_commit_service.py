@@ -306,7 +306,11 @@ def test_commit_service_rejects_world_rule_without_matching_prose_evidence(tmp_p
     chapter_path.write_text("港城守卫宣读了一条没有具体内容的宵禁条例。", encoding="utf-8")
     service = ChapterCommitService(tmp_path)
 
-    with pytest.raises(ValueError, match="world_rule_evidence_untrusted"):
+    # 证据不在正文的事件在 build_commit 阶段（提交落盘前）就被拒绝，
+    # 不再等到投影期的 world_rule_evidence_untrusted 兜底。
+    with pytest.raises(
+        ValueError, match=r"accepted_events\[0\]\.payload\.evidence_quote"
+    ):
         _build_commit(
             service,
             tmp_path,
@@ -1268,3 +1272,522 @@ def test_projection_chain_rechecks_binding_between_writers(tmp_path, monkeypatch
     assert projected["projection_status"]["index"] == (
         "failed:chapter_content_changed"
     )
+
+
+def _run_chapter_commit_cli(monkeypatch, capsys, *argv):
+    scripts_dir = Path(__file__).resolve().parents[2]
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    from chapter_commit import main
+
+    monkeypatch.setattr(sys, "argv", ["chapter_commit", *argv])
+    main()
+    return json.loads(capsys.readouterr().out)
+
+
+def _committed_chapter_with_pending_presence(tmp_path):
+    """One full commit whose only presence event is parked in human review."""
+    chapter_path = tmp_path / "正文" / "第0003章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("爱丽丝抵达北城。", encoding="utf-8")
+    service = ChapterCommitService(tmp_path)
+    first = _build_commit(
+        service,
+        tmp_path,
+        chapter=3,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+        },
+        disambiguation_result={
+            "pending": [
+                {
+                    "decision_id": "alice-location-check",
+                    "category": "presence",
+                    "candidate_event_id": "alice-location",
+                    "reason": "这是否是实际抵达需要作者确认",
+                }
+            ]
+        },
+        extraction_result={
+            "state_deltas": [],
+            "entity_deltas": [],
+            "accepted_events": [
+                {
+                    "event_id": "alice-location",
+                    "chapter": 3,
+                    "sequence": 1,
+                    "event_type": "presence_observed",
+                    "subject": "alice",
+                    "payload": {
+                        "location_id": "north-city",
+                        "presence_kind": "physical",
+                        "evidence_quote": "爱丽丝抵达北城。",
+                    },
+                }
+            ],
+            "fact_coverage": {
+                "knowledge": "complete",
+                "presence": "complete",
+                "custody": "complete",
+            },
+            "fact_verification": {
+                "knowledge": "supported",
+                "presence": "supported",
+                "custody": "supported",
+            },
+        },
+    )
+    assert first["extraction_result"]["accepted_events"] == []
+    assert first["provenance"]["human_review"]["unresolved_count"] == 1
+    service.persist_commit(first)
+    service.apply_projections(first)
+    return service
+
+
+def test_from_last_commit_replays_confirmed_decision_and_reprojects(
+    tmp_path, monkeypatch, capsys
+):
+    _committed_chapter_with_pending_presence(tmp_path)
+
+    from data_modules.human_review import HumanReviewService
+
+    HumanReviewService(tmp_path).record(
+        {
+            "decisions": [
+                {
+                    "decision_id": "alice-location-check",
+                    "action": "confirm",
+                    "note": "作者确认这是实际抵达",
+                }
+            ]
+        }
+    )
+
+    payload = _run_chapter_commit_cli(
+        monkeypatch,
+        capsys,
+        "--project-root",
+        str(tmp_path),
+        "--chapter",
+        "3",
+        "--from-last-commit",
+    )
+
+    assert payload["meta"]["status"] == "accepted"
+    assert payload["disambiguation_result"]["pending"] == []
+    accepted = payload["extraction_result"]["accepted_events"]
+    assert [event["event_id"] for event in accepted] == ["alice-location"]
+    assert accepted[0]["verification"] == "verified"
+    assert payload["extraction_result"]["fact_verification"]["presence"] == "supported"
+    assert payload["provenance"]["human_review"]["verified_event_ids"] == [
+        "alice-location"
+    ]
+
+    persisted = json.loads(
+        (
+            tmp_path / ".story-system" / "commits" / "chapter_003.commit.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert persisted["extraction_result"]["accepted_events"][0]["verification"] == (
+        "verified"
+    )
+    assert (
+        tmp_path / ".story-system" / "events" / "chapter_003.events.json"
+    ).is_file()
+    assert payload["projection_status"]["state"] == "done"
+
+
+def test_from_last_commit_fails_closed_when_chapter_edited(
+    tmp_path, monkeypatch, capsys
+):
+    _committed_chapter_with_pending_presence(tmp_path)
+    (tmp_path / "正文" / "第0003章.md").write_text(
+        "爱丽丝只是在梦里见到北城。", encoding="utf-8"
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_chapter_commit_cli(
+            monkeypatch,
+            capsys,
+            "--project-root",
+            str(tmp_path),
+            "--chapter",
+            "3",
+            "--from-last-commit",
+        )
+
+    assert "canon-ledger-write" in str(excinfo.value)
+
+
+def test_from_last_commit_guards_arguments_and_missing_commit(
+    tmp_path, monkeypatch, capsys
+):
+    with pytest.raises(SystemExit):
+        _run_chapter_commit_cli(
+            monkeypatch,
+            capsys,
+            "--project-root",
+            str(tmp_path),
+            "--chapter",
+            "3",
+            "--from-last-commit",
+            "--review-result",
+            "review.json",
+        )
+    assert "互斥" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_chapter_commit_cli(
+            monkeypatch,
+            capsys,
+            "--project-root",
+            str(tmp_path),
+            "--chapter",
+            "3",
+            "--from-last-commit",
+        )
+    assert "未找到" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# 提交原子性：投影失败必须以非零退出可见，不允许静默的部分一致
+# ---------------------------------------------------------------------------
+
+
+def test_cli_exits_nonzero_when_projection_write_crashes(
+    tmp_path, monkeypatch, capsys
+):
+    _committed_chapter_with_pending_presence(tmp_path)
+
+    def _boom(self, payload):
+        raise RuntimeError("模拟投影崩溃")
+
+    monkeypatch.setattr(ChapterCommitService, "apply_projections", _boom)
+    with pytest.raises(SystemExit) as excinfo:
+        _run_chapter_commit_cli(
+            monkeypatch,
+            capsys,
+            "--project-root",
+            str(tmp_path),
+            "--chapter",
+            "3",
+            "--from-last-commit",
+        )
+
+    assert excinfo.value.code == 1
+    err = capsys.readouterr().err
+    assert "事件库/投影写入中断" in err
+    assert "projections retry" in err
+
+
+def test_cli_exits_nonzero_when_accepted_commit_has_unhealthy_projection(
+    tmp_path, monkeypatch, capsys
+):
+    _committed_chapter_with_pending_presence(tmp_path)
+
+    def _partial(self, payload):
+        payload = dict(payload)
+        payload["projection_status"] = {
+            **payload.get("projection_status", {}),
+            "index": "failed:disk_full",
+        }
+        return payload
+
+    monkeypatch.setattr(ChapterCommitService, "apply_projections", _partial)
+    with pytest.raises(SystemExit) as excinfo:
+        _run_chapter_commit_cli(
+            monkeypatch,
+            capsys,
+            "--project-root",
+            str(tmp_path),
+            "--chapter",
+            "3",
+            "--from-last-commit",
+        )
+
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert "读模型投影未完成" in captured.err
+    assert "index=failed:disk_full" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# 静默写入护栏：state_delta 旧值链、实体类型稳定性
+# ---------------------------------------------------------------------------
+
+
+def _minimal_commit_kwargs(chapter, extraction):
+    return dict(
+        chapter=chapter,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+        },
+        disambiguation_result={"pending": []},
+        extraction_result={
+            "state_deltas": [],
+            "entity_deltas": [],
+            "accepted_events": [],
+            **extraction,
+        },
+    )
+
+
+def _ensure_contract(project_root, chapter):
+    contract_path = (
+        project_root / ".story-system" / "chapters" / f"chapter_{chapter:03d}.json"
+    )
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    if not contract_path.exists():
+        contract_path.write_text(
+            json.dumps(
+                {
+                    "meta": {"chapter": chapter},
+                    "chapter_directive": {
+                        "goal": "验证多章一致性护栏",
+                        "must_cover_nodes": [],
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+
+def _persist_chapter(service, project_root, chapter, extraction, body):
+    chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text(body, encoding="utf-8")
+    _ensure_contract(project_root, chapter)
+    payload = _build_commit(
+        service, project_root, **_minimal_commit_kwargs(chapter, extraction)
+    )
+    assert payload["meta"]["status"] == "accepted"
+    service.persist_commit(payload)
+    return payload
+
+
+def test_state_delta_on_recorded_field_requires_matching_old_value(tmp_path):
+    service = ChapterCommitService(tmp_path)
+    _persist_chapter(
+        service,
+        tmp_path,
+        3,
+        {"state_deltas": [{"entity_id": "hero", "field": "realm", "new": "筑基"}]},
+        "主角突破至筑基。",
+    )
+
+    (tmp_path / "正文" / "第0004章.md").write_text("主角再进一步。", encoding="utf-8")
+    _ensure_contract(tmp_path, 4)
+    with pytest.raises(ValueError, match="state_delta_missing_old:hero:realm"):
+        _build_commit(
+            service,
+            tmp_path,
+            **_minimal_commit_kwargs(
+                4,
+                {
+                    "state_deltas": [
+                        {"entity_id": "hero", "field": "realm", "new": "金丹"}
+                    ]
+                },
+            ),
+        )
+
+    with pytest.raises(ValueError, match="state_delta_conflict:hero:realm"):
+        _build_commit(
+            service,
+            tmp_path,
+            **_minimal_commit_kwargs(
+                4,
+                {
+                    "state_deltas": [
+                        {
+                            "entity_id": "hero",
+                            "field": "realm",
+                            "old": "炼气",
+                            "new": "金丹",
+                        }
+                    ]
+                },
+            ),
+        )
+
+    payload = _build_commit(
+        service,
+        tmp_path,
+        **_minimal_commit_kwargs(
+            4,
+            {
+                "state_deltas": [
+                    {
+                        "entity_id": "hero",
+                        "field": "realm",
+                        "old": "筑基",
+                        "new": "金丹",
+                    }
+                ]
+            },
+        ),
+    )
+    assert payload["meta"]["status"] == "accepted"
+
+
+def test_entity_delta_cannot_silently_retype_recorded_entity(tmp_path):
+    service = ChapterCommitService(tmp_path)
+    _persist_chapter(
+        service,
+        tmp_path,
+        3,
+        {
+            "entity_deltas": [
+                {
+                    "entity_id": "血月珠",
+                    "canonical_name": "血月珠",
+                    "entity_type": "物品",
+                }
+            ]
+        },
+        "血月珠在匣中发出微光。",
+    )
+
+    (tmp_path / "正文" / "第0004章.md").write_text("血月珠再次现身。", encoding="utf-8")
+    _ensure_contract(tmp_path, 4)
+    with pytest.raises(ValueError, match="entity_type_conflict:血月珠"):
+        _build_commit(
+            service,
+            tmp_path,
+            **_minimal_commit_kwargs(
+                4,
+                {
+                    "entity_deltas": [
+                        {
+                            "entity_id": "血月珠",
+                            "canonical_name": "血月珠",
+                            "entity_type": "角色",
+                        }
+                    ]
+                },
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# information_id 冲突：同章硬错，跨章转人工队列并可裁决更正
+# ---------------------------------------------------------------------------
+
+
+def _knowledge_event(event_id, chapter, sequence, information_id, claim, quote):
+    return {
+        "event_id": event_id,
+        "chapter": chapter,
+        "sequence": sequence,
+        "event_type": "knowledge_state_changed",
+        "subject": "linzhou",
+        "payload": {
+            "information_id": information_id,
+            "canonical_claim": claim,
+            "evidence_fragment": quote.rstrip("。"),
+            "state": "known",
+            "source_kind": "witnessed",
+            "evidence_quote": quote,
+        },
+    }
+
+
+def test_same_chapter_information_id_conflict_fails_commit(tmp_path):
+    chapter_path = tmp_path / "正文" / "第0003章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("钥匙藏在地窖。灯谜写在墙上。", encoding="utf-8")
+    service = ChapterCommitService(tmp_path)
+
+    with pytest.raises(ValueError, match="information_id_conflict_in_chapter:cellar-key"):
+        _build_commit(
+            service,
+            tmp_path,
+            **_minimal_commit_kwargs(
+                3,
+                {
+                    "accepted_events": [
+                        _knowledge_event(
+                            "k1", 3, 1, "cellar-key", "钥匙藏在地窖", "钥匙藏在地窖。"
+                        ),
+                        _knowledge_event(
+                            "k2", 3, 2, "cellar-key", "灯谜写在墙上", "灯谜写在墙上。"
+                        ),
+                    ]
+                },
+            ),
+        )
+
+
+def test_cross_chapter_information_conflict_needs_human_then_corrects_canon(tmp_path):
+    from data_modules.canonical_history import load_canonical_history
+    from data_modules.human_review import HumanReviewService
+
+    service = ChapterCommitService(tmp_path)
+    _persist_chapter(
+        service,
+        tmp_path,
+        3,
+        {
+            "accepted_events": [
+                _knowledge_event(
+                    "k1", 3, 1, "cellar-key", "钥匙藏在地窖", "钥匙藏在地窖。"
+                )
+            ],
+        },
+        "钥匙藏在地窖。",
+    )
+
+    (tmp_path / "正文" / "第0004章.md").write_text("其实钥匙藏在阁楼。", encoding="utf-8")
+    _ensure_contract(tmp_path, 4)
+    conflict_kwargs = _minimal_commit_kwargs(
+        4,
+        {
+            "accepted_events": [
+                _knowledge_event(
+                    "k2", 4, 1, "cellar-key", "钥匙藏在阁楼", "其实钥匙藏在阁楼。"
+                )
+            ],
+        },
+    )
+    held = _build_commit(service, tmp_path, **conflict_kwargs)
+
+    assert held["meta"]["status"] == "accepted"
+    assert held["extraction_result"]["accepted_events"] == []
+    unresolved = held["disambiguation_result"]["pending"]
+    assert len(unresolved) == 1
+    assert unresolved[0]["source"] == "information_id_conflict"
+    assert "既往表述" in unresolved[0]["existing_fact"]
+    service.persist_commit(held)
+
+    review = HumanReviewService(tmp_path)
+    queue_item = review.list_items(4)[0]
+    review.record(
+        {
+            "decisions": [
+                {"decision_id": queue_item["decision_id"], "action": "confirm"}
+            ]
+        }
+    )
+    resolved = _build_commit(service, tmp_path, **conflict_kwargs)
+    assert [
+        event["event_id"]
+        for event in resolved["extraction_result"]["accepted_events"]
+    ] == ["k2"]
+    assert (
+        resolved["extraction_result"]["accepted_events"][0]["verification"]
+        == "verified"
+    )
+    service.persist_commit(resolved)
+
+    history = load_canonical_history(tmp_path, 4)
+    row = history.information.get("cellar-key") or {}
+    assert row.get("canonical_claim") == "钥匙藏在阁楼"

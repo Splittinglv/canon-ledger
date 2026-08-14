@@ -1,7 +1,7 @@
 # 叙典 CanonLedger
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-7.0.2-brightgreen.svg)](.cursor-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-7.1.0-brightgreen.svg)](.cursor-plugin/plugin.json)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 
 记住故事事实，不替你决定文风。
@@ -48,7 +48,7 @@
 
 章末抽取也采用同一原则：明确事件进入 canon；语义不确定的知识、在场或物品持有候选先排除，并写入 `.canon-ledger/human-review/queue/`。作者可以稍后 `confirm`、`ignore` 或 `replace`，裁决只对当时的正文字节版本生效。
 
-可用统一 CLI 查看队列：`canon-ledger human-review list --chapter N`。把裁决写成项目内 JSON 后运行 `canon-ledger human-review resolve --input-file <文件>`，再重跑该章 chapter-commit；正文改动后旧裁决不会自动沿用。
+日常裁决用 `/canon-ledger-confirm N`：系统逐条展示证据原文和现有记录，作者在对话里选 confirm / ignore / replace，落库后自动用 `chapter-commit --from-last-commit` 重放本章提交，把已确认事实升级为 `verified` 并重建投影。底层 CLI 依然可用：`human-review list --chapter N` 查看队列、`human-review resolve --input-file <项目内 JSON>` 写入裁决；正文改动后旧裁决不会自动沿用。
 
 ### 文风怎么自定义
 
@@ -87,6 +87,10 @@
 
 只查设定、时间线、连续性、角色知识边界和明确规则冲突。不查人物动机、一般因果，不评好不好看、像不像网文。证据不足的疑点进入人工确认，不冒充确定问题。
 
+**`/canon-ledger-confirm 4` 裁决待确认事实**
+
+逐条展示章末抽取排队的歧义候选（证据原文 + 现有记录），作者选 confirm / ignore / replace，系统自动落库裁决并重放本章提交。省略章节号则处理全部待确认章节。正文改过的章节会被拒绝重放，提示重新 `/canon-ledger-write`。
+
 **`/canon-ledger-query` 查书内状态**
 
 查角色、伏笔、力量、势力、运行时合同。
@@ -113,6 +117,7 @@
 | 卷纲规划 | `/canon-ledger-plan` | 基于总纲拆卷、拆章、补时间线。钩子 / 爽点 / CBN 可选 |
 | 章节创作 | `/canon-ledger-write` | 备上下文、起草、事实审查、登记事实、备份。不改文风 |
 | 事实审查 | `/canon-ledger-review` | 查长期事实穿帮；不确定项转人工，不评文风、动机或剧情选择 |
+| 人工确认 | `/canon-ledger-confirm` | 对话里逐条裁决歧义候选事实，自动落库并重放本章提交 |
 | 状态查询 | `/canon-ledger-query` | 查询角色、伏笔、力量体系和运行时状态 |
 | 项目学习 | `/canon-ledger-learn` | 把长期文风和写作偏好写入 `设定集/文风提示词.md` |
 | 可视化面板 | `/canon-ledger-dashboard` | 只读浏览状态、实体图谱 |
@@ -229,7 +234,7 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" --project-root "<PROJECT
 
 ### 5. 开始写
 
-按「产品使用逻辑」走：`/canon-ledger-plan 1` → `/canon-ledger-write 1`。需要时再 `/canon-ledger-review`、`/canon-ledger-query`、`/canon-ledger-dashboard`。
+按「产品使用逻辑」走：`/canon-ledger-plan 1` → `/canon-ledger-write 1`。需要时再 `/canon-ledger-review`、`/canon-ledger-confirm`、`/canon-ledger-query`、`/canon-ledger-dashboard`。
 
 ## CLI
 
@@ -241,7 +246,7 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" --project-root "<PROJECT
 
 常用：`preflight`、`where`、`doctor`、`write-gate`、`chapter-commit`、`human-review`、`projections`、`subagent-models`。
 
-插件根定位：环境变量 `CANON_LEDGER_PLUGIN_ROOT` / `CURSOR_PLUGIN_ROOT`，或 `~/.cursor/plugins/local/canon-ledger`。Skill 把 `scripts/export_cursor_env.py` 的固定 JSON 当数据解析，不执行其输出，也不扫描缓存目录寻找脚本。
+插件根定位：环境变量 `CANON_LEDGER_PLUGIN_ROOT` / `CURSOR_PLUGIN_ROOT`，或 `~/.cursor/plugins/local/canon-ledger`。Skill 统一执行受信引导脚本 `scripts/bootstrap_env.py`（内部复用 `scripts/export_cursor_env.py` 的清单校验），把其输出的固定六行数据协议逐行 `read` 赋值，不执行其输出，也不扫描缓存目录寻找脚本。所有 Skill 的引导代码块逐字一致，hooks 只放行与随包 SKILL.md 完全相同的引导块。
 
 ## 产品边界与历史来源
 
@@ -255,7 +260,8 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" --project-root "<PROJECT
 
 | 版本 | 说明 |
 |------|------|
-| **v7.0.2 (当前)** | 收口残留的写法口径，保住含节奏/氛围/反转的设定事实。 |
+| **v7.1.0 (当前)** | 新增 /canon-ledger-confirm 对话式人工确认与 chapter-commit 重放；Skill 引导样板收敛为受信脚本 bootstrap_env.py。 |
+| **v7.0.2** | 收口残留的写法口径，保住含节奏/氛围/反转的设定事实。 |
 | **v7.0.1** | 仓库更名为 Splittinglv/canon-ledger，并明确生成式 AI 辅助开发说明。 |
 | **v7.0.0** | 更名为叙典 CanonLedger，启用独立命令、运行目录与产品身份。 |
 | **v6.2.2** | 长期一致性真源可重建、设定写回可验证；文风仍由作者或模型决定。 |

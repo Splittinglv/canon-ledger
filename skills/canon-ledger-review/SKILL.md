@@ -27,66 +27,13 @@ description: 审查章节长期事实：设定、时间线、连续性、角色�
 ```bash
 # 这段引导仅适用于 POSIX shell（sh/bash/zsh）；Windows 请使用 Git Bash 或 WSL。
 # 缓存安装必须使用 Cursor 注入的插件根；不扫描缓存目录寻找可执行脚本。
+# bootstrap_env.py 输出固定六行数据协议：逐行 read 赋值，禁止 eval/source 执行输出。
 _PLUGIN_ROOT_HINT="${CANON_LEDGER_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-}}"
 if [ -z "$_PLUGIN_ROOT_HINT" ]; then
   _PLUGIN_ROOT_HINT="${HOME}/.cursor/plugins/local/canon-ledger"
 fi
-_EXPORTER="$(python3 -X utf8 -c '
-import json, sys
-from pathlib import Path
-try:
-    root = Path(sys.argv[1]).expanduser().resolve()
-    manifest = json.loads((root / ".cursor-plugin" / "plugin.json").read_text(encoding="utf-8"))
-    exporter = (root / "scripts" / "export_cursor_env.py").resolve()
-except (OSError, ValueError, json.JSONDecodeError):
-    raise SystemExit(1)
-if manifest.get("name") != "canon-ledger":
-    raise SystemExit(1)
-if exporter.parent.parent != root or not exporter.is_file() or not (root / "scripts" / "canon_ledger.py").is_file():
-    raise SystemExit(1)
-print(exporter)
-' "$_PLUGIN_ROOT_HINT")" || {
+_ENV_LINES="$(python3 -X utf8 "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py")" || {
   echo "ERROR: 插件根不可信或安装不完整。请使用 Cursor 注入的插件根，或安装到 ~/.cursor/plugins/local/canon-ledger" >&2
-  exit 1
-}
-_ENV_JSON="$(python3 -X utf8 "$_EXPORTER" --format json)" || exit 1
-_ENV_LINES="$(printf '%s' "$_ENV_JSON" | python3 -X utf8 -c '
-import json, sys
-from pathlib import Path
-keys = (
-    "CANON_LEDGER_PLUGIN_ROOT", "CURSOR_PLUGIN_ROOT",
-    "SCRIPTS_DIR", "WORKSPACE_ROOT", "CURSOR_PROJECT_DIR",
-)
-try:
-    payload = json.load(sys.stdin)
-    environment = payload["environment"]
-    python_executable = payload["python_executable"]
-except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-    raise SystemExit(1)
-if payload.get("schema_version") != "canon-ledger-cursor-env/v1" or not isinstance(environment, dict):
-    raise SystemExit(1)
-if set(environment) != set(keys):
-    raise SystemExit(1)
-values = [environment[key] for key in keys]
-if any(not isinstance(value, str) or not value or any(char in value for char in "\x00\r\n") for value in values):
-    raise SystemExit(1)
-if (
-    not isinstance(python_executable, str)
-    or not python_executable
-    or any(char in python_executable for char in "\x00\r\n")
-    or not Path(python_executable).is_absolute()
-    or not Path(python_executable).is_file()
-):
-    raise SystemExit(1)
-if (
-    values[1] != values[0]
-    or values[2] != str(Path(values[0]) / "scripts")
-    or values[4] != values[3]
-):
-    raise SystemExit(1)
-sys.stdout.write("\n".join([*values, python_executable]) + "\n")
-')" || {
-  echo "ERROR: export_cursor_env.py 返回了无效环境协议" >&2
   exit 1
 }
 _ENV_PARSE_OK=1
@@ -105,12 +52,15 @@ if [ "$_ENV_PARSE_OK" -ne 1 ]; then
   exit 1
 fi
 export CANON_LEDGER_PLUGIN_ROOT CURSOR_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR CANON_LEDGER_PYTHON
-unset _PLUGIN_ROOT_HINT _EXPORTER _ENV_JSON _ENV_LINES _ENV_PARSE_OK
+unset _PLUGIN_ROOT_HINT _ENV_LINES _ENV_PARSE_OK
+```
+
+```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
 export SKILL_ROOT="${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-review"
 export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${WORKSPACE_ROOT}" where)"
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" subagent-models --format json
 ```
-
 调用 `reviewer` 前必须读取上面的 JSON。`agents["reviewer"].pass_to_task=true` 时，Task 必须传入该 `model` slug；否则不要传 `model`（跟当前聊天同一个模型）。本轮用户点名优先于书项目 `.canon-ledger/subagent-models.json` 和用户级 `~/.cursor/canon-ledger/subagent-models.json`。
 
 `PROJECT_ROOT` 必须包含 `.canon-ledger/state.json`，否则阻断。
@@ -120,6 +70,7 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py"
 目标章缺 runtime 合同时，先用详细大纲的真实本章目标刷新（`CHAPTER_GOAL` 禁止 `{章纲目标}` / `第N章章纲目标` 占位文本）：
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 GENRE="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import json; s=json.load(open('${PROJECT_ROOT}/.canon-ledger/state.json',encoding='utf-8')); pi=s.get('project_info',{}); print(pi.get('genre') or s.get('project',{}).get('genre',''))")"
 CHAPTER_GOAL="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); from chapter_outline_loader import load_chapter_execution_directive; directive=load_chapter_execution_directive(Path(sys.argv[2]),int(sys.argv[3])); goal=str(directive.get('goal') or '').strip(); print(goal) if goal else sys.exit(2)" "${SCRIPTS_DIR}" "${PROJECT_ROOT}" "{chapter_num}")" || {
   echo "错误：详细大纲缺少本章真实目标，停止刷新合同。" >&2
@@ -145,6 +96,7 @@ CHAPTER_GOAL="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import sys; from pathlib im
 不要读取 `.canon-ledger/state.json` 或 `index.db` 来核对人物/伏笔——那是当前投影，重审旧章会混入未来事实。
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" chapter-binding \
   --chapter {chapter_num} \
   --out "${PROJECT_ROOT}/.canon-ledger/tmp/chapter_binding.json" \
@@ -190,6 +142,7 @@ reviewer 跳过、失败、输出不完整、正文为空、维度跳过、block
 ### Step 6：生成报告并保存审计记录
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" review-pipeline \
   --chapter {chapter_num} \
   --review-results "${PROJECT_ROOT}/.canon-ledger/tmp/review_results.json" \
@@ -204,6 +157,7 @@ reviewer 跳过、失败、输出不完整、正文为空、维度跳过、block
 ### Step 7：刷新只读审查投影
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" update-state -- --add-review "{chapter_num}-{chapter_num}" "审查报告/第{chapter_num}章审查报告.md"
 ```
 
@@ -229,6 +183,7 @@ reviewer 跳过、失败、输出不完整、正文为空、维度跳过、block
 审查开始前先说明本次会经历：定位待审正文 -> 刷新缺失合同 -> 写作检查 -> 生成报告和指标 -> 处理阻断裁决。过程提示用作者语言，不直接输出原始 JSON、traceback 或长命令日志；技术详情写入 `.canon-ledger/logs/run_last.log`：
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" run-log \
   --event review-progress \
   --payload-json "{\"stage\": \"review\", \"chapter\": {chapter_num}}" \
@@ -242,6 +197,7 @@ reviewer 跳过、失败、输出不完整、正文为空、维度跳过、block
 不可恢复故障才在最终报告提示 `.canon-ledger/logs/run_last.log`；平时只保留日志，不打扰作者。收尾必须调用作者报告 helper：
 
 ```bash
+: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" user-report \
   --stage review \
   --chapter {chapter_num} \
@@ -286,11 +242,13 @@ reviewer 跳过、失败、输出不完整、正文为空、维度跳过、block
 - 建议确认：`manual_checks`、命名归属或语义不明确的事实看一眼。
 - 必须处理：阻断问题、缺待审正文、reviewer 输出不完整、审计记录落库失败。
 
-下一步建议必须使用任务化语言 + 可复制命令，例如：
+下一步建议必须使用任务化语言 + 可复制命令。该章人工事实队列仍有待确认项时（`human-review list --chapter {chapter_num}` 的 `pending` 非空），必须一并给出确认命令，例如：
 
 ```text
 - 审查无阻断，可以继续写下一章：
   /canon-ledger-write {next_chapter}
+- 本章还有候选事实等你确认，逐条裁决后系统会自动重新提交本章：
+  /canon-ledger-confirm {chapter_num}
 ```
 
 不写 token 统计；如需排查故障，只给日志路径或建议运行 `/canon-ledger-doctor`。
