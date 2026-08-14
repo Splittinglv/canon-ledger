@@ -132,8 +132,8 @@ def volume_for_chapter(ch: int) -> int:
 
 
 def generate_state(project_root: Path) -> None:
-    webnovel = project_root / ".webnovel"
-    webnovel.mkdir(parents=True, exist_ok=True)
+    canon_ledger = project_root / ".canon-ledger"
+    canon_ledger.mkdir(parents=True, exist_ok=True)
 
     chapter_meta = {}
     for ch in range(1, TOTAL_CHAPTERS + 1):
@@ -172,13 +172,13 @@ def generate_state(project_root: Path) -> None:
         "chapter_meta": chapter_meta,
     }
 
-    (webnovel / "state.json").write_text(
+    (canon_ledger / "state.json").write_text(
         json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
 
 def generate_index_db(project_root: Path) -> None:
-    db_path = project_root / ".webnovel" / "index.db"
+    db_path = project_root / ".canon-ledger" / "index.db"
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
 
@@ -401,7 +401,7 @@ def generate_index_db(project_root: Path) -> None:
     """)
 
     # vector db (模拟)
-    vector_db_path = project_root / ".webnovel" / "vectors.db"
+    vector_db_path = project_root / ".canon-ledger" / "vectors.db"
     with sqlite3.connect(str(vector_db_path)) as vconn:
         vconn.execute("""
             CREATE TABLE IF NOT EXISTS vectors (
@@ -523,9 +523,9 @@ def main() -> None:
     generate_env(demo_root)
 
     print(f"[mock_demo] 数据就绪:")
-    print(f"  state.json  : {demo_root / '.webnovel' / 'state.json'}")
-    print(f"  index.db    : {demo_root / '.webnovel' / 'index.db'}")
-    print(f"  vectors.db  : {demo_root / '.webnovel' / 'vectors.db'}")
+    print(f"  state.json  : {demo_root / '.canon-ledger' / 'state.json'}")
+    print(f"  index.db    : {demo_root / '.canon-ledger' / 'index.db'}")
+    print(f"  vectors.db  : {demo_root / '.canon-ledger' / 'vectors.db'}")
     print(f"  .story-system/commits: {len(list((demo_root / '.story-system' / 'commits').glob('*.json')))} files")
     print(f"  正文/        : {sum(1 for _ in (demo_root / '正文').rglob('*.md'))} chapters")
     print()

@@ -42,15 +42,18 @@ def test_router_collects_required_writers_from_commit_payload():
     router = EventProjectionRouter()
     targets = router.required_writers(
         {
-            "accepted_events": [
-                {"event_type": "power_breakthrough", "subject": "xiaoyan", "payload": {}},
-                {
-                    "event_type": "relationship_changed",
-                    "subject": "xiaoyan",
-                    "payload": {"to": "yaolao"},
-                },
-            ],
-            "summary_text": "本章摘要",
+            "meta": {"status": "accepted", "chapter": 5},
+            "extraction_result": {
+                "accepted_events": [
+                    {"event_type": "power_breakthrough", "subject": "xiaoyan", "payload": {}},
+                    {
+                        "event_type": "relationship_changed",
+                        "subject": "xiaoyan",
+                        "payload": {"to": "yaolao"},
+                    },
+                ],
+                "summary_text": "本章摘要",
+            },
         }
     )
     assert targets == ["index", "memory", "state", "summary", "vector"]

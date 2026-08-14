@@ -425,13 +425,13 @@ def main():
     parser.add_argument(
         '--project-root',
         default=None,
-        help='项目根目录（包含 .webnovel/state.json）。不提供时自动搜索（支持 webnovel-project/ 与父目录）。'
+        help='项目根目录（包含 .canon-ledger/state.json）。不提供时自动搜索（支持 canon-ledger-project/ 与父目录）。'
     )
 
     parser.add_argument(
         '--state-file',
         default=None,
-        help='state.json 文件路径（可选）。不提供时从项目根目录自动定位为 .webnovel/state.json。'
+        help='state.json 文件路径（可选）。不提供时从项目根目录自动定位为 .canon-ledger/state.json。'
     )
 
     parser.add_argument(

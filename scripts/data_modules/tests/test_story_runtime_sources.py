@@ -34,6 +34,8 @@ def _write_runtime_contracts(project_root: Path, chapter: int) -> None:
                 "meta": {"contract_type": "CHAPTER_BRIEF", "chapter": chapter},
                 "chapter_directive": {
                     "goal": f"完成第{chapter}章的事实推进",
+                    "must_cover_nodes": [],
+                    "forbidden_zones": [],
                 },
             },
             ensure_ascii=False,

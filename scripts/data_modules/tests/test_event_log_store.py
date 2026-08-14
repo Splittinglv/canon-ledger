@@ -32,7 +32,7 @@ def test_event_log_store_writes_per_chapter_file_and_sqlite_mirror(tmp_path):
     )
     assert (tmp_path / ".story-system" / "events" / "chapter_003.events.json").is_file()
 
-    conn = sqlite3.connect(tmp_path / ".webnovel" / "index.db")
+    conn = sqlite3.connect(tmp_path / ".canon-ledger" / "index.db")
     try:
         row = conn.execute(
             "SELECT event_id, chapter, event_type FROM story_events"
@@ -149,7 +149,7 @@ def test_event_log_store_ignores_duplicate_event_id(tmp_path):
     store.write_events(3, [event])
     store.write_events(3, [event])
 
-    conn = sqlite3.connect(tmp_path / ".webnovel" / "index.db")
+    conn = sqlite3.connect(tmp_path / ".canon-ledger" / "index.db")
     try:
         count = conn.execute("SELECT COUNT(*) FROM story_events").fetchone()[0]
     finally:
@@ -205,8 +205,8 @@ def test_event_log_store_recent_and_health_use_sqlite_mirror(tmp_path):
 
 def test_event_log_store_recent_and_health_without_table(tmp_path):
     store = EventLogStore(tmp_path)
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    sqlite3.connect(tmp_path / ".webnovel" / "index.db").close()
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    sqlite3.connect(tmp_path / ".canon-ledger" / "index.db").close()
 
     assert store.list_recent() == []
     health = store.health()

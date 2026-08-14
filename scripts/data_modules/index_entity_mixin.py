@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-_STATE_VALUE_PREFIX = "__webnovel_json_v1__:"
+_STATE_VALUE_PREFIX = "__canon_ledger_json_v1__:"
 
 
 class IndexEntityMixin:

@@ -1,7 +1,7 @@
 """
-webnovel-writer scripts package
+CanonLedger scripts package
 
-This package contains all Python scripts for the webnovel-writer plugin.
+This package contains the Python scripts for the CanonLedger plugin.
 """
 
 __version__ = "5.5.5"

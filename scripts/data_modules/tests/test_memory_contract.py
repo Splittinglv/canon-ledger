@@ -67,7 +67,7 @@ class TestContractTypes:
         c = ContextPack(chapter=10)
         assert c.sections == {}
         assert c.budget_used_tokens == 0
-        assert c.schema_version == "webnovel-context-pack/v2"
+        assert c.schema_version == "canon-ledger-context-pack/v2"
         assert c.budget == {}
         assert c.completeness == {}
 
@@ -76,7 +76,7 @@ class TestContractTypes:
         d = c.to_dict()
         assert d["sections"]["task_book"]["goal"] == "test"
         assert d["budget_used_tokens"] == 1500
-        assert d["schema_version"] == "webnovel-context-pack/v2"
+        assert d["schema_version"] == "canon-ledger-context-pack/v2"
 
 
 # ---------------------------------------------------------------------------

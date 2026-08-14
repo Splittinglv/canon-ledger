@@ -78,7 +78,7 @@ else:
     from .run_ledger import backup_receipt_trusted
 
 
-SCHEMA_VERSION = "webnovel-user-report/v1"
+SCHEMA_VERSION = "canon-ledger-user-report/v1"
 VALID_STAGES = ("init", "plan", "write", "review")
 VALID_FORMATS = ("text", "json")
 
@@ -341,7 +341,7 @@ def _add_artifact_validation_result(
 
 
 def _review_audit_path(project_root: Path) -> Path:
-    return project_root / ".webnovel" / "tmp" / "review_audit.json"
+    return project_root / ".canon-ledger" / "tmp" / "review_audit.json"
 
 
 def _review_report_path_from_audit(project_root: Path, audit: dict[str, Any]) -> Path | None:
@@ -433,9 +433,9 @@ def _add_projection_issues(
             title="故事资料更新已补跑成功",
             reason="系统曾遇到资料同步失败或等待状态，随后已有成功的 projection 记录。",
             impact="本章事实已经同步到可用的故事资料，不影响继续写下一章。",
-            next_action="本次无需处理；如果想核对，可查看 `.webnovel/projection_log.jsonl`。",
+            next_action="本次无需处理；如果想核对，可查看 `.canon-ledger/projection_log.jsonl`。",
             source=status_source,
-            path=".webnovel/projection_log.jsonl",
+            path=".canon-ledger/projection_log.jsonl",
             auto_handle=True,
         )
         return
@@ -445,7 +445,7 @@ def _add_projection_issues(
             report,
             {"code": "projection_failure", "message": str(statuses)},
             source=status_source,
-            path=".webnovel/projection_log.jsonl" if status_source == "projection_log" else _rel(project_root, _commit_path(project_root, chapter)),
+            path=".canon-ledger/projection_log.jsonl" if status_source == "projection_log" else _rel(project_root, _commit_path(project_root, chapter)),
             message=str(statuses),
         )
     elif _projection_pending_or_missing(statuses):
@@ -453,7 +453,7 @@ def _add_projection_issues(
             report,
             {"code": "projection_status_missing", "message": str(statuses)},
             source=status_source,
-            path=".webnovel/projection_log.jsonl" if status_source == "projection_log" else _rel(project_root, _commit_path(project_root, chapter)),
+            path=".canon-ledger/projection_log.jsonl" if status_source == "projection_log" else _rel(project_root, _commit_path(project_root, chapter)),
             message=str(statuses),
         )
 
@@ -461,7 +461,7 @@ def _add_projection_issues(
 def _backup_evidence(project_root: Path, chapter: int) -> tuple[bool, str]:
     receipt_path = (
         project_root
-        / ".webnovel"
+        / ".canon-ledger"
         / "backups"
         / f"ch{chapter:04d}.receipt.json"
     )
@@ -516,7 +516,7 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             reason="没有找到本章正文文件。",
             impact="当前章节不能提交为故事事实。",
             next_action="重新运行同一条写章命令，让系统从正文步骤继续。",
-            command=f"/webnovel-write {chapter}",
+            command=f"/canon-ledger-write {chapter}",
             path="正文",
         )
 
@@ -551,8 +551,8 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             title="写作检查已按 minimal 模式跳过",
             reason="本轮写章使用了 no-review artifact，未经过完整 reviewer 审查。",
             impact="正文可以继续保存，但质量风险需要你自行决定是否接受。",
-            next_action="如果想补审，运行 `/webnovel-review` 查看本章问题。",
-            command="/webnovel-review",
+            next_action="如果想补审，运行 `/canon-ledger-review` 查看本章问题。",
+            command="/canon-ledger-review",
             source="review_result",
             path=COMMIT_ARTIFACT_FILES[0],
         )
@@ -565,8 +565,8 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             title="写作检查使用了快速模式",
             reason=f"本轮只检查部分事实维度，未检查：{skipped}。",
             impact="正文可以继续保存，但当前审查不能代表完整的五维一致性检查。",
-            next_action="如需完整检查，运行 `/webnovel-review`。",
-            command="/webnovel-review",
+            next_action="如需完整检查，运行 `/canon-ledger-review`。",
+            command="/canon-ledger-review",
             source="review_result",
             path=COMMIT_ARTIFACT_FILES[0],
         )
@@ -604,7 +604,7 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
                 reason=f"accepted commit 与当前正文不一致（{binding_code}）。",
                 impact="旧审查和事实提取不能为当前正文背书。",
                 next_action="基于当前正文重新运行审查、data 和 chapter-commit。",
-                command=f"/webnovel-write {chapter}",
+                command=f"/canon-ledger-write {chapter}",
                 source="chapter_commit",
                 path=_rel(project_root, commit_path),
                 message=binding_code,
@@ -625,8 +625,8 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
                 title="本章事实提交状态不明确",
                 reason=f"commit 状态是 `{status or 'missing'}`，不是 accepted。",
                 impact="系统不能确认本章是否已正式进入故事主链。",
-                next_action="运行 `/webnovel-doctor` 查看详情，必要时重新提交本章事实。",
-                command="/webnovel-doctor",
+                next_action="运行 `/canon-ledger-doctor` 查看详情，必要时重新提交本章事实。",
+                command="/canon-ledger-doctor",
                 source="chapter_commit",
                 path=_rel(project_root, commit_path),
             )
@@ -650,7 +650,7 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             reason="没有找到与当前 accepted commit 匹配的备份 receipt 和恢复点。",
             impact="本章事实已生成，但回滚保障需要再确认。",
             next_action="运行备份命令或重新执行写章收尾步骤。",
-            command=f"/webnovel-write {chapter}",
+            command=f"/canon-ledger-write {chapter}",
             source="backup",
             path=backup_path,
         )
@@ -661,7 +661,7 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             {
                 "label": "写下一章",
                 "description": f"可以继续写第 {chapter + 1} 章。",
-                "command": f"/webnovel-write {chapter + 1}",
+                "command": f"/canon-ledger-write {chapter + 1}",
             }
         )
     elif report["issues"]["must_handle"]:
@@ -669,7 +669,7 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             {
                 "label": "先处理阻断项",
                 "description": "先处理“必须处理”里的问题，再重新运行同一条写章命令。",
-                "command": f"/webnovel-write {chapter}",
+                "command": f"/canon-ledger-write {chapter}",
             }
         )
     else:
@@ -678,7 +678,7 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
 
 
 def _load_review_result(project_root: Path) -> tuple[dict[str, Any], Path, str]:
-    path = project_root / ".webnovel" / "tmp" / "review_results.json"
+    path = project_root / ".canon-ledger" / "tmp" / "review_results.json"
     payload, error = _read_json(path)
     return payload, path, error
 
@@ -749,7 +749,7 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
                 reason="review_results 与当前章节或正文内容不一致。",
                 impact="旧审查不能为当前正文背书。",
                 next_action="重新运行本章 reviewer 和 review-pipeline。",
-                command="/webnovel-review",
+                command="/canon-ledger-review",
                 source="review",
                 path=_rel(project_root, review_path),
                 message=(
@@ -770,8 +770,8 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
                     title="本章未执行事实审查",
                     reason="本轮使用 minimal 模式，五个事实维度均未检查。",
                     impact="当前结果只能证明审查被明确跳过，不能证明正文不存在一致性问题。",
-                    next_action="如需完整检查，重新运行 `/webnovel-review`。",
-                    command="/webnovel-review",
+                    next_action="如需完整检查，重新运行 `/canon-ledger-review`。",
+                    command="/canon-ledger-review",
                     source="review_result",
                     path=_rel(project_root, review_path),
                 )
@@ -784,8 +784,8 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
                     title="本章只完成了快速事实审查",
                     reason=f"未检查的维度为：{skipped}。",
                     impact="当前结论不能代表完整的五维一致性检查。",
-                    next_action="如需完整检查，重新运行 `/webnovel-review`。",
-                    command="/webnovel-review",
+                    next_action="如需完整检查，重新运行 `/canon-ledger-review`。",
+                    command="/canon-ledger-review",
                     source="review_result",
                     path=_rel(project_root, review_path),
                 )
@@ -798,7 +798,7 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
                 reason=f"本章有 {blocking_count} 个阻断问题。",
                 impact="不处理会影响继续写作、提交或事实一致性。",
                 next_action="先按审查报告处理阻断问题；如果要保留当前版本，需要用户明确裁决。",
-                command="/webnovel-review",
+                command="/canon-ledger-review",
                 source="review",
                 path=_rel(project_root, review_path),
             )
@@ -812,10 +812,10 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
             "needs_confirmation",
             code="review_audit_missing",
             title="审查审计记录未落盘",
-            reason="没有找到 `.webnovel/tmp/review_audit.json`。",
+            reason="没有找到 `.canon-ledger/tmp/review_audit.json`。",
             impact="审查正文可读，但无法核实本轮实际覆盖了哪些维度。",
             next_action="重新运行审查流程并保存审计记录。",
-            command="/webnovel-review",
+            command="/canon-ledger-review",
             source="review",
             path=_rel(project_root, audit_path),
         )
@@ -840,7 +840,7 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
                 reason="审查模式、状态或覆盖维度在两份记录中不一致。",
                 impact="无法判断本轮实际检查范围，不能把报告当作可靠审查凭据。",
                 next_action="重新运行本章审查流程，覆盖旧结果和旧审计记录。",
-                command="/webnovel-review",
+                command="/canon-ledger-review",
                 source="review",
                 path=_rel(project_root, audit_path),
             )
@@ -862,7 +862,7 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
                 reason="没有找到面向阅读的审查报告 Markdown 文件。",
                 impact="审查 JSON 仍可用，但你不方便直接阅读修改建议。",
                 next_action="重新运行审查流程并指定 report file。",
-                command="/webnovel-review",
+                command="/canon-ledger-review",
                 source="review",
                 path="审查报告",
             )
@@ -873,7 +873,7 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
             {
                 "label": "处理审查问题",
                 "description": "先处理审查报告中的阻断问题，再继续写作或提交。",
-                "command": "/webnovel-review",
+                "command": "/canon-ledger-review",
             }
         )
     else:
@@ -881,7 +881,7 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
             {
                 "label": "继续写作",
                 "description": f"如果本章已满意，可以继续写第 {chapter + 1} 章。",
-                "command": f"/webnovel-write {chapter + 1}",
+                "command": f"/canon-ledger-write {chapter + 1}",
             }
         )
     return report
@@ -1016,7 +1016,7 @@ def render_user_report_text(report: dict[str, Any]) -> str:
     else:
         lines.append("- 耗时异常：无记录。")
     if str(report.get("overall_status") or "") == STATUS_FAILED:
-        lines.append("- 技术详情：如需反馈故障，可附上 `.webnovel/logs/run_last.log`。")
+        lines.append("- 技术详情：如需反馈故障，可附上 `.canon-ledger/logs/run_last.log`。")
 
     lines.extend(["", "三、下一步建议"])
     next_actions = report.get("next_actions") or []
@@ -1029,7 +1029,7 @@ def render_user_report_text(report: dict[str, Any]) -> str:
             else:
                 lines.append(f"- {description}")
     else:
-        lines.append("- 暂无下一步建议；可以运行 `/webnovel-doctor` 查看项目状态。")
+        lines.append("- 暂无下一步建议；可以运行 `/canon-ledger-doctor` 查看项目状态。")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -1040,7 +1040,7 @@ def format_user_report(report: dict[str, Any], output_format: str = "text") -> s
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Render author-friendly webnovel run report")
+    parser = argparse.ArgumentParser(description="生成面向作者的 CanonLedger 运行报告")
     parser.add_argument("--project-root", required=True, help="书项目根目录")
     parser.add_argument("--stage", choices=VALID_STAGES, required=True, help="报告阶段")
     parser.add_argument("--chapter", type=int, default=None, help="目标章节号")

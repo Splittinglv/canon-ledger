@@ -1,14 +1,16 @@
-# Webnovel Writer for Cursor
+# 叙典 CanonLedger
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-6.2.2-brightgreen.svg)](.cursor-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-7.0.0-brightgreen.svg)](.cursor-plugin/plugin.json)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 
-让 AI 写到几百章，依然记得住设定、接得住伏笔、守得住大纲。文风交给模型和作者。
+记住故事事实，不替你决定文风。
 
-这是 [lingfengQAQ/webnovel-writer](https://github.com/lingfengQAQ/webnovel-writer) **v6.2.1** 的 Cursor 插件移植（GPL-3.0 衍生作品），仓库：[Splittinglv/webnovel-writer-cursor](https://github.com/Splittinglv/webnovel-writer-cursor)。**不是**上游官方发行版，也**没有**上架 Cursor 官方插件商店。出处见 [NOTICE.md](NOTICE.md)。
+**叙典 CanonLedger** 是由 **Splittinglv** 独立维护的长篇小说一致性引擎。它让 AI 写到几百章后仍然记得住设定、接得住伏笔、守得住章纲；具体的写作风格和文笔由作者与当前模型自定义。
 
-本仓库把默认产品收成**长期一致性状态机**：插件负责故事别写崩，不负责把句子写成某种网文腔。文风交给当前模型和作者自己的提示词。
+项目最初基于 [lingfengQAQ/webnovel-writer](https://github.com/lingfengQAQ/webnovel-writer) v6.2.1 移植，自 2026-08-13 起由 Splittinglv 独立维护，不跟踪上游后续版本，也不是上游的官方产品。历史派生范围和许可信息见 [NOTICE.md](NOTICE.md) 与 [ATTRIBUTION.md](ATTRIBUTION.md)。当前可访问的仓库仍为 [Splittinglv/webnovel-writer-cursor](https://github.com/Splittinglv/webnovel-writer-cursor)，仓库地址可在后续版本独立迁移。
+
+叙典的默认产品边界是**长期一致性状态机**：插件负责故事别写崩，不负责把句子写成某种网文腔。
 
 ## 产品使用逻辑
 
@@ -47,21 +49,21 @@
 - 可以写视角、句长、对话习惯、禁忌修辞、想贴近的作品
 - 留空就按当前模型自己的文风写
 - 剧情、设定、伏笔不要写进这个文件，那些走大纲和设定集
-- 口吻偏好也不要丢给 `/webnovel-learn`；学习命令只记跨章事实（伏笔怎么收、时间怎么接），不记文笔
+- 口吻偏好也不要丢给 `/canon-ledger-learn`；学习命令只记跨章事实（伏笔怎么收、时间怎么接），不记文笔
 
 已有书可把 `templates/output/设定集-文风提示词.md` 复制到该书的 `设定集/文风提示词.md`。
 
 ### 命令怎么用
 
-日常顺序：开书父目录 → `/webnovel-init` → 按需改文风提示词 → `/webnovel-plan` → `/webnovel-write`。审查、查询、学习按需插入。
+日常顺序：开书父目录 → `/canon-ledger-init` → 按需改文风提示词 → `/canon-ledger-plan` → `/canon-ledger-write`。审查、查询、学习按需插入。
 
-**`/webnovel-init` 开新书**
+**`/canon-ledger-init` 开新书**
 
 必收：书名、题材、规模（字数或章数）、主角姓名 / 欲望 / 缺陷、世界规模、力量体系。确认摘要后才生成项目。
 
 不说就不问、不阻断：金手指、反套路、卖点公式、题材套路库、参考书拆解。想拆书当灵感，要先明确选「从参考书开始」，拆完经你确认才会写进项目。
 
-**`/webnovel-plan 1` 拆卷拆章**
+**`/canon-ledger-plan 1` 拆卷拆章**
 
 必写：卷摘要、关键人物、伏笔；每章的目标、时间锚点、章内时间跨度、与上章时间差、倒计时（无则写无）、关键实体、本章变化、本章禁区。时间线是硬约束，回跳必须标闪回。
 
@@ -69,44 +71,44 @@
 
 章纲中的目标、阻力、代价、时间信息、本章变化、核心冲突、视角、关键实体、结构化节点、禁区、章末未闭合问题与钩子会完整按结构进入章合同，并作为写前必达约束；即使上下文预算裁掉章纲原文，这些结构化字段也不会被裁掉。现代章合同的目标为空时，写前门禁和直接提交都会独立阻断；成功提交会把权威目标写入 `outline_snapshot.goal`。提交门禁还会将权威 `must_cover_nodes` 与 data-agent 的完成清单逐项核对，不能用空列表绕过。章纲字段视为作者或规划模型已经授权的输入，因此不会靠关键词猜测并删除内容；插件自身仍不会往里补文风处方。要稳定指定文风与文笔，请使用本轮要求或 `设定集/文风提示词.md`。
 
-**`/webnovel-write 4` 写一章**
+**`/canon-ledger-write 4` 写一章**
 
 流程：整理本章依据 → 起草 → 事实审查 → 只改事实问题 → 登记新事实 → 备份。字数跟你或大纲走，插件不规定章长。`--fast` 减轻审查；`--minimal` 跳过审查修补。
 
-**`/webnovel-review` 查事实**
+**`/canon-ledger-review` 查事实**
 
 只查设定、时间线、连贯、角色动机与知识边界、逻辑。不评好不好看、像不像网文。审查说明、证据解释、修复方向和结论统一使用自然中文，正文证据引用保持原文；JSON 字段、固定枚举、路径和错误码等技术标识保持原样。
 
-**`/webnovel-query` 查书内状态**
+**`/canon-ledger-query` 查书内状态**
 
 查角色、伏笔、力量、势力、运行时合同。
 
-**`/webnovel-learn` 记跨章经验**
+**`/canon-ledger-learn` 记跨章经验**
 
 例如「这条伏笔必须在卷末前回收」。对话腔、句式、节奏偏好请改文风提示词。
 
-**`/webnovel-dashboard` / `/webnovel-doctor`**
+**`/canon-ledger-dashboard` / `/canon-ledger-doctor`**
 
 只读面板和项目体检，不参与写作。
 
 ### 工作区
 
-插件仓库和书稿分开。打开书的**父目录**当工作区，用 `/webnovel-init` 按书名建子目录，不要把书写进本仓库。
+插件仓库和书稿分开。打开书的**父目录**当工作区，用 `/canon-ledger-init` 按书名建子目录，不要把书写进本仓库。
 
-安装只有本地：把本仓库加进 Cursor「添加本地目录」，或符号链接到 `~/.cursor/plugins/local/webnovel-writer`。`.cursor-plugin/marketplace.json` 是给本机识别用的，不是官方商店上架包。改完代码后执行 **Developer: Reload Window**。
+安装只有本地：把本仓库加进 Cursor「添加本地目录」，或符号链接到 `~/.cursor/plugins/local/canon-ledger`。`.cursor-plugin/marketplace.json` 是给本机识别用的，不是官方商店上架包。改完代码后执行 **Developer: Reload Window**。
 
 ## 核心能力
 
 | 能力 | 命令 | 说明 |
 |------|------|------|
-| 深度初始化 | `/webnovel-init` | 收集故事核，生成设定集、总纲和 Story System。金手指 / 卖点可选 |
-| 卷纲规划 | `/webnovel-plan` | 基于总纲拆卷、拆章、补时间线。钩子 / 爽点 / CBN 可选 |
-| 章节创作 | `/webnovel-write` | 备上下文、起草、事实审查、登记事实、备份。不改文风 |
-| 质量审查 | `/webnovel-review` | 审查设定、时间线、连贯、角色动机与逻辑。不评文风 |
-| 状态查询 | `/webnovel-query` | 查询角色、伏笔、力量体系和运行时状态 |
-| 项目学习 | `/webnovel-learn` | 把跨章事实处理方式写入项目长期记忆 |
-| 可视化面板 | `/webnovel-dashboard` | 只读浏览状态、实体图谱 |
-| 项目体检 | `/webnovel-doctor` | 检查目录、数据库、RAG、依赖和 Dashboard 产物 |
+| 深度初始化 | `/canon-ledger-init` | 收集故事核，生成设定集、总纲和 Story System。金手指 / 卖点可选 |
+| 卷纲规划 | `/canon-ledger-plan` | 基于总纲拆卷、拆章、补时间线。钩子 / 爽点 / CBN 可选 |
+| 章节创作 | `/canon-ledger-write` | 备上下文、起草、事实审查、登记事实、备份。不改文风 |
+| 质量审查 | `/canon-ledger-review` | 审查设定、时间线、连贯、角色动机与逻辑。不评文风 |
+| 状态查询 | `/canon-ledger-query` | 查询角色、伏笔、力量体系和运行时状态 |
+| 项目学习 | `/canon-ledger-learn` | 把跨章事实处理方式写入项目长期记忆 |
+| 可视化面板 | `/canon-ledger-dashboard` | 只读浏览状态、实体图谱 |
+| 项目体检 | `/canon-ledger-doctor` | 检查目录、数据库、RAG、依赖和 Dashboard 产物 |
 
 ## 安装
 
@@ -121,17 +123,17 @@ python -m pip install -r scripts/requirements.txt
 python -m pip install -r dashboard/requirements.txt
 ```
 
-插件不会假定 Cursor 调用到的系统 `python3` 已安装依赖。启动脚本会依次选择：显式设置的 `WEBNOVEL_PYTHON`、插件目录下的 `.venv`、`~/.cursor/webnovel-writer/.venv`，最后才检查当前或系统解释器；只有能导入插件依赖的解释器才会被使用。
+插件不会假定 Cursor 调用到的系统 `python3` 已安装依赖。启动脚本会依次选择：显式设置的 `CANON_LEDGER_PYTHON`、插件目录下的 `.venv`、`~/.cursor/canon-ledger/.venv`，最后才检查当前或系统解释器；只有能导入插件依赖的解释器才会被使用。
 
 本地目录安装按上面的命令在仓库根创建 `.venv` 即可。若 Cursor 使用的是复制到缓存中的插件包，建议创建共享运行环境：
 
 ```bash
-python3 -m venv ~/.cursor/webnovel-writer/.venv
-~/.cursor/webnovel-writer/.venv/bin/python -m pip install -r "/absolute/path/to/webnovel-writer-to-cursor/scripts/requirements.txt"
-~/.cursor/webnovel-writer/.venv/bin/python -m pip install -r "/absolute/path/to/webnovel-writer-to-cursor/dashboard/requirements.txt"
+python3 -m venv ~/.cursor/canon-ledger/.venv
+~/.cursor/canon-ledger/.venv/bin/python -m pip install -r "/absolute/path/to/canon-ledger/scripts/requirements.txt"
+~/.cursor/canon-ledger/.venv/bin/python -m pip install -r "/absolute/path/to/canon-ledger/dashboard/requirements.txt"
 ```
 
-需要固定解释器时，可在启动 Cursor 前设置 `WEBNOVEL_PYTHON=/absolute/path/to/python`。该解释器缺少依赖时，插件会明确报错并停止受保护写入，不会静默改用一个不完整的 Python。
+需要固定解释器时，可在启动 Cursor 前设置 `CANON_LEDGER_PYTHON=/absolute/path/to/python`。该解释器缺少依赖时，插件会明确报错并停止受保护写入，不会静默改用一个不完整的 Python。
 
 ### 2. 把本仓库装成本地 Cursor 插件
 
@@ -141,27 +143,27 @@ Cursor 的 **Settings → Plugins → 添加本地目录** 认的是 **marketpla
 
 ```bash
 mkdir -p ~/.cursor/plugins/local
-ln -s "/absolute/path/to/webnovel-writer-to-cursor" ~/.cursor/plugins/local/webnovel-writer
+ln -s "/absolute/path/to/canon-ledger" ~/.cursor/plugins/local/canon-ledger
 ```
 
 然后执行 **Developer: Reload Window**。
 
-**方法 B：** 在 **Settings → Plugins** 里添加本地目录，选本仓库根目录（必须能看到 `.cursor-plugin/marketplace.json`）。装好后重载窗口，Agent 聊天应能看到 `/webnovel-*`。
+**方法 B：** 在 **Settings → Plugins** 里添加本地目录，选本仓库根目录（必须能看到 `.cursor-plugin/marketplace.json`）。装好后重载窗口，Agent 聊天应能看到 `/canon-ledger-*`。
 
 ### 3. 打开书项目的父目录当工作区
 
 ```text
-/webnovel-init
+/canon-ledger-init
 ```
 
 初始化会按书名在工作区下创建子目录：
 
 ```text
 workspace/
-├── .cursor/webnovel-current-project
+├── .cursor/canon-ledger-current-project
 └── 你的书名/
     ├── .story-system/
-    ├── .webnovel/
+    ├── .canon-ledger/
     ├── 正文/
     ├── 大纲/
     ├── 设定集/
@@ -177,7 +179,7 @@ RAG 只用于从已提交章节补查人物状态、地点、关系、规则/伏
 
 进入书项目根目录，把 `.env.example` 复制为 `.env` 并填写 API Key。Embedding Key 是可选增强：未填写时，章节事实仍会建立 BM25 关键词索引并可被默认写作链召回；填写后才增加语义向量召回。Rerank Key 也可留空。
 
-也可以把全局 Key 放在 `~/.cursor/webnovel-writer/.env`。
+也可以把全局 Key 放在 `~/.cursor/canon-ledger/.env`。
 
 最小配置：
 
@@ -195,7 +197,7 @@ RERANK_API_KEY=your_rerank_api_key
 
 写章用的 `context-agent` / `reviewer` / `data-agent`，以及拆书用的 `deconstruction-agent`，默认跟当前聊天同一个模型。
 
-要单独指定时，改书项目里的 `.webnovel/subagent-models.json`（新书初始化会生成；旧书可从插件 `templates/output/subagent-models.json` 复制）。也可以放一份到 `~/.cursor/webnovel-writer/subagent-models.json`，作为所有书的默认。
+要单独指定时，改书项目里的 `.canon-ledger/subagent-models.json`（新书初始化会生成；旧书可从插件 `templates/output/subagent-models.json` 复制）。也可以放一份到 `~/.cursor/canon-ledger/subagent-models.json`，作为所有书的默认。
 
 ```json
 {
@@ -214,47 +216,39 @@ RERANK_API_KEY=your_rerank_api_key
 查询当前生效配置：
 
 ```bash
-python3 -X utf8 "<PLUGIN_ROOT>/scripts/webnovel.py" --project-root "<PROJECT_ROOT>" subagent-models --format json
+python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" --project-root "<PROJECT_ROOT>" subagent-models --format json
 ```
 
 ### 5. 开始写
 
-按「产品使用逻辑」走：`/webnovel-plan 1` → `/webnovel-write 1`。需要时再 `/webnovel-review`、`/webnovel-query`、`/webnovel-dashboard`。
+按「产品使用逻辑」走：`/canon-ledger-plan 1` → `/canon-ledger-write 1`。需要时再 `/canon-ledger-review`、`/canon-ledger-query`、`/canon-ledger-dashboard`。
 
 ## CLI
 
-所有命令行工具从 `scripts/webnovel.py` 进入：
+所有命令行工具从 `scripts/canon_ledger.py` 进入：
 
 ```bash
-python3 -X utf8 "<PLUGIN_ROOT>/scripts/webnovel.py" --project-root "<PROJECT_ROOT>" <子命令> [参数]
+python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" --project-root "<PROJECT_ROOT>" <子命令> [参数]
 ```
 
 常用：`preflight`、`where`、`doctor`、`write-gate`、`chapter-commit`、`projections`、`subagent-models`。
 
-插件根定位：环境变量 `WEBNOVEL_PLUGIN_ROOT` / `CURSOR_PLUGIN_ROOT`，或 `~/.cursor/plugins/local/webnovel-writer`。Skill 把 `scripts/export_cursor_env.py` 的固定 JSON 当数据解析，不执行其输出，也不扫描缓存目录寻找脚本。
+插件根定位：环境变量 `CANON_LEDGER_PLUGIN_ROOT` / `CURSOR_PLUGIN_ROOT`，或 `~/.cursor/plugins/local/canon-ledger`。Skill 把 `scripts/export_cursor_env.py` 的固定 JSON 当数据解析，不执行其输出，也不扫描缓存目录寻找脚本。
 
-## 移植对照
+## 产品边界与历史来源
 
-Python 引擎、Story System、设定/大纲模板来自上游 v6.2.1。本仓库改了两件事：Cursor 宿主适配，以及默认产品收缩为长期一致性（不注入写法教程，规划不强制钩子/爽点，初始化不强制金手指与卖点公式）。
+叙典采用独立产品名、独立命令和独立数据空间：`/canon-ledger-*`、`scripts/canon_ledger.py`、`.canon-ledger/` 与 `CANON_LEDGER_*` 是唯一受支持的当前接口。本版本按全新产品发布，不提供旧插件命令、环境变量、运行目录或项目数据的迁移入口。
 
-测试中的剧情、章纲、文风指令和审查问题统一使用自然中文句子；JSON 字段、枚举、命令、路径、错误码与 agent 名等协议标识保留原值。
-
-| 上游 Claude Code | 本仓库 Cursor |
-|------|------|
-| `.claude-plugin/plugin.json` | `.cursor-plugin/plugin.json` |
-| `CLAUDE_PLUGIN_ROOT` | `CURSOR_PLUGIN_ROOT` / `WEBNOVEL_PLUGIN_ROOT` |
-| `CLAUDE_PROJECT_DIR` | `CURSOR_PROJECT_DIR` |
-| Agent 工具 `webnovel-writer:context-agent` | Task 工具 + `agents/*.md` |
-| AskUserQuestion | AskQuestion |
-| `.claude/.webnovel-current-project` | 同时写 `.cursor/webnovel-current-project` |
+历史派生组件、基线提交和主要修改范围见 [ATTRIBUTION.md](ATTRIBUTION.md)；原始许可和非官方关系声明见 [NOTICE.md](NOTICE.md)。测试中的剧情、章纲、文风指令和审查问题统一使用自然中文句子；JSON 字段、枚举、命令、路径、错误码与 agent 名等协议标识保留原值。
 
 ## 版本
 
 | 版本 | 说明 |
 |------|------|
-| **v6.2.2 (当前)** | 长期一致性真源可重建、设定写回可验证；文风仍由作者或模型决定。 |
+| **v7.0.0 (当前)** | 更名为叙典 CanonLedger，启用独立命令、运行目录与产品身份。 |
+| **v6.2.2** | 长期一致性真源可重建、设定写回可验证；文风仍由作者或模型决定。 |
 | **v6.2.1** | 上游引擎 v6.2.1 的 Cursor 本地插件。只守事实一致性；文风只读 `设定集/文风提示词.md` 或按模型默认写。未上架官方商店。 |
 
 ## 开源协议
 
-GNU GPL v3。见 [LICENSE](LICENSE) 与 [NOTICE.md](NOTICE.md)。
+GNU GPL v3。见 [LICENSE](LICENSE)、[NOTICE.md](NOTICE.md)、[ATTRIBUTION.md](ATTRIBUTION.md) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。作者与维护关系见 [AUTHORS.md](AUTHORS.md)。

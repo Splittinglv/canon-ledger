@@ -17,19 +17,24 @@ from typing import Iterable
 
 
 REQUIRED_MODULES = ("pydantic", "filelock")
+RUNTIME_ENV_KEYS = ("CANON_LEDGER_PYTHON",)
+GLOBAL_RUNTIME_DIR_NAMES = ("canon-ledger",)
 
 
 def _candidate_paths(plugin_root: Path) -> Iterable[Path]:
-    configured = str(os.environ.get("WEBNOVEL_PYTHON") or "").strip()
-    if configured:
-        yield Path(configured).expanduser()
+    for env_key in RUNTIME_ENV_KEYS:
+        configured = str(os.environ.get(env_key) or "").strip()
+        if configured:
+            yield Path(configured).expanduser()
 
     if os.name == "nt":
         yield plugin_root / ".venv" / "Scripts" / "python.exe"
-        yield Path.home() / ".cursor" / "webnovel-writer" / ".venv" / "Scripts" / "python.exe"
+        for directory in GLOBAL_RUNTIME_DIR_NAMES:
+            yield Path.home() / ".cursor" / directory / ".venv" / "Scripts" / "python.exe"
     else:
         yield plugin_root / ".venv" / "bin" / "python"
-        yield Path.home() / ".cursor" / "webnovel-writer" / ".venv" / "bin" / "python"
+        for directory in GLOBAL_RUNTIME_DIR_NAMES:
+            yield Path.home() / ".cursor" / directory / ".venv" / "bin" / "python"
 
     yield Path(sys.executable)
     for name in ("python3", "python"):
@@ -76,6 +81,6 @@ def resolve_python_executable(plugin_root: str | Path) -> Path:
     modules = ", ".join(REQUIRED_MODULES)
     raise RuntimeError(
         "未找到包含插件依赖的 Python。请在插件目录或 "
-        "~/.cursor/webnovel-writer/.venv 创建虚拟环境并安装 requirements；"
+        "~/.cursor/canon-ledger/.venv 创建虚拟环境并安装 requirements；"
         f"至少需要：{modules}。"
     )

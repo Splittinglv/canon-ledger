@@ -262,6 +262,15 @@ class ExtractionResult(CommitArtifactModel):
     dominant_strand: Any = ""
     summary_text: str = ""
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_removed_shapes(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "memory_facts" in value:
+            raise ValueError(
+                "extraction_result 不支持 memory_facts；请使用 accepted_events 与 timeline_events"
+            )
+        return value
+
     @field_validator(*EXTRACTION_LIST_FIELDS, mode="before")
     @classmethod
     def validate_object_list_fields(cls, value: Any, info: ValidationInfo) -> Any:
@@ -284,11 +293,7 @@ class ChapterCommitMeta(BaseModel):
 
 
 class ChapterCommitSchema(BaseModel):
-    """Strict binding envelope for a newly constructed chapter commit.
-
-    Legacy commits remain readable as dictionaries by existing readers, but
-    cannot pass this trusted-write schema without a complete content binding.
-    """
+    """当前 CanonLedger 章节提交的严格内容绑定信封。"""
 
     model_config = ConfigDict(extra="allow")
 
@@ -427,8 +432,8 @@ def normalize_accepted_events(chapter: int, events: Any) -> list[dict[str, Any]]
 def normalize_timeline_events(chapter: int, events: Any) -> list[dict[str, Any]]:
     """Normalize timeline rows kept in the chapter commit extraction snapshot.
 
-    A timeline row gets a deterministic ID when a legacy producer does not
-    provide one.  New producers should always preserve ``timeline_id`` across
+    A timeline row gets a deterministic ID when the extractor does not
+    provide one. Producers should preserve ``timeline_id`` across
     retries/amendments so projection can remain idempotent.
     """
     if not isinstance(events, list):

@@ -12,7 +12,6 @@ import pytest
 from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.chapter_content_binding import build_chapter_binding
 from data_modules.config import DataModulesConfig
-from data_modules.index_manager import EntityMeta, IndexManager
 from data_modules.memory_contract_adapter import MemoryContractAdapter
 from data_modules.story_contracts import synchronize_setting_canon
 from init_project import init_project
@@ -67,7 +66,10 @@ def _write_contracts(project_root: Path, *chapters: int) -> None:
                         "contract_type": "CHAPTER_BRIEF",
                         "chapter": chapter,
                     },
-                    "chapter_directive": {"goal": f"推进第{chapter}章调查"},
+                    "chapter_directive": {
+                        "goal": f"推进第{chapter}章调查",
+                        "must_cover_nodes": [],
+                    },
                 },
                 ensure_ascii=False,
             ),
@@ -189,8 +191,8 @@ def test_real_init_puts_chinese_setup_facts_into_first_context(tmp_path, monkeyp
 
 def test_planned_setting_writeback_enters_canon_and_stale_snapshot_blocks(tmp_path):
     """规划写回的长期设定必须进入 canon；设定变更后不得误报完整。"""
-    (tmp_path / ".webnovel").mkdir(parents=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     _write_contracts(tmp_path, 1)
     settings_dir = tmp_path / "设定集"
     settings_dir.mkdir()
@@ -235,8 +237,8 @@ def test_planned_setting_writeback_enters_canon_and_stale_snapshot_blocks(tmp_pa
 
 
 def test_default_context_replays_state_timeline_story_fact_and_question_loop(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     _write_contracts(tmp_path, 1, 2)
     _accepted_commit(
         tmp_path,
@@ -254,18 +256,14 @@ def test_default_context_replays_state_timeline_story_fact_and_question_loop(tmp
                     "sequence": 1,
                     "event": "林舟在子时发现染血铜铃",
                     "time_hint": "第一日子时",
-                }
+                },
+                {
+                    "timeline_id": "铜铃来源",
+                    "sequence": 2,
+                    "event": "铜铃来自十年前封存的沉船",
+                    "time_hint": "十年前",
+                },
             ],
-            "memory_facts": {
-                "story_facts": [
-                    {
-                        "fact_id": "铜铃来源",
-                        "subject": "染血铜铃",
-                        "field": "来源",
-                        "fact": "铜铃来自十年前封存的沉船",
-                    }
-                ]
-            },
             "accepted_events": [
                 {
                     "event_id": "未解账簿",
@@ -303,8 +301,8 @@ def test_default_context_replays_state_timeline_story_fact_and_question_loop(tmp
 
 
 def test_learned_consistency_rule_is_available_to_the_next_chapter(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True)
-    (tmp_path / ".webnovel" / "state.json").write_text(
+    (tmp_path / ".canon-ledger").mkdir(parents=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text(
         json.dumps({"progress": {"current_chapter": 1}}, ensure_ascii=False),
         encoding="utf-8",
     )
@@ -330,8 +328,8 @@ def test_learned_consistency_rule_is_available_to_the_next_chapter(tmp_path):
 
 
 def test_historical_context_and_supplementary_queries_never_read_future_commit(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     _write_contracts(tmp_path, 1, 2, 3)
     _accepted_commit(
         tmp_path,
@@ -393,8 +391,8 @@ def test_historical_context_and_supplementary_queries_never_read_future_commit(t
 
 
 def test_invalid_bound_commit_is_omitted_and_blocks_context(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     _write_contracts(tmp_path, 1, 2)
     _accepted_commit(
         tmp_path,
@@ -429,8 +427,8 @@ def test_invalid_bound_commit_is_omitted_and_blocks_context(tmp_path):
 
 
 def test_story_structure_recipe_cannot_be_promoted_to_world_rule(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     _write_contracts(tmp_path, 1, 2)
     with pytest.raises(ValueError, match="世界规则缺少受控类别"):
         _accepted_commit(
@@ -520,19 +518,21 @@ def test_missing_contracts_fail_closed_without_creating_read_models(tmp_path):
     assert not config.vector_db.exists()
 
 
-def test_query_entity_normalizes_sqlite_entity_shape(tmp_path):
+def test_query_entity_reads_bound_commit_entity_shape(tmp_path):
     config = DataModulesConfig.from_project_root(tmp_path)
-    index = IndexManager(config)
-    index.upsert_entity(
-        EntityMeta(
-            id="linzhou",
-            type="角色",
-            canonical_name="林舟",
-            tier="重要",
-            current={"location": "旧码头", "injured": True},
-            first_appearance=1,
-            last_appearance=4,
-        )
+    _write_contracts(tmp_path, 1)
+    _accepted_commit(
+        tmp_path,
+        1,
+        {
+            "entity_deltas": [
+                {"entity_id": "linzhou", "canonical_name": "林舟", "entity_type": "角色", "tier": "重要"}
+            ],
+            "state_deltas": [
+                {"entity_id": "linzhou", "field": "location", "new": "旧码头"},
+                {"entity_id": "linzhou", "field": "injured", "new": True},
+            ],
+        },
     )
 
     snapshot = MemoryContractAdapter(config).query_entity("linzhou")
@@ -540,4 +540,4 @@ def test_query_entity_normalizes_sqlite_entity_shape(tmp_path):
     assert snapshot is not None
     assert snapshot.name == "林舟"
     assert snapshot.attributes == {"location": "旧码头", "injured": True}
-    assert "current_json" not in snapshot.attributes
+    assert "current_json" not in snapshot.attributes, "查询结果不得暴露旧投影字段"

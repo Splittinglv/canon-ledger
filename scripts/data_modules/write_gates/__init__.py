@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = "webnovel-write-gate/v1"
+SCHEMA_VERSION = "canon-ledger-write-gate/v1"
 STAGES = ("prewrite", "precommit", "postcommit")
 
 

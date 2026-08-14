@@ -15,15 +15,9 @@ from runtime_compat import enable_windows_utf8_stdio
 from typing import Any, Dict, List, Optional
 
 try:
-    from chapter_outline_loader import (
-        load_chapter_outline,
-        load_chapter_plot_structure,
-    )
+    from chapter_outline_loader import load_chapter_outline
 except ImportError:  # pragma: no cover
-    from scripts.chapter_outline_loader import (
-        load_chapter_outline,
-        load_chapter_plot_structure,
-    )
+    from scripts.chapter_outline_loader import load_chapter_outline
 
 from .config import get_config
 from .index_manager import IndexManager, WritingChecklistScoreMeta
@@ -209,7 +203,7 @@ class ContextManager:
             # Hard constraints are a read contract, not an optional context
             # enhancement.  Always perform this single read; the feature flag
             # below controls only whether budgeted soft memory is exposed or
-            # allowed to replace the legacy working-memory sections.
+            # allowed to expose budgeted soft-memory sections.
             orchestrator = MemoryOrchestrator(self.config)
             orchestrator_pack = orchestrator.build_memory_pack(
                 chapter,
@@ -342,9 +336,8 @@ class ContextManager:
             "power_system_skeleton": self._load_setting("力量体系"),
         }
 
-        preferences = self._load_json_optional(self.config.webnovel_dir / "preferences.json")
-        # Legacy project_memory.json stores untyped model-authored prose.
-        # Structured memory/RAG replace it in the default writing context.
+        preferences = self._load_json_optional(self.config.canon_ledger_dir / "preferences.json")
+        # 默认写作上下文不注入无类型的自由文本项目记忆。
         memory: Dict[str, Any] = {}
         long_term_memory = self._long_term_memory_from_orchestrator_pack(
             orchestrator_pack,
@@ -356,7 +349,7 @@ class ContextManager:
         reader_signal = self._load_reader_signal(chapter)
         genre_profile = self._build_runtime_genre_profile(state, story_contract)
         writing_guidance = self._build_writing_guidance(chapter, reader_signal, genre_profile)
-        plot_structure = self._load_plot_structure(chapter)
+        plot_structure = self._plot_structure_from_story_contract(story_contract)
         prewrite_validation = PrewriteValidator(self.config.project_root).build(
             chapter=chapter,
             review_contract=story_contract.get("review_contract") or {},
@@ -434,48 +427,6 @@ class ContextManager:
         return omitted, unsafe_warning
 
     @staticmethod
-    def _hard_constraints_from_memory_pack(
-        memory_pack: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
-        """Read the canonical hard set with a legacy-key compatibility path."""
-        if not isinstance(memory_pack, dict):
-            return []
-        if "hard_constraints" in memory_pack:
-            raw = memory_pack.get("hard_constraints")
-        else:
-            raw = memory_pack.get("active_constraints")
-
-        if isinstance(raw, list):
-            return [dict(item) for item in raw if isinstance(item, dict)]
-
-        # Be tolerant while the producer migrates from category buckets to the
-        # canonical flat list.  The returned Context Contract stays flat.
-        if isinstance(raw, dict):
-            items = raw.get("items")
-            if isinstance(items, list):
-                return [dict(item) for item in items if isinstance(item, dict)]
-
-            category_aliases = {
-                "world_rules": "world_rule",
-                "open_loops": "open_loop",
-                "reader_promises": "reader_promise",
-                "relationships": "relationship",
-            }
-            flattened: List[Dict[str, Any]] = []
-            for key, category in category_aliases.items():
-                rows = raw.get(key)
-                if not isinstance(rows, list):
-                    continue
-                for item in rows:
-                    if not isinstance(item, dict):
-                        continue
-                    normalized = dict(item)
-                    normalized.setdefault("category", category)
-                    flattened.append(normalized)
-            return flattened
-        return []
-
-    @staticmethod
     def _long_term_memory_from_orchestrator_pack(
         memory_pack: Dict[str, Any],
         *,
@@ -488,7 +439,7 @@ class ContextManager:
         payload: Dict[str, Any] = {
             key: value
             for key, value in memory_pack.items()
-            if key not in {"hard_constraints", "active_constraints"}
+            if key != "hard_constraints"
         }
         payload["working_memory"] = [
             item
@@ -549,32 +500,22 @@ class ContextManager:
 
         return signal
 
-    def _load_genre_profile(self, state: Dict[str, Any]) -> Dict[str, Any]:
+    def _load_genre_profile(self, genre_raw: str) -> Dict[str, Any]:
         if not getattr(self.config, "context_genre_profile_enabled", False):
             return {}
 
-        fallback = str(getattr(self.config, "context_genre_profile_fallback", "") or "")
-        project = state.get("project") or {}
-        project_info = state.get("project_info") or {}
-        genre_raw = str(
-            project_info.get("genre")
-            or project_info.get("genre_label")
-            or project.get("genre")
-            or fallback
-        )
+        genre_raw = str(genre_raw or "").strip()
         genres = self._parse_genre_tokens(genre_raw)
         if not genres:
-            if not fallback:
-                return {}
-            genres = [fallback]
+            return {}
         max_genres = max(1, int(getattr(self.config, "context_genre_profile_max_genres", 2)))
         genres = genres[:max_genres]
 
         primary_genre = genres[0]
         secondary_genres = genres[1:]
         composite = len(genres) > 1
-        profile_path = self.config.project_root / ".claude" / "references" / "genre-profiles.md"
-        taxonomy_path = self.config.project_root / ".claude" / "references" / "reading-power-taxonomy.md"
+        profile_path = self.config.project_root / ".cursor" / "references" / "genre-profiles.md"
+        taxonomy_path = self.config.project_root / ".cursor" / "references" / "reading-power-taxonomy.md"
 
         profile_text = profile_path.read_text(encoding="utf-8") if profile_path.exists() else ""
         taxonomy_text = taxonomy_path.read_text(encoding="utf-8") if taxonomy_path.exists() else ""
@@ -625,14 +566,10 @@ class ContextManager:
                 return {"genre": primary_genre, "mode": "label_only"}
             return {}
 
-        legacy_profile = self._load_genre_profile(state)
-        if legacy_profile:
-            legacy_profile = dict(legacy_profile)
-            legacy_profile["mode"] = "fallback_only"
         if not primary_genre:
-            return legacy_profile or {}
+            return {}
 
-        runtime_profile = self._load_genre_profile({"project": {"genre": primary_genre}})
+        runtime_profile = self._load_genre_profile(primary_genre)
         runtime_profile = dict(runtime_profile or {})
         runtime_profile.setdefault("genre", primary_genre)
         runtime_profile.setdefault("genre_raw", primary_genre)
@@ -642,11 +579,6 @@ class ContextManager:
         runtime_profile.setdefault("reference_hints", [])
         runtime_profile.setdefault("composite_hints", [])
         runtime_profile["mode"] = "contract_first"
-
-        if legacy_profile:
-            runtime_profile["legacy_genre"] = legacy_profile.get("genre")
-            runtime_profile["legacy_genre_raw"] = legacy_profile.get("genre_raw")
-            runtime_profile["legacy_genres"] = list(legacy_profile.get("genres") or [])
 
         return runtime_profile
 
@@ -948,8 +880,22 @@ class ContextManager:
     def _load_outline(self, chapter: int) -> str:
         return load_chapter_outline(self.config.project_root, chapter, max_chars=1500)
 
-    def _load_plot_structure(self, chapter: int) -> Dict[str, Any]:
-        return load_chapter_plot_structure(self.config.project_root, chapter)
+    @staticmethod
+    def _plot_structure_from_story_contract(
+        story_contract: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        chapter_brief = story_contract.get("chapter_brief") or {}
+        directive = chapter_brief.get("chapter_directive") or {}
+        if not isinstance(directive, dict) or not directive:
+            return {}
+        return {
+            "cbn": str(directive.get("cbn") or ""),
+            "cpns": list(directive.get("cpns") or []),
+            "cen": str(directive.get("cen") or ""),
+            "must_cover_nodes": list(directive.get("must_cover_nodes") or []),
+            "forbidden_zones": list(directive.get("forbidden_zones") or []),
+            "source": str(directive.get("source") or ""),
+        }
 
     def _build_story_contract_from_runtime(self, runtime_sources: RuntimeSourceSnapshot) -> Dict[str, Any]:
         story_root = self.config.story_system_dir
@@ -1019,7 +965,7 @@ class ContextManager:
         return excerpt
 
     def _load_summary_text(self, chapter: int, snippet_chars: Optional[int] = None) -> Optional[Dict[str, Any]]:
-        summary_path = self.config.webnovel_dir / "summaries" / f"ch{chapter:04d}.md"
+        summary_path = self.config.canon_ledger_dir / "summaries" / f"ch{chapter:04d}.md"
         if not summary_path.exists():
             return None
         text = summary_path.read_text(encoding="utf-8")
@@ -1071,7 +1017,7 @@ def main():
 
     config = None
     if args.project_root:
-        # 允许传入"工作区根目录"，统一解析到真正的 book project_root（必须包含 .webnovel/state.json）
+        # 允许传入"工作区根目录"，统一解析到真正的 book project_root（必须包含 .canon-ledger/state.json）
         from project_locator import resolve_project_root
         from .config import DataModulesConfig
 

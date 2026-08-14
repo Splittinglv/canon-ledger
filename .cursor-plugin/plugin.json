@@ -1,16 +1,17 @@
 {
-  "name": "webnovel-writer",
-  "version": "6.2.2",
-  "description": "长篇小说长期一致性插件（Cursor 移植）。默认只守设定/时间线/伏笔；文风由设定集/文风提示词.md 或模型默认决定。",
+  "name": "canon-ledger",
+  "version": "7.0.0",
+  "description": "叙典 CanonLedger：长篇小说长期一致性引擎。默认只守设定、时间线、伏笔和章纲；文风由作者与模型自定义。",
   "author": {
-    "name": "lingfengQAQ"
+    "name": "Splittinglv"
   },
   "homepage": "https://github.com/Splittinglv/webnovel-writer-cursor",
   "repository": "https://github.com/Splittinglv/webnovel-writer-cursor",
   "license": "GPL-3.0",
   "keywords": [
-    "webnovel",
+    "canon-ledger",
     "cursor",
+    "consistency",
     "skills",
     "agents",
     "rag"

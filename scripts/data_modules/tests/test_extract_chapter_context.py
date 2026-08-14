@@ -28,9 +28,9 @@ def test_extract_state_summary_accepts_dominant_key(tmp_path):
         },
     }
 
-    webnovel_dir = tmp_path / ".webnovel"
-    webnovel_dir.mkdir(parents=True, exist_ok=True)
-    (webnovel_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    canon_ledger_dir = tmp_path / ".canon-ledger"
+    canon_ledger_dir.mkdir(parents=True, exist_ok=True)
+    (canon_ledger_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
     text = extract_state_summary(tmp_path)
     assert "Ch10:quest" in text
@@ -44,9 +44,9 @@ def test_extract_state_summary_blocks_snapshot_from_target_or_future_chapter(tmp
 
     from extract_chapter_context import extract_state_summary
 
-    webnovel_dir = tmp_path / ".webnovel"
-    webnovel_dir.mkdir(parents=True, exist_ok=True)
-    (webnovel_dir / "state.json").write_text(
+    canon_ledger_dir = tmp_path / ".canon-ledger"
+    canon_ledger_dir.mkdir(parents=True, exist_ok=True)
+    (canon_ledger_dir / "state.json").write_text(
         json.dumps(
             {
                 "progress": {"current_chapter": 10},
@@ -73,9 +73,9 @@ def test_extract_state_summary_blocks_projected_progress_without_watermark(tmp_p
         sys.path.insert(0, str(scripts_dir))
     from extract_chapter_context import extract_state_summary
 
-    webnovel_dir = tmp_path / ".webnovel"
-    webnovel_dir.mkdir(parents=True, exist_ok=True)
-    (webnovel_dir / "state.json").write_text(
+    canon_ledger_dir = tmp_path / ".canon-ledger"
+    canon_ledger_dir.mkdir(parents=True, exist_ok=True)
+    (canon_ledger_dir / "state.json").write_text(
         json.dumps({"progress": {"total_words": 9000}}, ensure_ascii=False),
         encoding="utf-8",
     )
@@ -109,8 +109,8 @@ def test_extract_chapter_outline_prefers_state_volume_mapping(tmp_path):
 
     from extract_chapter_context import extract_chapter_outline
 
-    webnovel_dir = tmp_path / ".webnovel"
-    webnovel_dir.mkdir(parents=True, exist_ok=True)
+    canon_ledger_dir = tmp_path / ".canon-ledger"
+    canon_ledger_dir.mkdir(parents=True, exist_ok=True)
     state = {
         "progress": {
             "volumes_planned": [
@@ -119,7 +119,7 @@ def test_extract_chapter_outline_prefers_state_volume_mapping(tmp_path):
             ]
         }
     }
-    (webnovel_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    (canon_ledger_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
     outline_dir = tmp_path / "大纲"
     outline_dir.mkdir(parents=True, exist_ok=True)
@@ -137,10 +137,10 @@ def test_extract_chapter_outline_falls_back_when_state_has_no_match(tmp_path):
 
     from extract_chapter_context import extract_chapter_outline
 
-    webnovel_dir = tmp_path / ".webnovel"
-    webnovel_dir.mkdir(parents=True, exist_ok=True)
+    canon_ledger_dir = tmp_path / ".canon-ledger"
+    canon_ledger_dir.mkdir(parents=True, exist_ok=True)
     state = {"progress": {"volumes_planned": [{"volume": 1, "chapters_range": "1-10"}]}}
-    (webnovel_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    (canon_ledger_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
     outline_dir = tmp_path / "大纲"
     outline_dir.mkdir(parents=True, exist_ok=True)
@@ -178,9 +178,9 @@ def test_build_chapter_context_payload_includes_contract_sections(tmp_path, monk
         "disambiguation_warnings": [],
         "disambiguation_pending": [],
     }
-    (cfg.webnovel_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    (cfg.canon_ledger_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
-    summaries_dir = cfg.webnovel_dir / "summaries"
+    summaries_dir = cfg.canon_ledger_dir / "summaries"
     summaries_dir.mkdir(parents=True, exist_ok=True)
     (summaries_dir / "ch0002.md").write_text("## 剧情摘要\n上一章总结", encoding="utf-8")
 
@@ -188,7 +188,7 @@ def test_build_chapter_context_payload_includes_contract_sections(tmp_path, monk
     outline_dir.mkdir(parents=True, exist_ok=True)
     (outline_dir / "第1卷 详细大纲.md").write_text("### 第3章：测试标题\n测试大纲", encoding="utf-8")
 
-    refs_dir = tmp_path / ".claude" / "references"
+    refs_dir = tmp_path / ".cursor" / "references"
     refs_dir.mkdir(parents=True, exist_ok=True)
     (refs_dir / "genre-profiles.md").write_text("## xuanhuan\n- 升级线清晰", encoding="utf-8")
     (refs_dir / "reading-power-taxonomy.md").write_text("## xuanhuan\n- 悬念钩优先", encoding="utf-8")
@@ -479,8 +479,8 @@ def test_build_chapter_context_payload_includes_plot_structure(tmp_path):
 
     from extract_chapter_context import build_chapter_context_payload
 
-    webnovel_dir = tmp_path / ".webnovel"
-    webnovel_dir.mkdir(parents=True, exist_ok=True)
+    canon_ledger_dir = tmp_path / ".canon-ledger"
+    canon_ledger_dir.mkdir(parents=True, exist_ok=True)
     state = {
         "project": {"genre": "xuanhuan"},
         "progress": {"current_chapter": 5, "total_words": 15000},
@@ -489,7 +489,7 @@ def test_build_chapter_context_payload_includes_plot_structure(tmp_path):
         "disambiguation_warnings": [],
         "disambiguation_pending": [],
     }
-    (webnovel_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    (canon_ledger_dir / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
     outline_dir = tmp_path / "大纲"
     outline_dir.mkdir(parents=True, exist_ok=True)

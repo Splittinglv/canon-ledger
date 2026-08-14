@@ -14,11 +14,11 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 PROTECTED_SUFFIXES = (
-    ".webnovel/state.json",
-    ".webnovel/index.db",
-    ".webnovel/vectors.db",
-    ".webnovel/memory_scratchpad.json",
-    ".webnovel/projection_log.jsonl",
+    ".canon-ledger/state.json",
+    ".canon-ledger/index.db",
+    ".canon-ledger/vectors.db",
+    ".canon-ledger/memory_scratchpad.json",
+    ".canon-ledger/projection_log.jsonl",
 )
 PROTECTED_BASENAMES = (
     "state.json",
@@ -33,17 +33,26 @@ DANGEROUS_COMMAND_RE = re.compile(
     r"(?im)(?:^|[;&|]\s*)(?:rm|cp|mv|tee|touch|truncate|dd|install|unlink|"
     r"perl|sed|bash|sh|zsh|fish|powershell|pwsh|cmd)\b"
 )
-TRUSTED_WEBNOVEL_ENV_TOKENS = {
-    "${SCRIPTS_DIR}/webnovel.py": ("SCRIPTS_DIR", ""),
-    "$SCRIPTS_DIR/webnovel.py": ("SCRIPTS_DIR", ""),
-    "${WEBNOVEL_PLUGIN_ROOT}/scripts/webnovel.py": ("WEBNOVEL_PLUGIN_ROOT", "scripts"),
-    "$WEBNOVEL_PLUGIN_ROOT/scripts/webnovel.py": ("WEBNOVEL_PLUGIN_ROOT", "scripts"),
-    "${CURSOR_PLUGIN_ROOT}/scripts/webnovel.py": ("CURSOR_PLUGIN_ROOT", "scripts"),
-    "$CURSOR_PLUGIN_ROOT/scripts/webnovel.py": ("CURSOR_PLUGIN_ROOT", "scripts"),
-    "${CLAUDE_PLUGIN_ROOT}/scripts/webnovel.py": ("CLAUDE_PLUGIN_ROOT", "scripts"),
-    "$CLAUDE_PLUGIN_ROOT/scripts/webnovel.py": ("CLAUDE_PLUGIN_ROOT", "scripts"),
+RUNTIME_ENTRYPOINT_NAMES = {"canon_ledger.py"}
+TRUSTED_RUNTIME_ENV_TOKENS = {
+    "${SCRIPTS_DIR}/canon_ledger.py": ("SCRIPTS_DIR", "", "canon_ledger.py"),
+    "$SCRIPTS_DIR/canon_ledger.py": ("SCRIPTS_DIR", "", "canon_ledger.py"),
+    "${CANON_LEDGER_PLUGIN_ROOT}/scripts/canon_ledger.py": (
+        "CANON_LEDGER_PLUGIN_ROOT", "scripts", "canon_ledger.py"
+    ),
+    "$CANON_LEDGER_PLUGIN_ROOT/scripts/canon_ledger.py": (
+        "CANON_LEDGER_PLUGIN_ROOT", "scripts", "canon_ledger.py"
+    ),
+    "${CURSOR_PLUGIN_ROOT}/scripts/canon_ledger.py": (
+        "CURSOR_PLUGIN_ROOT", "scripts", "canon_ledger.py"
+    ),
+    "$CURSOR_PLUGIN_ROOT/scripts/canon_ledger.py": (
+        "CURSOR_PLUGIN_ROOT", "scripts", "canon_ledger.py"
+    ),
 }
-TRUSTED_PYTHON_ENV_TOKENS = {"${WEBNOVEL_PYTHON}", "$WEBNOVEL_PYTHON"}
+TRUSTED_PYTHON_ENV_TOKENS = {
+    "${CANON_LEDGER_PYTHON}", "$CANON_LEDGER_PYTHON",
+}
 PYTHON_INTERPRETERS = {"python", "python3", "python.exe", "python3.exe", "py", "py.exe", "pypy", "pypy3"}
 DENIED_INLINE_INTERPRETERS = {
     "awk": set(),
@@ -73,17 +82,15 @@ INTERPRETER_WRAPPERS = {"busybox", "command", "env", "exec", "nice", "nohup", "s
 TRUSTED_SCRIPTS_ENV_TOKENS = {
     "${SCRIPTS_DIR}": ("SCRIPTS_DIR", ""),
     "$SCRIPTS_DIR": ("SCRIPTS_DIR", ""),
-    "${WEBNOVEL_PLUGIN_ROOT}/scripts": ("WEBNOVEL_PLUGIN_ROOT", "scripts"),
-    "$WEBNOVEL_PLUGIN_ROOT/scripts": ("WEBNOVEL_PLUGIN_ROOT", "scripts"),
+    "${CANON_LEDGER_PLUGIN_ROOT}/scripts": ("CANON_LEDGER_PLUGIN_ROOT", "scripts"),
+    "$CANON_LEDGER_PLUGIN_ROOT/scripts": ("CANON_LEDGER_PLUGIN_ROOT", "scripts"),
     "${CURSOR_PLUGIN_ROOT}/scripts": ("CURSOR_PLUGIN_ROOT", "scripts"),
     "$CURSOR_PLUGIN_ROOT/scripts": ("CURSOR_PLUGIN_ROOT", "scripts"),
-    "${CLAUDE_PLUGIN_ROOT}/scripts": ("CLAUDE_PLUGIN_ROOT", "scripts"),
-    "$CLAUDE_PLUGIN_ROOT/scripts": ("CLAUDE_PLUGIN_ROOT", "scripts"),
 }
 TRUSTED_PLUGIN_SCRIPT_NAMES = {
+    "canon_ledger.py",
     "export_cursor_env.py",
     "reference_search.py",
-    "webnovel.py",
 }
 
 
@@ -497,12 +504,10 @@ def _trusted_plugin_script(token: str) -> Path | None:
 
     scripts_prefixes = ("${SCRIPTS_DIR}/", "$SCRIPTS_DIR/")
     plugin_prefixes = {
-        "${WEBNOVEL_PLUGIN_ROOT}/scripts/": "WEBNOVEL_PLUGIN_ROOT",
-        "$WEBNOVEL_PLUGIN_ROOT/scripts/": "WEBNOVEL_PLUGIN_ROOT",
+        "${CANON_LEDGER_PLUGIN_ROOT}/scripts/": "CANON_LEDGER_PLUGIN_ROOT",
+        "$CANON_LEDGER_PLUGIN_ROOT/scripts/": "CANON_LEDGER_PLUGIN_ROOT",
         "${CURSOR_PLUGIN_ROOT}/scripts/": "CURSOR_PLUGIN_ROOT",
         "$CURSOR_PLUGIN_ROOT/scripts/": "CURSOR_PLUGIN_ROOT",
-        "${CLAUDE_PLUGIN_ROOT}/scripts/": "CLAUDE_PLUGIN_ROOT",
-        "$CLAUDE_PLUGIN_ROOT/scripts/": "CLAUDE_PLUGIN_ROOT",
     }
     for prefix in scripts_prefixes:
         if normalized.startswith(prefix):
@@ -716,7 +721,7 @@ def _screen_inline_interpreters(command: str) -> tuple[bool, bool, str]:
     """
     interpreter_hint = re.search(
         r"(?i)(?:python(?:3(?:\.\d+)*)?(?:\.exe)?|pypy3?|py(?:\.exe)?|"
-        r"\$\{?WEBNOVEL_PYTHON\}?|perl|ruby|node(?:js)?|bun|deno|bash|dash|ksh|"
+        r"\$\{?CANON_LEDGER_PYTHON\}?|perl|ruby|node(?:js)?|bun|deno|bash|dash|ksh|"
         r"zsh|fish|php|lua|luajit|rscript|powershell|pwsh)",
         command,
     )
@@ -906,7 +911,7 @@ def _base_directory(payload: dict[str, Any], tool_input: dict[str, Any]) -> Path
             value = source.get(key)
             if value:
                 return Path(str(value)).expanduser().resolve(strict=False)
-    raw = os.environ.get("CURSOR_PROJECT_DIR") or os.environ.get("CLAUDE_PROJECT_DIR")
+    raw = os.environ.get("CURSOR_PROJECT_DIR")
     return Path(raw).expanduser().resolve(strict=False) if raw else Path.cwd().resolve()
 
 
@@ -1040,21 +1045,27 @@ def _command_is_runtime_safe(command: str) -> bool:
         tokens = shlex.split(command, posix=True)
     except ValueError:
         return False
-    webnovel_indexes = [
+    runtime_indexes = [
         index
         for index, token in enumerate(tokens)
-        if token.replace("\\", "/").rsplit("/", 1)[-1].lower() == "webnovel.py"
+        if token.replace("\\", "/").rsplit("/", 1)[-1].lower()
+        in RUNTIME_ENTRYPOINT_NAMES
     ]
-    if len(webnovel_indexes) != 1:
+    if len(runtime_indexes) != 1:
         return False
-    webnovel_index = webnovel_indexes[0]
-    webnovel_token = tokens[webnovel_index].replace("\\", "/")
-    trusted_absolute = (Path(__file__).resolve().parents[1] / "scripts" / "webnovel.py").as_posix()
-    if webnovel_token != trusted_absolute:
-        env_spec = TRUSTED_WEBNOVEL_ENV_TOKENS.get(webnovel_token)
+    runtime_index = runtime_indexes[0]
+    runtime_token = tokens[runtime_index].replace("\\", "/")
+    runtime_name = runtime_token.rsplit("/", 1)[-1].lower()
+    trusted_absolute = (
+        Path(__file__).resolve().parents[1] / "scripts" / runtime_name
+    ).as_posix()
+    if runtime_token != trusted_absolute:
+        env_spec = TRUSTED_RUNTIME_ENV_TOKENS.get(runtime_token)
         if env_spec is None:
             return False
-        env_name, suffix = env_spec
+        env_name, suffix, expected_name = env_spec
+        if expected_name != runtime_name:
+            return False
         raw_root = os.environ.get(env_name)
         if not raw_root:
             return False
@@ -1062,12 +1073,12 @@ def _command_is_runtime_safe(command: str) -> bool:
         if suffix:
             candidate /= suffix
         try:
-            candidate_webnovel = (candidate / "webnovel.py").resolve(strict=False).as_posix()
+            candidate_runtime = (candidate / expected_name).resolve(strict=False).as_posix()
         except OSError:
             return False
-        if candidate_webnovel != trusted_absolute:
+        if candidate_runtime != trusted_absolute:
             return False
-    prefix = tokens[:webnovel_index]
+    prefix = tokens[:runtime_index]
     if not prefix:
         return False
     interpreter_token = prefix[0].replace("\\", "/")
@@ -1089,7 +1100,7 @@ def _command_is_runtime_safe(command: str) -> bool:
         interpreter_args = interpreter_args[1:]
     if interpreter_args not in allowed_interpreter_args:
         return False
-    arguments = tokens[webnovel_index + 1 :]
+    arguments = tokens[runtime_index + 1 :]
     command_arguments: list[str] = []
     index = 0
     while index < len(arguments):
@@ -1123,7 +1134,7 @@ def _command_mentions_protected_runtime(command: str) -> bool:
         return True
     if ".story" in lowered:
         return True
-    if ".webnovel" in lowered and any(character in lowered for character in "*?["):
+    if ".canon-ledger" in lowered and any(character in lowered for character in "*?["):
         return True
     if any(suffix in lowered for suffix in PROTECTED_SUFFIXES) or any(
         basename in lowered for basename in PROTECTED_BASENAMES
@@ -1145,7 +1156,7 @@ def _looks_like_runtime_bypass(command: str, *, base_directory: Path) -> bool:
     lowered = screened_command.lower().replace("\\", "/")
     if "chapter_commit.py" in lowered:
         return True
-    if "webnovel.py" in lowered and any(
+    if any(entrypoint in lowered for entrypoint in RUNTIME_ENTRYPOINT_NAMES) and any(
         marker in lowered
         for marker in ("chapter-commit", "projections retry", "projections replay")
     ):
@@ -1164,7 +1175,7 @@ def main() -> int:
     try:
         payload = _load_input()
     except ValueError as exc:
-        return _deny(f"webnovel-writer 运行时保护拒绝了无效输入：{exc}。")
+        return _deny(f"叙典 CanonLedger 运行时保护拒绝了无效输入：{exc}。")
     tool_input = _tool_input(payload)
     tool = _tool_name(payload)
     command = _command_from_payload(payload, tool_input)
@@ -1172,11 +1183,11 @@ def main() -> int:
 
     if tool.lower() in {"bash", "shell"} or command:
         if not command:
-            return _deny("webnovel-writer 运行时保护收到缺少命令内容的 Shell 请求。")
+            return _deny("叙典 CanonLedger 运行时保护收到缺少命令内容的 Shell 请求。")
         if _looks_like_runtime_bypass(command, base_directory=base_directory):
             return _deny(
-                "webnovel-writer 已阻止直接写入或绕过 Story System 与读模型的命令。"
-                "请改用 webnovel.py 的 write-gate、chapter-commit 或 projections retry/replay。"
+                "叙典 CanonLedger 已阻止直接写入或绕过 Story System 与读模型的命令。"
+                "请改用 canon_ledger.py 的 write-gate、chapter-commit 或 projections retry/replay。"
             )
         return _allow()
 
@@ -1186,11 +1197,11 @@ def main() -> int:
         for path in paths
     ):
         return _deny(
-            "webnovel-writer 已阻止直接编辑 Story System 或读模型文件。"
+            "叙典 CanonLedger 已阻止直接编辑 Story System 或读模型文件。"
             "请通过统一运行时命令写入，以保持提交与投影一致。"
         )
     if not tool or not paths:
-        return _deny("webnovel-writer 运行时保护拒绝了字段不完整的工具请求。")
+        return _deny("叙典 CanonLedger 运行时保护拒绝了字段不完整的工具请求。")
     return _allow()
 
 

@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .chapter_commit_service import ChapterCommitService
@@ -30,7 +28,6 @@ from .memory_contract import (
     TimelineEvent,
 )
 from .memory.hard_constraints import normalize_hard_constraints
-from .state_snapshot import validate_state_snapshot
 from .consistency_context import sanitize_story_contracts
 from .rag_context import chapter_goal_from_contract, empty_rag_assist, load_rag_assist
 from .story_runtime_sources import commit_status_view, load_runtime_sources
@@ -69,7 +66,7 @@ def _estimate_context_pack_tokens(
             "chapter": int(chapter),
             "sections": sections,
             "budget_used_tokens": used,
-            "schema_version": "webnovel-context-pack/v2",
+            "schema_version": "canon-ledger-context-pack/v2",
             "budget": {**budget, "used_tokens": used},
             "completeness": completeness,
         }
@@ -78,42 +75,6 @@ def _estimate_context_pack_tokens(
             break
         used = measured
     return used
-
-
-def _sanitize_state_value(value: Any) -> tuple[Any, bool]:
-    """Return a compact structured state value and whether data was rejected."""
-    from .fact_text import sanitize_fact_atom
-
-    if value is None or isinstance(value, (bool, int)):
-        return value, False
-    if isinstance(value, float):
-        return (value, False) if math.isfinite(value) else (None, True)
-    if isinstance(value, str):
-        cleaned = sanitize_fact_atom(value, max_chars=240)
-        return cleaned, bool(value.strip() and not cleaned)
-    if isinstance(value, list):
-        result = []
-        rejected = False
-        for item in value:
-            cleaned, item_rejected = _sanitize_state_value(item)
-            rejected = rejected or item_rejected
-            if not item_rejected:
-                result.append(cleaned)
-        return result, rejected
-    if isinstance(value, dict):
-        result: Dict[str, Any] = {}
-        rejected = False
-        for raw_key, raw_value in value.items():
-            key = sanitize_fact_atom(raw_key, max_chars=120)
-            if not key:
-                rejected = True
-                continue
-            cleaned, item_rejected = _sanitize_state_value(raw_value)
-            rejected = rejected or item_rejected
-            if not item_rejected:
-                result[key] = cleaned
-        return result, rejected
-    return None, True
 
 
 class MemoryContractAdapter:
@@ -126,22 +87,6 @@ class MemoryContractAdapter:
     # 内部懒加载（避免在构造时就初始化所有重量级模块）
     # ------------------------------------------------------------------
 
-    def _state_manager(self):
-        from .state_manager import StateManager
-        return StateManager(self.config)
-
-    def _index_manager(self):
-        from .index_manager import IndexManager
-        return IndexManager(self.config)
-
-    def _memory_writer(self):
-        from .memory.writer import MemoryWriter
-        return MemoryWriter(self.config)
-
-    def _memory_store(self):
-        from .memory.store import ScratchpadManager
-        return ScratchpadManager(self.config)
-
     def _memory_orchestrator(self):
         from .memory.orchestrator import MemoryOrchestrator
         return MemoryOrchestrator(self.config)
@@ -151,61 +96,15 @@ class MemoryContractAdapter:
     # ------------------------------------------------------------------
 
     def commit_chapter(self, chapter: int, result: dict) -> CommitResult:
-        if self._should_use_commit_mainline(result):
-            return self._commit_chapter_mainline(chapter, result)
-
-        return self._commit_chapter_legacy(chapter, result)
-
-    def _commit_chapter_legacy(self, chapter: int, result: dict) -> CommitResult:
-        warnings: List[str] = []
-        entities_added = 0
-        entities_updated = 0
-        state_changes_recorded = 0
-        relationships_added = 0
-        memory_items_added = 0
-        summary_path = ""
-
-        # 1. StateManager: process_chapter_result
-        try:
-            sm = self._state_manager()
-            sm._load_state()
-            sm_warnings = sm.process_chapter_result(chapter, result)
-            warnings.extend(sm_warnings or [])
-            entities_added = len(result.get("entities_new", []) or [])
-            entities_updated = len(result.get("entities_appeared", []) or [])
-            state_changes_recorded = len(result.get("state_changes", []) or [])
-            relationships_added = len(result.get("relationships_new", []) or [])
-        except Exception as e:
-            logger.warning("commit_chapter: StateManager failed: %s", e)
-            warnings.append(f"StateManager error: {e}")
-
-        # 2. MemoryWriter: update_from_chapter_result
-        try:
-            mw = self._memory_writer()
-            mem_stats = mw.update_from_chapter_result(chapter, result)
-            memory_items_added = mem_stats.get("items_added", 0)
-            if mem_stats.get("warnings"):
-                warnings.extend(mem_stats["warnings"])
-        except Exception as e:
-            logger.warning("commit_chapter: MemoryWriter failed: %s", e)
-            warnings.append(f"MemoryWriter error: {e}")
-
-        # 3. 摘要路径
-        padded = f"{chapter:04d}"
-        summary_file = self.config.webnovel_dir / "summaries" / f"ch{padded}.md"
-        if summary_file.exists():
-            summary_path = str(summary_file)
-
-        return CommitResult(
-            chapter=chapter,
-            entities_added=entities_added,
-            entities_updated=entities_updated,
-            state_changes_recorded=state_changes_recorded,
-            relationships_added=relationships_added,
-            memory_items_added=memory_items_added,
-            summary_path=summary_path,
-            warnings=warnings,
-        )
+        required = {
+            "review_result",
+            "fulfillment_result",
+            "disambiguation_result",
+            "extraction_result",
+        }
+        if not isinstance(result, dict) or not required.issubset(result):
+            raise ValueError("章节提交必须提供当前 CanonLedger 的四个绑定工件")
+        return self._commit_chapter_mainline(chapter, result)
 
     def _commit_chapter_mainline(self, chapter: int, result: dict) -> CommitResult:
         service = ChapterCommitService(self.config.project_root)
@@ -220,7 +119,7 @@ class MemoryContractAdapter:
         if payload["meta"]["status"] == "accepted":
             payload = service.apply_projections(payload)
 
-        summary_file = self.config.webnovel_dir / "summaries" / f"ch{chapter:04d}.md"
+        summary_file = self.config.canon_ledger_dir / "summaries" / f"ch{chapter:04d}.md"
         return CommitResult(
             chapter=chapter,
             entities_added=len(extraction_list(payload, "entity_deltas")),
@@ -231,17 +130,6 @@ class MemoryContractAdapter:
             summary_path=str(summary_file) if summary_file.exists() else "",
             warnings=[f"commit_status={payload['meta']['status']}"],
         )
-
-    def _should_use_commit_mainline(self, result: dict) -> bool:
-        if not isinstance(result, dict):
-            return False
-        mainline_keys = {
-            "review_result",
-            "fulfillment_result",
-            "disambiguation_result",
-            "extraction_result",
-        }
-        return any(key in result for key in mainline_keys)
 
     def load_context(self, chapter: int, budget_tokens: int = 4000) -> ContextPack:
         requested_tokens = max(1, int(budget_tokens or 1))
@@ -315,14 +203,7 @@ class MemoryContractAdapter:
         memory_pack: Dict[str, Any] = {}
         try:
             orch = self._memory_orchestrator()
-            try:
-                memory_pack = orch.build_memory_pack(chapter, include_soft=False)
-            except TypeError as exc:
-                if "include_soft" not in str(exc):
-                    raise
-                # Compatibility with third-party/test orchestrators that
-                # implement the pre-v1 signature.
-                memory_pack = orch.build_memory_pack(chapter)
+            memory_pack = orch.build_memory_pack(chapter, include_soft=False)
             if not isinstance(memory_pack, dict):
                 raise TypeError("memory_pack_must_be_object")
             source_status["scratchpad"] = {"status": "ok"}
@@ -360,19 +241,13 @@ class MemoryContractAdapter:
                         "reason": "unsafe_hard_constraint_without_ids",
                     }
 
-        # The commit envelopes, not the scratchpad projection, are the modern
-        # source of chapter-derived canon.  Chapter-zero/imported facts remain
-        # valid setup data; legacy projects without Story System keep their
-        # old scratchpad view but are visibly blocked by missing contracts.
-        modern_contract_root = (
-            self.config.project_root / ".story-system"
-        ).is_dir()
+        # 章节提交是章节事实源；暂存区只补充初始化事实和作者显式学习的约束。
         def _is_author_consistency_rule(row: Dict[str, Any]) -> bool:
             payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
             return bool(
                 row.get("category") == "world_rule"
                 and str(row.get("id") or "").startswith("author-consistency-")
-                and payload.get("origin") == "/webnovel-learn"
+                and payload.get("origin") == "/canon-ledger-learn"
             )
 
         setup_hard = [
@@ -381,9 +256,7 @@ class MemoryContractAdapter:
             if int((row or {}).get("source_chapter") or 0) == 0
             or _is_author_consistency_rule(row)
         ]
-        if not modern_contract_root:
-            setup_hard = list(scratchpad_hard)
-        elif scratchpad_hard:
+        if scratchpad_hard:
             trusted_chapters = set(canonical_history.valid_chapters)
             for row in scratchpad_hard:
                 source_chapter = int((row or {}).get("source_chapter") or 0)
@@ -418,7 +291,6 @@ class MemoryContractAdapter:
                 if key
                 not in {
                     "hard_constraints",
-                    "active_constraints",
                     "working_memory",
                     "semantic_memory",
                     "long_term_facts",
@@ -476,87 +348,32 @@ class MemoryContractAdapter:
         # continuity sources.
         source_status["summaries"] = {"status": "excluded_untyped"}
 
-        # 4. state.json 是可丢弃的“当前投影”，不能回答历史章节问题。
-        # Story System 项目只从初始化合同和已绑定 commit 派生主角/进度；
-        # 没有 Story System 的旧项目保留原来的兼容读取，但会因缺合同而
-        # fail closed，提示用户迁移。
-        if modern_contract_root:
-            protagonist_setup = dict(
-                canonical_history.initial_canon.get("protagonist") or {}
-            )
-            protagonist_name = str(protagonist_setup.get("name") or "")
-            matched_entity = next(
-                (
-                    entity
-                    for entity in canonical_history.entities.values()
-                    if protagonist_name
-                    and str(entity.get("name") or "") == protagonist_name
-                ),
-                None,
-            )
-            if matched_entity:
-                protagonist_setup["entity"] = matched_entity
-            if protagonist_setup:
-                mandatory["protagonist"] = protagonist_setup
-            mandatory["progress"] = {
-                "as_of_chapter": history_as_of,
-                "canonical_chapters": list(canonical_history.valid_chapters),
-            }
-            source_status["state"] = {
-                "status": "excluded_projection",
-                "reason": "canonical_history_used",
-            }
-        else:
-            try:
-                if self.config.state_file.exists():
-                    state_payload = json.loads(
-                        self.config.state_file.read_text(encoding="utf-8")
-                    )
-                    if not isinstance(state_payload, dict):
-                        raise ValueError("state_root_must_be_object")
-                else:
-                    state_payload = {}
-                progress = state_payload.get("progress") or {}
-                if not isinstance(progress, dict):
-                    raise ValueError("state_progress_must_be_object")
-                state_chapter, state_safe, state_reason = validate_state_snapshot(
-                    state_payload,
-                    chapter,
-                )
-                if not state_safe:
-                    source_status["state"] = {
-                        "status": "as_of_unavailable",
-                        "reason": state_reason,
-                        "current_chapter": (
-                            str(state_chapter) if state_chapter is not None else ""
-                        ),
-                    }
-                    missing_sources.append("state_as_of_chapter")
-                else:
-                    protagonist = state_payload.get("protagonist_state") or {}
-                    safe_protagonist, protagonist_rejected = _sanitize_state_value(
-                        protagonist
-                    )
-                    safe_progress, progress_rejected = _sanitize_state_value(progress)
-                    if protagonist_rejected or progress_rejected:
-                        source_status["state"] = {
-                            "status": "error",
-                            "reason": "unsafe_state_value",
-                        }
-                        missing_sources.append("state")
-                    else:
-                        if safe_protagonist:
-                            mandatory["protagonist"] = safe_protagonist
-                        if safe_progress:
-                            mandatory["progress"] = safe_progress
-                        source_status["state"] = {"status": "legacy_projection"}
-            except Exception as e:
-                logger.warning("load_context: state failed: %s", e)
-                source_status["state"] = {
-                    "status": "error",
-                    "reason": e.__class__.__name__,
-                }
-                missing_sources.append("state")
+        # state.json 是可丢弃的当前投影，写作上下文只读初始化合同和绑定提交。
+        protagonist_setup = dict(
+            canonical_history.initial_canon.get("protagonist") or {}
+        )
+        protagonist_name = str(protagonist_setup.get("name") or "")
+        matched_entity = next(
+            (
+                entity
+                for entity in canonical_history.entities.values()
+                if protagonist_name
+                and str(entity.get("name") or "") == protagonist_name
+            ),
+            None,
+        )
+        if matched_entity:
+            protagonist_setup["entity"] = matched_entity
+        if protagonist_setup:
+            mandatory["protagonist"] = protagonist_setup
+        mandatory["progress"] = {
+            "as_of_chapter": history_as_of,
+            "canonical_chapters": list(canonical_history.valid_chapters),
+        }
+        source_status["state"] = {
+            "status": "excluded_projection",
+            "reason": "canonical_history_used",
+        }
 
         missing_sources = list(dict.fromkeys(missing_sources))
         completeness = {
@@ -698,79 +515,7 @@ class MemoryContractAdapter:
                 last_appearance=int(entity.get("last_appearance") or 0),
                 recent_state_changes=changes[-5:],
             )
-        # Explicit historical queries must never fall through to a current
-        # SQLite projection, which may contain facts from later chapters.
-        if as_of_chapter is not None or (
-            self.config.project_root / ".story-system"
-        ).is_dir():
-            return None
-
-        # Compatibility for pre-Story-System projects: normalize the actual
-        # SQLite entity shape (canonical_name/current_json) instead of treating
-        # its metadata columns as character attributes.
-        try:
-            if not self.config.index_db.is_file():
-                sm = self._state_manager()
-                sm._load_state()
-                entity = sm.get_entity(entity_id)
-                if not entity:
-                    return None
-                entity_type = sm.get_entity_type(entity_id) or "角色"
-                state_changes = sm.get_state_changes(entity_id)
-                attributes = entity.get("attributes") or {
-                    key: value
-                    for key, value in entity.items()
-                    if key
-                    not in (
-                        "name",
-                        "tier",
-                        "aliases",
-                        "first_appearance",
-                        "last_appearance",
-                    )
-                }
-                return EntitySnapshot(
-                    id=entity_id,
-                    name=str(entity.get("name") or entity_id),
-                    type=entity_type,
-                    tier=str(entity.get("tier") or "核心"),
-                    aliases=list(entity.get("aliases") or []),
-                    attributes=dict(attributes or {}),
-                    first_appearance=int(entity.get("first_appearance") or 0),
-                    last_appearance=int(entity.get("last_appearance") or 0),
-                    recent_state_changes=list(state_changes[-5:] if state_changes else []),
-                )
-
-            index = self._index_manager()
-            entity = index.get_entity(entity_id)
-            if not entity:
-                return None
-            resolved_id = str(entity.get("id") or entity_id)
-            current = entity.get("current_json")
-            if not isinstance(current, dict):
-                current = entity.get("current")
-            if not isinstance(current, dict):
-                current = {}
-            safe_attributes, rejected = _sanitize_state_value(current)
-            if rejected or not isinstance(safe_attributes, dict):
-                safe_attributes = {}
-            recent_changes = index.get_entity_state_changes(resolved_id, limit=5)
-            return EntitySnapshot(
-                id=resolved_id,
-                name=str(
-                    entity.get("canonical_name") or entity.get("name") or resolved_id
-                ),
-                type=str(entity.get("type") or "角色"),
-                tier=str(entity.get("tier") or "核心"),
-                aliases=list(index.get_entity_aliases(resolved_id) or []),
-                attributes=safe_attributes,
-                first_appearance=int(entity.get("first_appearance") or 0),
-                last_appearance=int(entity.get("last_appearance") or 0),
-                recent_state_changes=recent_changes,
-            )
-        except Exception as e:
-            logger.warning("query_entity(%s) failed: %s", entity_id, e)
-            return None
+        return None
 
     def query_rules(
         self,
@@ -793,40 +538,11 @@ class MemoryContractAdapter:
                     source_chapter=int(item.get("source_chapter") or 0),
                 )
             )
-        if canonical_rules or as_of_chapter is not None or (
-            self.config.project_root / ".story-system"
-        ).is_dir():
-            return canonical_rules
-        try:
-            from .fact_text import sanitize_fact_atom, sanitize_fact_text
-
-            store = self._memory_store()
-            items = store.query(category="world_rule", status="active")
-            rules = []
-            for item in items:
-                subject = sanitize_fact_atom(item.subject, max_chars=120)
-                field = sanitize_fact_atom(item.field, max_chars=120)
-                value = sanitize_fact_text(item.value, max_chars=1200)
-                if not subject or not field or not value:
-                    continue
-                if domain and subject != domain and domain not in value:
-                    continue
-                rules.append(Rule(
-                    id=item.id,
-                    subject=subject,
-                    field=field,
-                    value=value,
-                    domain=subject,
-                    source_chapter=item.source_chapter,
-                ))
-            return rules
-        except Exception as e:
-            logger.warning("query_rules failed: %s", e)
-            return []
+        return canonical_rules
 
     def read_summary(self, chapter: int) -> str:
         padded = f"{chapter:04d}"
-        summary_file = self.config.webnovel_dir / "summaries" / f"ch{padded}.md"
+        summary_file = self.config.canon_ledger_dir / "summaries" / f"ch{padded}.md"
         try:
             if summary_file.exists():
                 return summary_file.read_text(encoding="utf-8")
@@ -854,27 +570,7 @@ class MemoryContractAdapter:
             for item in history.obligations
             if item.get("category") == "open_loop" and status == "active"
         ]
-        if canonical or as_of_chapter is not None or (
-            self.config.project_root / ".story-system"
-        ).is_dir():
-            return canonical
-        try:
-            store = self._memory_store()
-            items = store.query(category="open_loop", status=status)
-            return [
-                OpenLoop(
-                    id=str((item.payload or {}).get("lifecycle_id") or item.id),
-                    content=item.value,
-                    status=item.status,
-                    planted_chapter=item.source_chapter,
-                    expected_payoff=item.payload.get("expected_payoff", ""),
-                    urgency=coerce_urgency(item.payload.get("urgency")),
-                )
-                for item in items
-            ]
-        except Exception as e:
-            logger.warning("get_open_loops failed: %s", e)
-            return []
+        return canonical
 
     def get_lifecycle_obligations(
         self,
@@ -896,33 +592,8 @@ class MemoryContractAdapter:
             for item in history.obligations
             if status == "active"
         ]
-        if canonical or as_of_chapter is not None or (
-            self.config.project_root / ".story-system"
-        ).is_dir():
-            canonical.sort(key=lambda item: (item.category, item.source_chapter, item.id))
-            return canonical
-        try:
-            store = self._memory_store()
-            result: List[LifecycleObligation] = []
-            for category in ("open_loop", "reader_promise"):
-                for item in store.query(category=category, status=status):
-                    payload = item.payload or {}
-                    result.append(
-                        LifecycleObligation(
-                            id=str(payload.get("lifecycle_id") or item.id),
-                            category=category,
-                            content=item.value,
-                            status=item.status,
-                            source_chapter=item.source_chapter,
-                            expected_payoff=str(payload.get("expected_payoff") or ""),
-                            urgency=coerce_urgency(payload.get("urgency")),
-                        )
-                    )
-            result.sort(key=lambda item: (item.category, item.source_chapter, item.id))
-            return result
-        except Exception as e:
-            logger.warning("get_lifecycle_obligations failed: %s", e)
-            return []
+        canonical.sort(key=lambda item: (item.category, item.source_chapter, item.id))
+        return canonical
 
     def get_timeline(
         self,
@@ -942,38 +613,4 @@ class MemoryContractAdapter:
             for item in history.timeline
             if int(from_ch) <= int(item.get("source_chapter") or 0) <= int(to_ch)
         ]
-        if canonical or as_of_chapter is not None or (
-            self.config.project_root / ".story-system"
-        ).is_dir():
-            return canonical
-        try:
-            store = self._memory_store()
-            items = store.query(category="timeline", status="active")
-            ordered_events = []
-            for item in items:
-                ch = item.source_chapter
-                if from_ch <= ch <= to_ch:
-                    payload = item.payload or {}
-                    try:
-                        sequence = int(payload.get("sequence") or 0)
-                    except (TypeError, ValueError):
-                        sequence = 0
-                    timeline_id = str(payload.get("timeline_id") or item.id)
-                    ordered_events.append(
-                        (
-                            ch,
-                            sequence,
-                            timeline_id,
-                            TimelineEvent(
-                                event=item.value,
-                                chapter=ch,
-                                time_hint=str(payload.get("time_hint") or "").strip(),
-                                event_type=str(payload.get("event_type") or item.subject).strip(),
-                            ),
-                        )
-                    )
-            ordered_events.sort(key=lambda row: (row[0], row[1], row[2]))
-            return [row[3] for row in ordered_events]
-        except Exception as e:
-            logger.warning("get_timeline failed: %s", e)
-            return []
+        return canonical

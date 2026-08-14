@@ -39,6 +39,22 @@ def _accepted_commit(
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
     chapter_path.write_text(body, encoding="utf-8")
     binding = build_chapter_binding(project_root, chapter)
+    contract_path = project_root / ".story-system" / "chapters" / f"chapter_{chapter:03d}.json"
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(
+        json.dumps(
+            {
+                "meta": {"chapter": chapter},
+                "chapter_directive": {
+                    "goal": f"验证第{chapter}章投影重放",
+                    "must_cover_nodes": [],
+                    "forbidden_zones": [],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     review = {
         "review_mode": "standard",
         "review_status": "completed",
@@ -86,7 +102,7 @@ def _commit_and_project(project_root: Path, payload: dict) -> dict:
 
 
 def test_same_chapter_revision_removes_old_facts_and_keeps_init_metadata(tmp_path):
-    state_path = tmp_path / ".webnovel" / "state.json"
+    state_path = tmp_path / ".canon-ledger" / "state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_path.write_text(
         json.dumps(
@@ -190,14 +206,14 @@ def test_same_chapter_revision_removes_old_facts_and_keeps_init_metadata(tmp_pat
 
     event_file = tmp_path / ".story-system" / "events" / "chapter_001.events.json"
     assert json.loads(event_file.read_text(encoding="utf-8")) == []
-    scratch_path = tmp_path / ".webnovel" / "memory_scratchpad.json"
+    scratch_path = tmp_path / ".canon-ledger" / "memory_scratchpad.json"
     if scratch_path.exists():
         assert "染血账簿" not in scratch_path.read_text(encoding="utf-8")
-    summary = (tmp_path / ".webnovel" / "summaries" / "ch0001.md").read_text(encoding="utf-8")
+    summary = (tmp_path / ".canon-ledger" / "summaries" / "ch0001.md").read_text(encoding="utf-8")
     assert "北城渡口" in summary
     assert "旧库房" not in summary
 
-    with sqlite3.connect(tmp_path / ".webnovel" / "index.db") as conn:
+    with sqlite3.connect(tmp_path / ".canon-ledger" / "index.db") as conn:
         assert conn.execute("SELECT COUNT(*) FROM story_events").fetchone()[0] == 0
         scenes = conn.execute("SELECT location, summary FROM scenes").fetchall()
         assert scenes == [("北城渡口", "沈砚确认船票去向。")]
@@ -209,7 +225,7 @@ def test_same_chapter_revision_removes_old_facts_and_keeps_init_metadata(tmp_pat
         assert conn.execute(
             "SELECT COUNT(*) FROM entities WHERE id = '染血账簿'"
         ).fetchone()[0] == 0
-    vector_path = tmp_path / ".webnovel" / "vectors.db"
+    vector_path = tmp_path / ".canon-ledger" / "vectors.db"
     if vector_path.is_file():
         with sqlite3.connect(vector_path) as conn:
             vector_text = "\n".join(
@@ -245,23 +261,23 @@ def test_replay_rebuilds_deleted_read_models_even_when_commit_says_done(tmp_path
     _commit_and_project(tmp_path, payload)
 
     for relative in (
-        ".webnovel/state.json",
-        ".webnovel/index.db",
-        ".webnovel/vectors.db",
-        ".webnovel/memory_scratchpad.json",
+        ".canon-ledger/state.json",
+        ".canon-ledger/index.db",
+        ".canon-ledger/vectors.db",
+        ".canon-ledger/memory_scratchpad.json",
         ".story-system/events/chapter_001.events.json",
     ):
         (tmp_path / relative).unlink(missing_ok=True)
-    shutil.rmtree(tmp_path / ".webnovel" / "summaries")
+    shutil.rmtree(tmp_path / ".canon-ledger" / "summaries")
 
     report = replay_projections(tmp_path, start_chapter=1, end_chapter=1)
 
     assert report["ok"] is True
-    assert (tmp_path / ".webnovel" / "state.json").is_file()
-    assert (tmp_path / ".webnovel" / "index.db").is_file()
-    assert (tmp_path / ".webnovel" / "summaries" / "ch0001.md").is_file()
+    assert (tmp_path / ".canon-ledger" / "state.json").is_file()
+    assert (tmp_path / ".canon-ledger" / "index.db").is_file()
+    assert (tmp_path / ".canon-ledger" / "summaries" / "ch0001.md").is_file()
     assert (tmp_path / ".story-system" / "events" / "chapter_001.events.json").is_file()
-    with sqlite3.connect(tmp_path / ".webnovel" / "index.db") as conn:
+    with sqlite3.connect(tmp_path / ".canon-ledger" / "index.db") as conn:
         assert conn.execute("SELECT COUNT(*) FROM chapters").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM story_events").fetchone()[0] == 1
 
@@ -296,7 +312,7 @@ def test_event_rewrite_replaces_same_chapter_sqlite_rows(tmp_path):
     )
 
     assert [event["event_id"] for event in store.read_events(2)] == ["新线索"]
-    with sqlite3.connect(tmp_path / ".webnovel" / "index.db") as conn:
+    with sqlite3.connect(tmp_path / ".canon-ledger" / "index.db") as conn:
         assert conn.execute("SELECT event_id FROM story_events").fetchall() == [("新线索",)]
 
 
@@ -316,8 +332,8 @@ def test_failed_stage_does_not_install_half_rebuilt_read_models(tmp_path, monkey
         },
     )
     _commit_and_project(tmp_path, first)
-    old_state = (tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8")
-    old_summary = (tmp_path / ".webnovel" / "summaries" / "ch0001.md").read_text(encoding="utf-8")
+    old_state = (tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8")
+    old_summary = (tmp_path / ".canon-ledger" / "summaries" / "ch0001.md").read_text(encoding="utf-8")
 
     revised = _accepted_commit(
         tmp_path,
@@ -345,8 +361,8 @@ def test_failed_stage_does_not_install_half_rebuilt_read_models(tmp_path, monkey
     projected = _commit_and_project(tmp_path, revised)
 
     assert projected["projection_status"]["summary"].startswith("failed:")
-    assert (tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8") == old_state
-    assert (tmp_path / ".webnovel" / "summaries" / "ch0001.md").read_text(encoding="utf-8") == old_summary
+    assert (tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8") == old_state
+    assert (tmp_path / ".canon-ledger" / "summaries" / "ch0001.md").read_text(encoding="utf-8") == old_summary
     assert "北岸码头" not in old_summary
 
 
@@ -395,9 +411,9 @@ def test_rewriting_history_keeps_later_canonical_chapter_as_current_head(tmp_pat
     )
     _commit_and_project(tmp_path, revised_one)
 
-    state = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    state = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     assert state["entity_state"]["周宁"]["weapon"] == "无"
-    with sqlite3.connect(tmp_path / ".webnovel" / "index.db") as conn:
+    with sqlite3.connect(tmp_path / ".canon-ledger" / "index.db") as conn:
         values = [
             str(row[0])
             for row in conn.execute(

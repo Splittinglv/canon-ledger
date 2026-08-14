@@ -30,7 +30,7 @@ def test_writer_stage2_mapping(tmp_path):
     assert any(x.subject == "xiaoyan" and x.field == "yaolao" for x in rels)
 
 
-def test_writer_stage4_memory_facts_mapping(tmp_path):
+def test_writer_rejects_memory_facts_and_accepts_current_timeline(tmp_path):
     cfg = _cfg(tmp_path)
     writer = MemoryWriter(cfg)
     result = {
@@ -42,11 +42,24 @@ def test_writer_stage4_memory_facts_mapping(tmp_path):
         }
     }
     summary = writer.update_from_chapter_result(100, result)
-    # 旧版 memory_facts 中没有正文绑定证据的世界规则不再晋升为硬约束；
-    # 时间线、伏笔和读者承诺仍按兼容路径写入。
-    assert summary["items_added"] >= 3
     store = ScratchpadManager(cfg)
+    assert summary["items_added"] == 0, "已废弃 memory_facts 不得写入投影"
+    assert store.query(category="timeline", status="active") == []
+    assert store.query(category="open_loop", status="active") == []
+    assert store.query(category="reader_promise", status="active") == []
+
+    current = writer.update_from_chapter_result(
+        100,
+        {
+            "timeline_events": [
+                {
+                    "timeline_id": "离开天云宗",
+                    "event": "萧炎离开天云宗",
+                    "chapter": 100,
+                    "time_hint": "三年之约前夕",
+                }
+            ]
+        },
+    )
+    assert current["items_added"] == 1, "当前时间线字段必须能够写入投影"
     assert store.query(category="timeline", status="active")
-    assert not store.query(category="world_rule", status="active")
-    assert store.query(category="open_loop", status="active")
-    assert store.query(category="reader_promise", status="active")

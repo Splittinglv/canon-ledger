@@ -5,8 +5,8 @@ purpose: review Step 6 blocking issue 用户裁决参考
 
 # Blocking Override Guidelines
 
-> 主服务 skill: `webnovel-review` Step 6
-> 次服务 skill: `webnovel-write` Step 3（blocking 循环时参考）
+> 主服务 skill: `canon-ledger-review` Step 6
+> 次服务 skill: `canon-ledger-write` Step 3（blocking 循环时参考）
 > 内容层级: 提醒层 / 缺陷补偿层 / 知识补充层
 
 ---

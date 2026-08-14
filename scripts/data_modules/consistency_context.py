@@ -49,9 +49,6 @@ _CHAPTER_DIRECTIVE_LIST_FIELDS = frozenset(
         "cpns",
         "must_cover_nodes",
         "forbidden_zones",
-        # Read old contracts without losing the pre-canonical field names.
-        "mandatory_nodes",
-        "prohibitions",
         "key_entities",
     }
 )
@@ -490,26 +487,17 @@ def _sanitize_review(
     for key in (
         "must_check",
         "blocking_rules",
-        "must_cover_nodes",
-        "mandatory_nodes",
-        "prohibitions",
     ):
         cleaned[key] = _safe_fact_list(review.get(key))
     directive = chapter_directive or {}
     trusted_nodes = list(
         dict.fromkeys(
-            [
-                *list(directive.get("must_cover_nodes") or []),
-                *list(directive.get("mandatory_nodes") or []),
-            ]
+            list(directive.get("must_cover_nodes") or [])
         )
     )
     trusted_forbidden = list(
         dict.fromkeys(
-            [
-                *list(directive.get("forbidden_zones") or []),
-                *list(directive.get("prohibitions") or []),
-            ]
+            list(directive.get("forbidden_zones") or [])
         )
     )
     cleaned["must_check"] = list(

@@ -1,4 +1,4 @@
-# Webnovel Writer - Python Dependencies
+# CanonLedger - Python 依赖
 # Python >= 3.10 required
 
 # 核心依赖

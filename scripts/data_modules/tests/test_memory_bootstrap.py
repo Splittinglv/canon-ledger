@@ -56,7 +56,7 @@ def test_bootstrap_from_index_includes_state_changes_and_open_loops(tmp_path):
         )
     )
 
-    summaries_dir = cfg.webnovel_dir / "summaries"
+    summaries_dir = cfg.canon_ledger_dir / "summaries"
     summaries_dir.mkdir(parents=True, exist_ok=True)
     (summaries_dir / "ch0008.md").write_text(
         "## 剧情摘要\n内容\n\n## 伏笔\n- 三年之约\n- 神秘玉佩的来历\n",

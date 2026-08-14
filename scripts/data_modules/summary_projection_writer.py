@@ -13,7 +13,7 @@ def append_summary_projection(project_root: Path, commit_payload: dict) -> dict:
     if chapter <= 0 or not summary_text:
         return {"applied": False, "writer": "summary", "reason": "missing_summary"}
 
-    target = Path(project_root) / ".webnovel" / "summaries" / f"ch{chapter:04d}.md"
+    target = Path(project_root) / ".canon-ledger" / "summaries" / f"ch{chapter:04d}.md"
     target.parent.mkdir(parents=True, exist_ok=True)
     if "## 剧情摘要" not in summary_text:
         summary_text = f"## 剧情摘要\n{summary_text}\n"

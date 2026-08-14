@@ -236,13 +236,36 @@ async def test_modal_client_warmup_and_passthrough(tmp_path, monkeypatch):
     assert rr[0]["index"] == 0
 
 
-def test_get_client_singleton(tmp_path):
+def test_get_client_returns_independently_owned_clients(tmp_path):
     cfg = DataModulesConfig.from_project_root(tmp_path)
-    client1 = get_client(cfg)
-    client2 = get_client()
-    assert client1 is client2
-    client3 = get_client(cfg)
-    assert client3 is not client1
+    owned_client1 = get_client(cfg)
+    owned_client2 = get_client(cfg)
+
+    assert owned_client2 is not owned_client1
+
+
+@pytest.mark.asyncio
+async def test_async_context_closes_all_real_sessions(tmp_path):
+    """异步上下文退出后，嵌入与重排会话都应立即关闭。"""
+    config = DataModulesConfig.from_project_root(tmp_path)
+
+    async with EmbeddingAPIClient(config) as embed_client:
+        embed_session = await embed_client._get_session()
+        assert embed_session.closed is False
+    assert embed_session.closed is True
+    assert embed_client._session is None
+
+    async with RerankAPIClient(config) as rerank_client:
+        rerank_session = await rerank_client._get_session()
+        assert rerank_session.closed is False
+    assert rerank_session.closed is True
+    assert rerank_client._session is None
+
+    async with ModalAPIClient(config) as modal_client:
+        modal_embed_session = await modal_client._embed_client._get_session()
+        modal_rerank_session = await modal_client._rerank_client._get_session()
+    assert modal_embed_session.closed is True
+    assert modal_rerank_session.closed is True
 
 
 @pytest.mark.asyncio

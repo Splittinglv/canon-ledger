@@ -113,19 +113,8 @@ class ChapterCommitService:
         )
         extraction_payload = extraction.model_dump()
         extraction_payload["accepted_events"] = accepted_events
-        # Pre-v1 data-agent artifacts nested timeline rows under memory_facts.
-        # Lift them into the canonical commit field so old projects remain
-        # replayable through the same router/writer path.
-        legacy_memory_facts = extraction_payload.get("memory_facts")
-        timeline_rows = extraction.timeline_events
-        if (
-            not timeline_rows
-            and isinstance(legacy_memory_facts, dict)
-            and isinstance(legacy_memory_facts.get("timeline_events"), list)
-        ):
-            timeline_rows = legacy_memory_facts["timeline_events"]
         extraction_payload["timeline_events"] = normalize_timeline_events(
-            chapter, timeline_rows
+            chapter, extraction.timeline_events
         )
         commit_payload = {
             "meta": {
@@ -143,11 +132,10 @@ class ChapterCommitService:
             "provenance": {
                 "write_fact_role": "chapter_commit",
                 "projection_role": "derived_read_models",
-                "legacy_state_role": "projection_only",
                 "chapter_binding": chapter_binding,
             },
             "outline_snapshot": {
-                "goal": authoritative_goal or "",
+                "goal": authoritative_goal,
                 "planned_nodes": fulfillment.planned_nodes,
                 "covered_nodes": fulfillment.covered_nodes,
                 "missed_nodes": fulfillment.missed_nodes,

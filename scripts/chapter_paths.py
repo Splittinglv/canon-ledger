@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
-"""
-Chapter file path helpers.
+"""CanonLedger 当前正文文件路径助手。
 
-This project has seen multiple chapter filename conventions:
-1) Legacy flat layout: 正文/第0007章.md
-2) Volume layout:    正文/第1卷/第007章-章节标题.md
-
-To keep scripts robust, always resolve chapter files via these helpers instead of hardcoding a format.
+正文统一位于 ``正文/第NNNN章.md`` 或 ``正文/第NNNN章-标题.md``。
 """
 
 from __future__ import annotations
@@ -98,8 +93,8 @@ def extract_chapter_title(project_root: Path, chapter_num: int) -> str:
     return ""
 
 
-def _build_chapter_filename(project_root: Path, chapter_num: int, *, use_volume_layout: bool) -> str:
-    padded = f"{chapter_num:03d}" if use_volume_layout else f"{chapter_num:04d}"
+def _build_chapter_filename(project_root: Path, chapter_num: int) -> str:
+    padded = f"{chapter_num:04d}"
     title = extract_chapter_title(project_root, chapter_num)
     if title:
         return f"第{padded}章-{title}.md"
@@ -115,41 +110,13 @@ def find_chapter_file(project_root: Path, chapter_num: int) -> Optional[Path]:
     if not chapters_dir.exists():
         return None
 
-    legacy = chapters_dir / f"第{chapter_num:04d}章.md"
-    if legacy.exists():
-        return legacy
-
-    vol_dir = chapters_dir / f"第{volume_num_for_chapter(chapter_num)}卷"
-    if vol_dir.exists():
-        candidates = sorted(vol_dir.glob(f"第{chapter_num:03d}章*.md")) + sorted(vol_dir.glob(f"第{chapter_num:04d}章*.md"))
-        for c in candidates:
-            if c.is_file():
-                return c
-
-    # Fallback: search anywhere under 正文/ (supports custom layouts)
-    candidates = sorted(chapters_dir.rglob(f"第{chapter_num:03d}章*.md")) + sorted(chapters_dir.rglob(f"第{chapter_num:04d}章*.md"))
-    for c in candidates:
-        if c.is_file():
-            return c
+    for candidate in sorted(chapters_dir.glob(f"第{chapter_num:04d}章*.md")):
+        if candidate.is_file() and extract_chapter_num_from_filename(candidate.name) == chapter_num:
+            return candidate
 
     return None
 
 
-def default_chapter_draft_path(project_root: Path, chapter_num: int, *, use_volume_layout: bool = False) -> Path:
-    """
-    Preferred draft path when creating a new chapter file.
-
-    Args:
-        project_root: 项目根目录
-        chapter_num: 章节号
-        use_volume_layout: True 使用卷布局 (正文/第N卷/第NNN章-章节标题.md)，False 使用平坦布局 (正文/第NNNN章-章节标题.md)
-
-    Default is flat layout. If the detailed outline already has a chapter title,
-    append it to the filename for better discoverability.
-    """
-    if use_volume_layout:
-        vol_dir = project_root / "正文" / f"第{volume_num_for_chapter(chapter_num)}卷"
-        return vol_dir / _build_chapter_filename(project_root, chapter_num, use_volume_layout=True)
-    else:
-        return project_root / "正文" / _build_chapter_filename(project_root, chapter_num, use_volume_layout=False)
-
+def default_chapter_draft_path(project_root: Path, chapter_num: int) -> Path:
+    """返回当前项目创建新章节时唯一支持的正文路径。"""
+    return project_root / "正文" / _build_chapter_filename(project_root, chapter_num)

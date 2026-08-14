@@ -58,11 +58,11 @@ def safe_append_perf_timing(
     Append timing trace for profiling long-running data-agent pipeline steps.
 
     Output path:
-    - {project_root}/.webnovel/observability/data_agent_timing.jsonl
+    - {project_root}/.canon-ledger/observability/data_agent_timing.jsonl
     """
     try:
         root = Path(project_root).resolve()
-        obs_dir = root / ".webnovel" / "observability"
+        obs_dir = root / ".canon-ledger" / "observability"
         obs_dir.mkdir(parents=True, exist_ok=True)
         log_path = obs_dir / "data_agent_timing.jsonl"
 

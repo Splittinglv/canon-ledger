@@ -26,11 +26,9 @@ def _load_cursor_paths():
 @pytest.fixture(autouse=True)
 def isolate_plugin_env(monkeypatch, tmp_path):
     for key in (
-        "WEBNOVEL_PLUGIN_ROOT",
+        "CANON_LEDGER_PLUGIN_ROOT",
         "CURSOR_PLUGIN_ROOT",
-        "CLAUDE_PLUGIN_ROOT",
         "CURSOR_PROJECT_DIR",
-        "CLAUDE_PROJECT_DIR",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -39,22 +37,25 @@ def isolate_plugin_env(monkeypatch, tmp_path):
 
 def test_cursor_marketplace_manifest_lists_root_plugin():
     marketplace = json.loads((PLUGIN_ROOT / ".cursor-plugin" / "marketplace.json").read_text(encoding="utf-8"))
-    plugin = next(item for item in marketplace["plugins"] if item["name"] == "webnovel-writer")
+    plugin = next(item for item in marketplace["plugins"] if item["name"] == "canon-ledger")
     assert plugin["source"] in {".", "./"}
-    assert plugin["version"] == "6.2.1"
+    manifest = json.loads((PLUGIN_ROOT / ".cursor-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    assert plugin["version"] == manifest["version"]
     assert (PLUGIN_ROOT / ".cursor-plugin" / "plugin.json").is_file()
 
 
-def test_cursor_plugin_identity_points_to_this_fork_and_rules_are_scoped():
+def test_cursor_plugin_identity_and_rules_are_scoped():
     manifest = json.loads(
         (PLUGIN_ROOT / ".cursor-plugin" / "plugin.json").read_text(encoding="utf-8")
     )
+    assert manifest["name"] == "canon-ledger"
+    assert manifest["author"]["name"] == "Splittinglv"
     assert manifest["homepage"] == "https://github.com/Splittinglv/webnovel-writer-cursor"
     assert manifest["repository"] == "https://github.com/Splittinglv/webnovel-writer-cursor"
 
-    rule = (PLUGIN_ROOT / "rules" / "webnovel-canon.mdc").read_text(encoding="utf-8")
+    rule = (PLUGIN_ROOT / "rules" / "canon-ledger-canon.mdc").read_text(encoding="utf-8")
     assert "alwaysApply: false" in rule
-    assert "**/.webnovel/state.json" in rule
+    assert "**/.canon-ledger/state.json" in rule
     assert "alwaysApply: true" not in rule
 
 
@@ -63,7 +64,7 @@ def test_style_prompt_template_exists_and_is_author_owned():
     text = path.read_text(encoding="utf-8")
     assert "## 作者提示词" in text
     assert "不会" in text or "不覆盖" in text
-    write_skill = (PLUGIN_ROOT / "skills" / "webnovel-write" / "SKILL.md").read_text(encoding="utf-8")
+    write_skill = (PLUGIN_ROOT / "skills" / "canon-ledger-write" / "SKILL.md").read_text(encoding="utf-8")
     assert "polish-guide.md" not in write_skill
     assert "style-adapter.md" not in write_skill
     assert "anti-ai-guide.md" not in write_skill
@@ -71,26 +72,26 @@ def test_style_prompt_template_exists_and_is_author_owned():
 
 
 def test_optional_craft_pack_is_removed():
-    assert not (PLUGIN_ROOT / "optional" / "webnovel-craft").exists()
+    assert not (PLUGIN_ROOT / "optional" / "canon-ledger-craft").exists()
     readme = (PLUGIN_ROOT / "README.md").read_text(encoding="utf-8")
-    assert "optional/webnovel-craft" not in readme
-    for skill_name in ("webnovel-write", "webnovel-plan", "webnovel-init", "webnovel-query"):
+    assert "optional/canon-ledger-craft" not in readme
+    for skill_name in ("canon-ledger-write", "canon-ledger-plan", "canon-ledger-init", "canon-ledger-query"):
         text = (PLUGIN_ROOT / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8")
-        assert "optional/webnovel-craft" not in text, f"{skill_name} 仍引用已删除的技法目录"
+        assert "optional/canon-ledger-craft" not in text, f"{skill_name} 仍引用已删除的技法目录"
 
 
 def test_resolve_plugin_root_from_this_file():
     cursor_paths = _load_cursor_paths()
     root = cursor_paths.resolve_plugin_root()
     assert root == PLUGIN_ROOT
-    assert (root / "scripts" / "webnovel.py").is_file()
+    assert (root / "scripts" / "canon_ledger.py").is_file()
 
 
 def test_resolve_plugin_root_from_env(monkeypatch, tmp_path):
     cursor_paths = _load_cursor_paths()
     fake = tmp_path / "plugin"
     (fake / "scripts").mkdir(parents=True)
-    (fake / "scripts" / "webnovel.py").write_text("# marker\n", encoding="utf-8")
+    (fake / "scripts" / "canon_ledger.py").write_text("# marker\n", encoding="utf-8")
     monkeypatch.setenv("CURSOR_PLUGIN_ROOT", str(fake))
     assert cursor_paths.resolve_plugin_root() == fake.resolve()
 
@@ -111,10 +112,8 @@ def test_export_cursor_env_prints_json_data(monkeypatch, tmp_path):
                 for k, v in os.environ.items()
                 if k
                 not in {
-                    "WEBNOVEL_PLUGIN_ROOT",
+                    "CANON_LEDGER_PLUGIN_ROOT",
                     "CURSOR_PLUGIN_ROOT",
-                    "CLAUDE_PLUGIN_ROOT",
-                    "CLAUDE_PROJECT_DIR",
                 }
             },
             "CURSOR_PROJECT_DIR": str(workspace),
@@ -122,12 +121,11 @@ def test_export_cursor_env_prints_json_data(monkeypatch, tmp_path):
     )
     assert proc.returncode == 0
     payload = json.loads(proc.stdout)
-    assert payload["schema_version"] == "webnovel-cursor-env/v1"
+    assert payload["schema_version"] == "canon-ledger-cursor-env/v1"
     assert Path(payload["python_executable"]).is_file()
     assert payload["environment"] == {
-        "WEBNOVEL_PLUGIN_ROOT": str(PLUGIN_ROOT),
+        "CANON_LEDGER_PLUGIN_ROOT": str(PLUGIN_ROOT),
         "CURSOR_PLUGIN_ROOT": str(PLUGIN_ROOT),
-        "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT),
         "SCRIPTS_DIR": str(SCRIPTS_DIR),
         "WORKSPACE_ROOT": str(workspace.resolve()),
         "CURSOR_PROJECT_DIR": str(workspace.resolve()),
@@ -136,15 +134,17 @@ def test_export_cursor_env_prints_json_data(monkeypatch, tmp_path):
 
 
 def test_all_skills_parse_cursor_environment_as_data_without_cache_discovery():
-    skill_files = sorted((PLUGIN_ROOT / "skills").glob("webnovel-*/SKILL.md"))
+    skill_files = sorted((PLUGIN_ROOT / "skills").glob("canon-ledger-*/SKILL.md"))
 
     assert len(skill_files) == 8
     for skill_file in skill_files:
         text = skill_file.read_text(encoding="utf-8")
-        assert "webnovel-cursor-env/v1" in text, skill_file
+        assert "canon-ledger-cursor-env/v1" in text, skill_file
         assert 'payload["python_executable"]' in text, skill_file
-        assert 'WEBNOVEL_PYTHON' in text, skill_file
-        assert '"${WEBNOVEL_PYTHON}"' in text, skill_file
+        assert 'CANON_LEDGER_PYTHON' in text, skill_file
+        assert '"${CANON_LEDGER_PYTHON}"' in text, skill_file
+        assert "WEBNOVEL_" not in text, skill_file
+        assert "CLAUDE" not in text.upper(), skill_file
         assert "python -X utf8" not in text, skill_file
         assert 'eval "$_EXPORT"' not in text, skill_file
         assert ".rglob(" not in text, skill_file
@@ -158,7 +158,7 @@ def test_all_skills_parse_cursor_environment_as_data_without_cache_discovery():
 def test_skill_bootstrap_preserves_workspace_metacharacters_as_plain_data(tmp_path):
     import subprocess
 
-    skill_text = (PLUGIN_ROOT / "skills" / "webnovel-doctor" / "SKILL.md").read_text(
+    skill_text = (PLUGIN_ROOT / "skills" / "canon-ledger-doctor" / "SKILL.md").read_text(
         encoding="utf-8"
     )
     bootstrap = skill_text.split("```bash", 1)[1].split("```", 1)[0]
@@ -170,7 +170,7 @@ def test_skill_bootstrap_preserves_workspace_metacharacters_as_plain_data(tmp_pa
         encoding="utf-8",
         env={
             **os.environ,
-            "WEBNOVEL_PLUGIN_ROOT": str(PLUGIN_ROOT),
+            "CANON_LEDGER_PLUGIN_ROOT": str(PLUGIN_ROOT),
             "CURSOR_PROJECT_DIR": str(workspace),
         },
     )

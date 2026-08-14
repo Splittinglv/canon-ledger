@@ -112,7 +112,7 @@ class ContextPack:
     chapter: int
     sections: Dict[str, Any] = field(default_factory=dict)
     budget_used_tokens: int = 0
-    schema_version: str = "webnovel-context-pack/v2"
+    schema_version: str = "canon-ledger-context-pack/v2"
     budget: Dict[str, Any] = field(default_factory=dict)
     completeness: Dict[str, Any] = field(default_factory=dict)
 

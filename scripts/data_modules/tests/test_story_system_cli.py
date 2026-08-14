@@ -18,8 +18,8 @@ def _write_csv(path, headers, rows):
 
 def test_story_system_persist_writes_master_chapter_and_anti_patterns(tmp_path, monkeypatch):
     project_root = tmp_path / "book"
-    (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
 
     csv_dir = tmp_path / "csv"
     csv_dir.mkdir()
@@ -96,8 +96,8 @@ def test_story_system_persist_preserves_complete_outline_directive(
     tmp_path, monkeypatch, capsys
 ):
     project_root = tmp_path / "book"
-    (project_root / ".webnovel").mkdir(parents=True)
-    (project_root / ".webnovel" / "state.json").write_text(
+    (project_root / ".canon-ledger").mkdir(parents=True)
+    (project_root / ".canon-ledger" / "state.json").write_text(
         json.dumps(
             {
                 "progress": {
@@ -277,8 +277,8 @@ def test_markdown_writer_preserves_manual_notes_outside_markers(tmp_path):
 
 def test_story_system_default_csv_dir_routes_real_genre_seed(tmp_path, monkeypatch, capsys):
     project_root = tmp_path / "book"
-    (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
 
     from story_system import main
 
@@ -307,8 +307,8 @@ def test_story_system_default_csv_dir_routes_real_genre_seed(tmp_path, monkeypat
 
 def test_story_system_warns_on_placeholder_query(tmp_path, monkeypatch, capsys):
     project_root = tmp_path / "book"
-    (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     csv_dir = tmp_path / "csv"
     csv_dir.mkdir()
     _write_csv(csv_dir / "题材与调性推理.csv", ["编号", "关键词"], [])
@@ -342,8 +342,8 @@ def test_story_system_warns_on_placeholder_query(tmp_path, monkeypatch, capsys):
 
 def test_story_system_persist_unroutable_exits_without_contracts(tmp_path, monkeypatch, capsys):
     project_root = tmp_path / "book"
-    (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
 
     csv_dir = tmp_path / "csv"
     csv_dir.mkdir()

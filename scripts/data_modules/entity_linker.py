@@ -216,7 +216,7 @@ def main():
     # 初始化
     config = None
     if args.project_root:
-        # 允许传入“工作区根目录”，统一解析到真正的 book project_root（必须包含 .webnovel/state.json）
+        # 允许传入“工作区根目录”，统一解析到真正的 book project_root（必须包含 .canon-ledger/state.json）
         from project_locator import resolve_project_root
         from .config import DataModulesConfig
 

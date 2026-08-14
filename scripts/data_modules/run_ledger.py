@@ -37,15 +37,16 @@ else:
     from .projection_log import commit_hash, latest_projection_run, projection_status_from_run
 
 
-SCHEMA_VERSION = "webnovel-run-ledger/v1"
-LEDGER_REL = Path(".webnovel") / "run_ledger.json"
+SCHEMA_VERSION = "canon-ledger-run-ledger/v1"
+LEDGER_REL = Path(".canon-ledger") / "run_ledger.json"
 WRITE_STEPS = ("draft", "review", "data", "commit", "projection", "backup")
 
-LOCAL_BACKUP_RECEIPT_SCHEMA = "webnovel-backup-receipt/v2"
-LOCAL_SNAPSHOT_MANIFEST_SCHEMA = "webnovel-local-snapshot/v1"
+GIT_BACKUP_RECEIPT_SCHEMA = "canon-ledger-backup-receipt/v1"
+LOCAL_BACKUP_RECEIPT_SCHEMA = "canon-ledger-backup-receipt/v2"
+LOCAL_SNAPSHOT_MANIFEST_SCHEMA = "canon-ledger-local-snapshot/v1"
 LOCAL_SNAPSHOT_MANIFEST = "snapshot.manifest.json"
-LOCAL_BACKUP_KEY_REL = Path(".webnovel") / "backups" / ".integrity-key"
-LOCAL_SNAPSHOT_ROOTS = ("正文", "大纲", "设定集", ".story-system", ".webnovel")
+LOCAL_BACKUP_KEY_REL = Path(".canon-ledger") / "backups" / ".integrity-key"
+LOCAL_SNAPSHOT_ROOTS = ("正文", "大纲", "设定集", ".story-system", ".canon-ledger")
 _LOCAL_SNAPSHOT_RE = re.compile(r"^snapshot_ch(?P<chapter>\d{4})_[A-Za-z0-9._-]+$")
 
 
@@ -211,7 +212,7 @@ def build_local_snapshot_manifest(
             "snapshot": snapshot_name,
             "created_at": created_at,
             "root_presence": root_presence,
-            "excluded_paths": [".webnovel/backups"],
+            "excluded_paths": [".canon-ledger/backups"],
             "directories": directories,
             "files": entries,
         },
@@ -237,7 +238,7 @@ def _local_snapshot_manifest_trusted(
         return False
     if manifest.get("snapshot") != snapshot_name:
         return False
-    if manifest.get("excluded_paths") != [".webnovel/backups"]:
+    if manifest.get("excluded_paths") != [".canon-ledger/backups"]:
         return False
     if not _backup_signature_trusted(project_root, manifest):
         return False
@@ -275,7 +276,7 @@ def local_snapshot_manifest_trusted(
 ) -> bool:
     root = Path(project_root)
     snapshot = Path(snapshot_root)
-    backups_root = root / ".webnovel" / "backups"
+    backups_root = root / ".canon-ledger" / "backups"
     try:
         if snapshot.is_symlink() or not snapshot.is_dir():
             return False
@@ -325,8 +326,8 @@ def local_snapshot_receipt_trusted(
         return False
     if receipt.get("manifest_path") != LOCAL_SNAPSHOT_MANIFEST:
         return False
-    snapshot_root = root / ".webnovel" / "backups" / snapshot_name
-    backups_root = root / ".webnovel" / "backups"
+    snapshot_root = root / ".canon-ledger" / "backups" / snapshot_name
+    backups_root = root / ".canon-ledger" / "backups"
     try:
         if snapshot_root.is_symlink() or not snapshot_root.is_dir():
             return False
@@ -376,7 +377,7 @@ def local_snapshot_receipt_trusted(
             or snapshot_commit.get("chapter_binding") != binding
         ):
             return False
-        if not (snapshot_root / ".webnovel" / "state.json").is_file():
+        if not (snapshot_root / ".canon-ledger" / "state.json").is_file():
             return False
         if require_current_binding:
             current_commit = _read_json(_commit_path(root, chapter))
@@ -578,7 +579,7 @@ def _commit_bytes_match(expected_hash: str, raw: bytes) -> bool:
 
 
 def backup_receipt_trusted(project_root: Path, chapter: int) -> bool:
-    backup_dir = project_root / ".webnovel" / "backups"
+    backup_dir = project_root / ".canon-ledger" / "backups"
     receipt = _read_json(backup_dir / f"ch{chapter:04d}.receipt.json")
     if receipt.get("schema_version") == LOCAL_BACKUP_RECEIPT_SCHEMA:
         return local_snapshot_receipt_trusted(
@@ -587,7 +588,7 @@ def backup_receipt_trusted(project_root: Path, chapter: int) -> bool:
             chapter=chapter,
             require_current_binding=True,
         )
-    if receipt.get("schema_version") != "webnovel-backup-receipt/v1":
+    if receipt.get("schema_version") != GIT_BACKUP_RECEIPT_SCHEMA:
         return False
     # v1 的本地 receipt 没有完整目录清单和内部签名，任意外部 JSON 加两个
     # 文件就能伪造“已备份”。旧格式只继续支持由 Git tag 固化的备份点。
@@ -659,7 +660,7 @@ def backup_receipt_trusted(project_root: Path, chapter: int) -> bool:
             if check.returncode != 0:
                 return False
             receipt_rel = (
-                Path(".webnovel") / "backups" / f"ch{chapter:04d}.receipt.json"
+                Path(".canon-ledger") / "backups" / f"ch{chapter:04d}.receipt.json"
             ).as_posix()
             stored = subprocess.run(
                 ["git", "show", f"{tag_name}:{receipt_rel}"],
@@ -873,7 +874,7 @@ def _parse_string_list(raw: str) -> list[str]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Record and inspect webnovel write run ledger")
+    parser = argparse.ArgumentParser(description="记录并检查 CanonLedger 写章运行账本")
     parser.add_argument("--project-root", required=True, help="书项目根目录")
     sub = parser.add_subparsers(dest="action", required=True)
     record = sub.add_parser("record-write-step", help="记录写章步骤状态")

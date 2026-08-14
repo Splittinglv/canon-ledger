@@ -30,31 +30,24 @@ from .consistency_context import (
 
 
 def merged_planned_nodes(directive: Any) -> list[str]:
-    """Merge canonical and legacy must-cover fields without reordering."""
+    """读取当前章合同中的必须覆盖节点，并保持原有顺序。"""
     if not isinstance(directive, dict):
         return []
     nodes: list[str] = []
-    for key in ("must_cover_nodes", "mandatory_nodes"):
-        values = directive.get(key)
-        if not isinstance(values, list):
-            continue
-        for value in values:
-            if isinstance(value, str) and value and value not in nodes:
-                nodes.append(value)
+    values = directive.get("must_cover_nodes")
+    if not isinstance(values, list):
+        return []
+    for value in values:
+        if isinstance(value, str) and value and value not in nodes:
+            nodes.append(value)
     return nodes
 
 
 def load_authoritative_chapter_goal(
     project_root: str | Path,
     chapter: int,
-) -> str | None:
-    """读取现代章合同中的权威目标，并保留纯旧版项目兼容性。
-
-    章合同一旦存在，``chapter_directive.goal`` 就必须是非空文本；不能再
-    回退到 ``override_allowed.chapter_focus``，否则合同落盘时丢失目标也会
-    被静默接受。没有章合同、章纲里也没有目标时返回 ``None``，供不含
-    Story System 的旧版项目和纯单元边界继续使用。
-    """
+) -> str:
+    """读取当前章合同中的权威目标；合同或目标缺失时一律阻断。"""
     root = Path(project_root)
     target_chapter = int(chapter)
     try:
@@ -76,18 +69,7 @@ def load_authoritative_chapter_goal(
         / f"chapter_{target_chapter:03d}.json"
     )
     if not path.is_file():
-        story_root = root / ".story-system"
-        modern_contract_tree = any(
-            candidate.exists()
-            for candidate in (
-                story_root / "MASTER_SETTING.json",
-                story_root / "volumes",
-                story_root / "reviews",
-            )
-        )
-        if outline_goal or modern_contract_tree:
-            raise ValueError("chapter_contract_missing_goal")
-        return None
+        raise ValueError("chapter_contract_missing_goal")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -118,13 +100,8 @@ def load_authoritative_chapter_goal(
 def load_authoritative_planned_nodes(
     project_root: str | Path,
     chapter: int,
-) -> list[str] | None:
-    """Return persisted must-cover nodes, or ``None`` for legacy contracts.
-
-    ``None`` means that the contract contains no authoritative node field and
-    preserves compatibility with old projects.  An explicitly present empty
-    field returns ``[]`` and is still authoritative.
-    """
+) -> list[str]:
+    """读取当前章合同中已落盘的必须覆盖节点。"""
     root = Path(project_root)
     try:
         outline_structure = load_chapter_plot_structure(root, int(chapter)) or {}
@@ -143,9 +120,7 @@ def load_authoritative_planned_nodes(
         / f"chapter_{int(chapter):03d}.json"
     )
     if not path.is_file():
-        if outline_nodes:
-            raise ValueError("chapter_contract_missing_must_cover_nodes")
-        return None
+        raise ValueError("chapter_contract_missing_must_cover_nodes")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -160,40 +135,24 @@ def load_authoritative_planned_nodes(
             raise ValueError("chapter_contract_chapter_mismatch")
 
     raw_directive = payload.get("chapter_directive")
-    if raw_directive is None:
-        if outline_nodes:
-            raise ValueError("chapter_contract_missing_must_cover_nodes")
-        return None
     if not isinstance(raw_directive, dict):
         raise ValueError("chapter_directive_must_be_object")
-    has_authoritative_field = any(
-        key in raw_directive for key in ("must_cover_nodes", "mandatory_nodes")
-    )
-    if not has_authoritative_field:
-        if outline_nodes:
-            raise ValueError("chapter_contract_missing_must_cover_nodes")
-        return None
-    for key in ("must_cover_nodes", "mandatory_nodes"):
-        if key not in raw_directive:
-            continue
-        raw_nodes = raw_directive[key]
-        if not isinstance(raw_nodes, list):
-            raise ValueError("chapter_must_cover_nodes_must_be_list")
-        if any(
-            not isinstance(item, str) or not item.strip()
-            for item in raw_nodes
-        ):
-            raise ValueError("chapter_must_cover_node_must_be_nonempty_text")
+    if "must_cover_nodes" not in raw_directive:
+        raise ValueError("chapter_contract_missing_must_cover_nodes")
+    raw_nodes = raw_directive["must_cover_nodes"]
+    if not isinstance(raw_nodes, list):
+        raise ValueError("chapter_must_cover_nodes_must_be_list")
+    if any(
+        not isinstance(item, str) or not item.strip()
+        for item in raw_nodes
+    ):
+        raise ValueError("chapter_must_cover_node_must_be_nonempty_text")
 
     cleaned_contracts = sanitize_story_contracts({"chapter": payload})
     chapter_contract = cleaned_contracts.get("chapter") or {}
     directive = chapter_contract.get("chapter_directive") or {}
     nodes = merged_planned_nodes(directive)
-    raw_count = sum(
-        len(raw_directive.get(key) or [])
-        for key in ("must_cover_nodes", "mandatory_nodes")
-        if key in raw_directive
-    )
+    raw_count = len(raw_nodes)
     if raw_count and not nodes:
         raise ValueError("chapter_must_cover_nodes_sanitized_empty")
     if outline_nodes and nodes != outline_nodes:
@@ -203,12 +162,9 @@ def load_authoritative_planned_nodes(
 
 def fulfillment_node_errors(
     fulfillment: Any,
-    authoritative_nodes: list[str] | None,
+    authoritative_nodes: list[str],
 ) -> list[str]:
     """Validate that fulfillment is a complete partition of outline nodes."""
-    if authoritative_nodes is None:
-        return []
-
     def values(name: str) -> list[Any]:
         if isinstance(fulfillment, dict):
             value = fulfillment.get(name)

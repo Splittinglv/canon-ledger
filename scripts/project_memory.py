@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""把 /webnovel-learn 写成可被默认上下文消费的结构化一致性规则。"""
+"""把 /canon-ledger-learn 写成可被默认上下文消费的结构化一致性规则。"""
 from __future__ import annotations
 
 import argparse
@@ -26,7 +26,7 @@ PATTERN_LABELS = {
 
 
 def _current_chapter(project_root: Path) -> Optional[int]:
-    state_path = project_root / ".webnovel" / "state.json"
+    state_path = project_root / ".canon-ledger" / "state.json"
     if not state_path.exists():
         return None
     try:
@@ -105,14 +105,14 @@ def add_pattern(
             field=pattern_type,
             value=description,
             payload={
-                "origin": "/webnovel-learn",
+                "origin": "/canon-ledger-learn",
                 "pattern_type": pattern_type,
                 "category": str(category or ""),
                 "importance": str(importance or "medium"),
             },
             status="active",
             source_chapter=source,
-            evidence=["author:/webnovel-learn"],
+            evidence=["author:/canon-ledger-learn"],
             updated_at=now_iso(),
         )
     )

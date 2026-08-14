@@ -10,13 +10,13 @@
 
 | Skill              | Priority | Current problem               | Target role                       | Existing references                                                                                                                       | Missing references                      |
 | ------------------ | -------- | ----------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| webnovel-write     | P0       | 默认产品已收缩为长期一致性 | 主链总控 skill：流程+闸门+交付物+恢复           | core-constraints；文风只读项目内 `设定集/文风提示词.md` | 命名规则 CSV（一致性） |
-| webnovel-review    | P0       | 135 行，阻断裁决链不够清楚               | 独立审查入口：reviewer 调用→报告+blocking 处理 | review-schema, core-constraints                                                                                                           | blocking-override-guidelines            |
-| webnovel-plan      | P0       | 默认不强制钩子/爽点/CBN                  | 规划流程入口：卷纲→时间线→章纲                  | plot-signal-vs-spoiler；CBN 仅为可选字段名                                                                                                                        | — |
-| webnovel-init      | P1       | 金手指/卖点/反套路改为可选               | 初始化访谈与生成工作流                       | system-data-flow；题材公式/卖点包改为可选                                                                                                                            | 命名规则 CSV                                |
-| webnovel-query     | P1       | 192 行，偏操作手册，低层命令暴露过多          | 查询/分析型 skill                      | (内联)                                                                                                                                      | 暂无刚需                                    |
-| webnovel-dashboard | P2       | 74 行，过轻，缺验证与恢复结构              | 工具启动型 skill                       | (无)                                                                                                                                       | 暂无刚需                                    |
-| webnovel-learn     | P2       | 45 行，过轻，缺边界与恢复                | 轻量记录型 skill                       | (无)                                                                                                                                       | 暂无刚需                                    |
+| canon-ledger-write     | P0       | 默认产品已收缩为长期一致性 | 主链总控 skill：流程+闸门+交付物+恢复           | core-constraints；文风只读项目内 `设定集/文风提示词.md` | 命名规则 CSV（一致性） |
+| canon-ledger-review    | P0       | 135 行，阻断裁决链不够清楚               | 独立审查入口：reviewer 调用→报告+blocking 处理 | review-schema, core-constraints                                                                                                           | blocking-override-guidelines            |
+| canon-ledger-plan      | P0       | 默认不强制钩子/爽点/CBN                  | 规划流程入口：卷纲→时间线→章纲                  | plot-signal-vs-spoiler；CBN 仅为可选字段名                                                                                                                        | — |
+| canon-ledger-init      | P1       | 金手指/卖点/反套路改为可选               | 初始化访谈与生成工作流                       | system-data-flow；题材公式/卖点包改为可选                                                                                                                            | 命名规则 CSV                                |
+| canon-ledger-query     | P1       | 192 行，偏操作手册，低层命令暴露过多          | 查询/分析型 skill                      | (内联)                                                                                                                                      | 暂无刚需                                    |
+| canon-ledger-dashboard | P2       | 74 行，过轻，缺验证与恢复结构              | 工具启动型 skill                       | (无)                                                                                                                                       | 暂无刚需                                    |
+| canon-ledger-learn     | P2       | 45 行，过轻，缺边界与恢复                | 轻量记录型 skill                       | (无)                                                                                                                                       | 暂无刚需                                    |
 
 
 ## 二、确认缺口清单
@@ -26,9 +26,9 @@
 
 | Reference                                           | Main skill                        | Step/trigger                  | Gap type  | Why not inline                   |
 | --------------------------------------------------- | --------------------------------- | ----------------------------- | --------- | -------------------------------- |
-| `references/review/blocking-override-guidelines.md` | webnovel-review                   | Step 6 / blocking issue 需用户决策 | 缺陷补偿      | 涉及可/不可 override 场景判断，需独立正反例      |
-| `references/outlining/plot-signal-vs-spoiler.md`    | webnovel-plan                     | 章纲拆分 / always                 | 提醒 + 知识补充 | 信号 vs 剧透的判断标准需独立说明，skill 一句话覆盖不了 |
-| `references/shared/naming-and-voice-gaps.md`        | webnovel-write (主), init/plan (次) | Step 2 / 多角色对话、新角色命名          | 缺陷补偿      | 命名同质化、口吻趋同、题材语汇漂移涉及多类稳定错误        |
+| `references/review/blocking-override-guidelines.md` | canon-ledger-review                   | Step 6 / blocking issue 需用户决策 | 缺陷补偿      | 涉及可/不可 override 场景判断，需独立正反例      |
+| `references/outlining/plot-signal-vs-spoiler.md`    | canon-ledger-plan                     | 章纲拆分 / always                 | 提醒 + 知识补充 | 信号 vs 剧透的判断标准需独立说明，skill 一句话覆盖不了 |
+| `references/shared/naming-and-voice-gaps.md`        | canon-ledger-write (主), init/plan (次) | Step 2 / 多角色对话、新角色命名          | 缺陷补偿      | 命名同质化、口吻趋同、题材语汇漂移涉及多类稳定错误        |
 
 
 ### 新增 CSV 知识库
@@ -60,7 +60,7 @@
 | 原提案                                      | 过滤理由                         | 恢复条件                 |
 | ---------------------------------------- | ---------------------------- | -------------------- |
 | init/title-patterns-and-anti-patterns.md | 可作为命名规则.csv 中几行条目            | CSV 覆盖不够、书名模板化严重时升级  |
-| init/protagonist-flaw-patterns.md        | Claude 通用能力可覆盖               | 网文场景缺陷设计空泛化时补 CSV 条目 |
+| init/protagonist-flaw-patterns.md        | 模型 通用能力可覆盖               | 网文场景缺陷设计空泛化时补 CSV 条目 |
 | query/entity-alias-resolution.md         | 别名解析是代码逻辑 (entity_linker.py) | 语义歧义频发时补             |
 | query/foreshadowing-urgency-rules.md     | 紧急度排序已在 context-agent 实现     | 输出解释不稳定时补            |
 | learn/pattern-taxonomy.md                | 分类规则可内联 skill                | 分类质量持续不稳时补 CSV       |
@@ -94,5 +94,5 @@
 
 ## 五、2026-08-13 默认产品收缩
 
-默认写章/规划/初始化只守长期一致性。原 `optional/webnovel-craft/` 技法 md 已从插件移除。CSV 技法表仍在 `references/csv/`，默认不注入写章合同。缺席优于禁止。
+默认写章/规划/初始化只守长期一致性。原 `optional/canon-ledger-craft/` 技法 md 已从插件移除。CSV 技法表仍在 `references/csv/`，默认不注入写章合同。缺席优于禁止。
 

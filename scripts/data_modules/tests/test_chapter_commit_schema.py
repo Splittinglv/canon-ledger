@@ -19,7 +19,7 @@ from data_modules.chapter_commit_schema import (
 
 def _binding(chapter=3, *, digest="a" * 64, path=None):
     return {
-        "schema_version": "webnovel-chapter-content-binding/v1",
+        "schema_version": "canon-ledger-chapter-content-binding/v1",
         "chapter": chapter,
         "path": path or f"正文/第{chapter:04d}章.md",
         "sha256": digest,

@@ -1,5 +1,5 @@
 {
-  "schema_version": "webnovel-behavior-evals/v1",
+  "schema_version": "canon-ledger-behavior-evals/v1",
   "suite": "fast",
   "cases": [
     {
@@ -10,19 +10,19 @@
     {
       "id": "skill_init_contract",
       "type": "skill_contract",
-      "skill": "webnovel-init",
-      "description": "`/webnovel-init` 保留深入信息收集闸门，并且在用户确认前不写入正式设定。",
+      "skill": "canon-ledger-init",
+      "description": "`/canon-ledger-init` 保留深入信息收集闸门，并且在用户确认前不写入正式设定。",
       "required": [
-        "未过充分性闸门，不执行 `webnovel.py init`",
+        "未过充分性闸门，不执行 `canon_ledger.py init`",
         "用户确认前不得写入",
-        "${WEBNOVEL_PYTHON}\" -X utf8"
+        "${CANON_LEDGER_PYTHON}\" -X utf8"
       ]
     },
     {
       "id": "skill_plan_contract",
       "type": "skill_contract",
-      "skill": "webnovel-plan",
-      "description": "`/webnovel-plan` 保留大纲阻断规则，并刷新 Story System 运行时合同。",
+      "skill": "canon-ledger-plan",
+      "description": "`/canon-ledger-plan` 保留大纲阻断规则，并刷新 Story System 运行时合同。",
       "required": [
         "若发现总纲与设定冲突，先阻断",
         "placeholder-scan",
@@ -32,8 +32,8 @@
     {
       "id": "skill_write_contract",
       "type": "skill_contract",
-      "skill": "webnovel-write",
-      "description": "`/webnovel-write` 在合适的流程边界调用运行时闸门。",
+      "skill": "canon-ledger-write",
+      "description": "`/canon-ledger-write` 在合适的流程边界调用运行时闸门。",
       "required": [
         "write-gate --chapter {chapter_num} --stage prewrite",
         "write-gate --chapter {chapter_num} --stage precommit",
@@ -54,8 +54,8 @@
     {
       "id": "skill_review_contract",
       "type": "skill_contract",
-      "skill": "webnovel-review",
-      "description": "`/webnovel-review` 以 `reviewer` 输出为依据，并保留阻断问题处理流程。",
+      "skill": "canon-ledger-review",
+      "description": "`/canon-ledger-review` 以 `reviewer` 输出为依据，并保留阻断问题处理流程。",
       "required": [
         "必须通过 `Task` 工具调用 `reviewer`",
         "review-pipeline",
@@ -65,8 +65,8 @@
     {
       "id": "skill_query_contract",
       "type": "skill_contract",
-      "skill": "webnovel-query",
-      "description": "`/webnovel-query` 保持只读，并优先使用故事系统事实源。",
+      "skill": "canon-ledger-query",
+      "description": "`/canon-ledger-query` 保持只读，并优先使用故事系统事实源。",
       "required": [
         "只读操作，不修改任何项目文件",
         "memory-contract load-context",
@@ -76,8 +76,8 @@
     {
       "id": "skill_learn_contract",
       "type": "skill_contract",
-      "skill": "webnovel-learn",
-      "description": "`/webnovel-learn` 通过 `project-memory` 命令行写入，不手工编辑 JSON。",
+      "skill": "canon-ledger-learn",
+      "description": "`/canon-ledger-learn` 通过 `project-memory` 命令行写入，不手工编辑 JSON。",
       "required": [
         "project-memory add-pattern",
         "不删除旧规则，仅追加",
@@ -87,19 +87,19 @@
     {
       "id": "skill_dashboard_contract",
       "type": "skill_contract",
-      "skill": "webnovel-dashboard",
-      "description": "`/webnovel-dashboard` 保持只读，并展示运行时健康状态。",
+      "skill": "canon-ledger-dashboard",
+      "description": "`/canon-ledger-dashboard` 保持只读，并展示运行时健康状态。",
       "required": [
         "只读",
         "/api/story-runtime/health",
-        "${WEBNOVEL_PYTHON}\" -m dashboard.server"
+        "${CANON_LEDGER_PYTHON}\" -m dashboard.server"
       ]
     },
     {
       "id": "skill_doctor_contract",
       "type": "skill_contract",
-      "skill": "webnovel-doctor",
-      "description": "`/webnovel-doctor` 保持只读，并在详细诊断前检查项目状态。",
+      "skill": "canon-ledger-doctor",
+      "description": "`/canon-ledger-doctor` 保持只读，并在详细诊断前检查项目状态。",
       "required": [
         "只读诊断",
         "project-status",
@@ -109,7 +109,7 @@
     {
       "id": "write_blocks_before_commit",
       "type": "write_blocking_gate",
-      "description": "`/webnovel-write` 在提交前保留审查阻断项，并调用运行时闸门。"
+      "description": "`/canon-ledger-write` 在提交前保留审查阻断项，并调用运行时闸门。"
     },
     {
       "id": "data_agent_artifact_only",
@@ -135,7 +135,7 @@
       "id": "user_report_minimal_review_skipped",
       "type": "user_report_probe",
       "scenario": "minimal_review_skipped",
-      "description": "`/webnovel-write --minimal` 的最终报告会说明已跳过 `reviewer`，不会伪装成完整审查通过。"
+      "description": "`/canon-ledger-write --minimal` 的最终报告会说明已跳过 `reviewer`，不会伪装成完整审查通过。"
     },
     {
       "id": "user_report_missing_data_artifacts",

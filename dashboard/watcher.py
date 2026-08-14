@@ -1,7 +1,7 @@
 """
 Watchdog 文件变更监听器 + SSE 推送
 
-监控 PROJECT_ROOT/.webnovel/ 与 .story-system/ 的关键文件写事件，
+监控 PROJECT_ROOT/.canon-ledger/ 与 .story-system/ 的关键文件写事件，
 通过 SSE 通知所有已连接的前端客户端刷新数据。
 """
 
@@ -25,8 +25,8 @@ def _is_relative_to(path: Path, root: Path | None) -> bool:
         return False
 
 
-class _WebnovelFileHandler(FileSystemEventHandler):
-    """关注 .webnovel/ 关键文件与 .story-system/ JSON 变更。"""
+class _CanonLedgerFileHandler(FileSystemEventHandler):
+    """关注 .canon-ledger/ 关键文件与 .story-system/ JSON 变更。"""
 
     WATCH_NAMES = {"state.json", "index.db", "workflow_state.json"}
 
@@ -34,18 +34,18 @@ class _WebnovelFileHandler(FileSystemEventHandler):
         self,
         notify_callback,
         *,
-        watch_webnovel_dir: Path | None,
+        watch_canon_ledger_dir: Path | None,
         watch_story_system_dir: Path | None,
     ):
         super().__init__()
         self._notify = notify_callback
-        self._watch_webnovel_dir = Path(watch_webnovel_dir).resolve() if watch_webnovel_dir else None
+        self._watch_canon_ledger_dir = Path(watch_canon_ledger_dir).resolve() if watch_canon_ledger_dir else None
         self._watch_story_system_dir = (
             Path(watch_story_system_dir).resolve() if watch_story_system_dir else None
         )
 
     def _should_notify(self, path: Path) -> bool:
-        if _is_relative_to(path, self._watch_webnovel_dir):
+        if _is_relative_to(path, self._watch_canon_ledger_dir):
             return path.name in self.WATCH_NAMES
         if _is_relative_to(path, self._watch_story_system_dir):
             return path.suffix.lower() == ".json"
@@ -111,22 +111,22 @@ class FileWatcher:
     def start(
         self,
         *,
-        watch_webnovel_dir: Path | None,
+        watch_canon_ledger_dir: Path | None,
         watch_story_system_dir: Path | None,
         loop: asyncio.AbstractEventLoop,
     ):
-        """启动 watchdog observer，同时监听 .webnovel 与 .story-system。"""
+        """启动 watchdog observer，同时监听 .canon-ledger 与 .story-system。"""
         self.stop()
         self._loop = loop
-        handler = _WebnovelFileHandler(
+        handler = _CanonLedgerFileHandler(
             self._on_change,
-            watch_webnovel_dir=watch_webnovel_dir,
+            watch_canon_ledger_dir=watch_canon_ledger_dir,
             watch_story_system_dir=watch_story_system_dir,
         )
         self._observer = Observer()
         has_watch_target = False
-        if watch_webnovel_dir and Path(watch_webnovel_dir).is_dir():
-            self._observer.schedule(handler, str(watch_webnovel_dir), recursive=False)
+        if watch_canon_ledger_dir and Path(watch_canon_ledger_dir).is_dir():
+            self._observer.schedule(handler, str(watch_canon_ledger_dir), recursive=False)
             has_watch_target = True
         if watch_story_system_dir and Path(watch_story_system_dir).is_dir():
             self._observer.schedule(handler, str(watch_story_system_dir), recursive=True)

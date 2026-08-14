@@ -10,36 +10,13 @@ from typing import Any
 RETRIEVAL_SCHEMA_VERSION = "fact-only-v3"
 
 
-EXTRACTION_FIELDS = (
-    "accepted_events",
-    "state_deltas",
-    "entity_deltas",
-    "entities_appeared",
-    "scenes",
-    "timeline_events",
-    "chapter_meta",
-    "dominant_strand",
-    "summary_text",
-)
-
-
 def extraction_result_from_commit(commit_payload: dict[str, Any]) -> dict[str, Any]:
-    """Return the canonical extraction artifact from a commit.
-
-    New commits store the extraction snapshot under ``extraction_result``.
-    Older commits stored these fields at top level, so this helper keeps
-    projections readable without preserving two write shapes. If the
-    canonical nested artifact exists, it is the only source of truth.
-    """
+    """返回当前提交中唯一受支持的 ``extraction_result`` 工件。"""
     nested = commit_payload.get("extraction_result")
     if isinstance(nested, dict):
         return dict(nested)
 
-    result: dict[str, Any] = {}
-    for field in EXTRACTION_FIELDS:
-        if field in commit_payload:
-            result[field] = commit_payload.get(field)
-    return result
+    return {}
 
 
 def extraction_list(commit_payload: dict[str, Any], field: str) -> list[Any]:

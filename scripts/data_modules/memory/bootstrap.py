@@ -157,7 +157,7 @@ def bootstrap_from_index(config: DataModulesConfig | None = None) -> Dict[str, A
         by_category["relationship"] = by_category.get("relationship", 0) + 1
 
     # 从 summaries 中抽取“伏笔”区块回填 open_loop。
-    summaries_dir = cfg.webnovel_dir / "summaries"
+    summaries_dir = cfg.canon_ledger_dir / "summaries"
     if summaries_dir.exists():
         for path in sorted(summaries_dir.glob("*.md")):
             text = path.read_text(encoding="utf-8")

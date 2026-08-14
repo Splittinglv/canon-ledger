@@ -27,26 +27,29 @@ ALLOWED_PREWRITE_PHASES = {
 }
 
 
-def _plot_structure(chapter_contract: dict[str, Any], review_contract: dict[str, Any]) -> dict[str, Any]:
+def _plot_structure(chapter_contract: dict[str, Any]) -> dict[str, Any]:
     directive = chapter_contract.get("chapter_directive") if isinstance(chapter_contract, dict) else {}
     if not isinstance(directive, dict):
         directive = {}
     planned_nodes = merged_planned_nodes(directive)
-    if not planned_nodes:
-        planned_nodes = list(
-            review_contract.get("must_cover_nodes")
-            or review_contract.get("mandatory_nodes")
-            or []
-        )
+    forbidden = directive.get("forbidden_zones")
     return {
-        "mandatory_nodes": planned_nodes,
-        "prohibitions": list(
-            directive.get("forbidden_zones")
-            or directive.get("prohibitions")
-            or review_contract.get("blocking_rules")
-            or []
-        ),
+        "must_cover_nodes": planned_nodes,
+        "forbidden_zones": list(forbidden) if isinstance(forbidden, list) else [],
     }
+
+
+def _directive_list_error(chapter_contract: dict[str, Any], field: str) -> str:
+    """返回当前章合同列表字段的校验码。"""
+    directive = chapter_contract.get("chapter_directive") if isinstance(chapter_contract, dict) else None
+    if not isinstance(directive, dict) or field not in directive:
+        return f"chapter_contract_missing_{field}"
+    values = directive.get(field)
+    if not isinstance(values, list):
+        return f"chapter_contract_{field}_must_be_list"
+    if any(not isinstance(item, str) or not item.strip() for item in values):
+        return f"chapter_contract_{field}_must_contain_nonempty_text"
+    return ""
 
 
 def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
@@ -58,7 +61,7 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
         errors.append(
             issue(
                 "phase_not_ready_for_prewrite",
-                message=f"phase {snapshot.phase} is not ready for prewrite",
+                message=f"项目阶段 {snapshot.phase} 尚未达到写前校验条件",
                 impact="写前合同或项目骨架不完整，继续写作容易使用旧上下文或缺失约束。",
                 repair="先运行 project-status/doctor，根据 next_action 补齐 init、plan 或 Story System 合同。",
                 details=snapshot.to_dict(),
@@ -73,8 +76,9 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
         "chapter_brief": contracts.get("chapter") or {},
         "review_contract": contracts.get("review") or {},
     }
+    chapter_contract = contracts.get("chapter") or {}
     review_contract = contracts.get("review") or {}
-    plot_structure = _plot_structure(contracts.get("chapter") or {}, review_contract)
+    plot_structure = _plot_structure(chapter_contract)
 
     goal_error = ""
     try:
@@ -102,6 +106,29 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
             )
         )
 
+    for field, label in (
+        ("must_cover_nodes", "必达节点"),
+        ("forbidden_zones", "禁区"),
+    ):
+        validation_code = _directive_list_error(chapter_contract, field)
+        if not validation_code:
+            continue
+        errors.append(
+            issue(
+                f"chapter_contract.{field}_invalid",
+                message=f"章合同{label}无效：{validation_code}",
+                path=str(
+                    project_root
+                    / ".story-system"
+                    / "chapters"
+                    / f"chapter_{chapter:03d}.json"
+                ),
+                impact=f"章合同{label}可能在写作前被静默丢失。",
+                repair=f"补齐 chapter_directive.{field}，使其为非空字符串数组。",
+                details={"validation_code": validation_code},
+            )
+        )
+
     validation = PrewriteValidator(project_root).build(
         chapter=chapter,
         review_contract=review_contract,
@@ -112,7 +139,7 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
         errors.append(
             issue(
                 "prewrite_validator_blocking",
-                message="prewrite validator reported blocking issue(s)",
+                message="写前校验发现阻断问题",
                 impact="当前章节写作输入不可信。",
                 repair="按 blocking_reasons 补齐合同、消歧 pending 或相关占位符。",
                 details=validation,
@@ -122,7 +149,7 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
         warnings.append(
             issue(
                 "story_runtime_fallback",
-                message="story runtime has fallback sources",
+                message="故事运行时使用了备用事实源",
                 severity="warning",
                 impact="写作上下文可能缺少上一章 accepted commit。",
                 repair="确认这是第一章或补齐 accepted commit 后再写。",

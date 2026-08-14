@@ -242,7 +242,6 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
 
     for commit in commits:
         chapter = int(commit["meta"]["chapter"])
-        extraction = commit.get("extraction_result") or {}
 
         for index, delta in enumerate(extraction_list(commit, "entity_deltas")):
             if not isinstance(delta, dict):
@@ -463,90 +462,6 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
                         "subject": _atom(owner) or subject,
                         "field": "artifact_obtained",
                         "value": value,
-                        "status": "active",
-                        "source_chapter": chapter,
-                    }
-
-        # Typed compatibility bridge for commits produced before every fact
-        # had a first-class accepted event.  Unknown memory_facts keys and all
-        # unbounded payload fields are ignored.
-        legacy_memory = extraction.get("memory_facts")
-        if isinstance(legacy_memory, dict):
-            for index, row in enumerate(legacy_memory.get("world_rules") or []):
-                if not isinstance(row, dict):
-                    continue
-                rule_id = _atom(row.get("rule_id") or row.get("id"), 180) or f"legacy-rule-{chapter}-{index}"
-                normalized_rule = normalize_world_rule_payload(
-                    {
-                        "rule_content": row.get("rule") or row.get("value"),
-                        "rule_category": row.get("rule_category") or row.get("category"),
-                        "domain": row.get("domain"),
-                        "field": row.get("field"),
-                        "scope": row.get("scope"),
-                    },
-                    row.get("domain"),
-                )
-                value = str((normalized_rule or {}).get("rule_content") or "")
-                domain = str((normalized_rule or {}).get("domain") or "")
-                field_name = str((normalized_rule or {}).get("field") or "")
-                if value and domain and field_name:
-                    rules[rule_id] = {
-                        "id": rule_id,
-                        "category": "world_rule",
-                        "subject": domain,
-                        "field": field_name,
-                        "value": value,
-                        "payload": {"scope": _atom(row.get("scope"), 80) or "global"},
-                        "status": "active",
-                        "source_chapter": chapter,
-                    }
-                else:
-                    result.omitted_fact_ids.append(rule_id)
-            for index, row in enumerate(legacy_memory.get("story_facts") or []):
-                if not isinstance(row, dict):
-                    continue
-                fact_id = _atom(row.get("fact_id") or row.get("id"), 180) or f"legacy-fact-{chapter}-{index}"
-                value = _text(row.get("fact") or row.get("value") or row.get("content"))
-                subject = _atom(row.get("subject") or "story")
-                field_name = _atom(row.get("field") or "fact")
-                if value and subject and field_name:
-                    story_facts[fact_id] = {
-                        "id": fact_id,
-                        "category": "story_fact",
-                        "subject": subject,
-                        "field": field_name,
-                        "value": value,
-                        "status": "active",
-                        "source_chapter": chapter,
-                    }
-                else:
-                    result.omitted_fact_ids.append(fact_id)
-            for category, bucket, id_keys in (
-                ("open_loop", "open_loops", ("loop_id", "id")),
-                ("reader_promise", "reader_promises", ("promise_id", "id")),
-            ):
-                target = loops if category == "open_loop" else promises
-                for index, row in enumerate(legacy_memory.get(bucket) or []):
-                    if not isinstance(row, dict):
-                        continue
-                    lifecycle_id = _atom(
-                        _first(row, *id_keys), 180
-                    ) or f"legacy-{category}-{chapter}-{index}"
-                    content = _text(row.get("content") or row.get("value"))
-                    if not content:
-                        result.omitted_fact_ids.append(lifecycle_id)
-                        continue
-                    target[lifecycle_id] = {
-                        "id": lifecycle_id,
-                        "category": category,
-                        "subject": "",
-                        "field": "status" if category == "open_loop" else "promise",
-                        "value": content,
-                        "payload": {
-                            "lifecycle_id": lifecycle_id,
-                            "urgency": row.get("urgency") or 0,
-                            "expected_payoff": _text(row.get("expected_payoff")),
-                        },
                         "status": "active",
                         "source_chapter": chapter,
                     }

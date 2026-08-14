@@ -155,7 +155,7 @@ def run_postcommit_gate(project_root: Path, chapter: int) -> dict:
 
     cfg = DataModulesConfig.from_project_root(project_root)
     if isinstance(projection_status, dict) and projection_status.get("summary") == "done":
-        summary_path = cfg.webnovel_dir / "summaries" / f"ch{chapter:04d}.md"
+        summary_path = cfg.canon_ledger_dir / "summaries" / f"ch{chapter:04d}.md"
         if not summary_path.is_file():
             errors.append(
                 issue(

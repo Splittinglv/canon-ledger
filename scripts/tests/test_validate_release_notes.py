@@ -25,8 +25,8 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def _write_release_files(root: Path, *, version: str = "1.2.3", previous_tag: str = "v1.2.2") -> None:
     _write_json(
-        root / "webnovel-writer" / ".claude-plugin" / "plugin.json",
-        {"name": "webnovel-writer", "version": version, "description": "desc"},
+        root / ".cursor-plugin" / "plugin.json",
+        {"name": "canon-ledger", "version": version, "description": "长篇小说一致性引擎"},
     )
     (root / "CHANGELOG.md").write_text(
         f"""# 更新日志
@@ -48,15 +48,15 @@ def _write_release_files(root: Path, *, version: str = "1.2.3", previous_tag: st
 
 ## 发版范围
 
-本次发布覆盖从 `{previous_tag}` 到本发布提交的全部变化。
+本次发布覆盖 `{previous_tag}..v{version}`。
 
 ## 给作者看的变化
 
 - 作者写章反馈更清楚。
 
-## 是否需要改旧项目
+## 安装方式
 
-不需要。
+按 README 安装 CanonLedger。
 
 ## 给维护者
 
@@ -99,6 +99,23 @@ def test_validate_release_notes_requires_previous_tag_in_release_note(tmp_path):
     assert any(item["code"] == "release_note.range" for item in report["issues"])
 
 
+def test_validate_release_notes_requires_exact_release_range(tmp_path):
+    _write_release_files(tmp_path)
+    path = tmp_path / "releases" / "v1.2.3.md"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "本次发布覆盖 `v1.2.2..v1.2.3`。",
+            "本次发布基于 `v1.2.2`，但没有写出精确范围。",
+        ),
+        encoding="utf-8",
+    )
+
+    report = validate_release_notes(tmp_path, version="1.2.3", previous_tag="v1.2.2")
+
+    assert report["ok"] is False
+    assert any(item["code"] == "release_note.range" for item in report["issues"])
+
+
 def test_validate_release_notes_requires_previous_tag_in_current_changelog_section(tmp_path):
     _write_release_files(tmp_path)
     changelog = tmp_path / "CHANGELOG.md"
@@ -128,12 +145,6 @@ def test_validate_release_notes_requires_previous_tag_in_current_changelog_secti
 
 def test_validate_release_notes_reads_version_from_flat_cursor_manifest(tmp_path):
     _write_release_files(tmp_path)
-    legacy_manifest = tmp_path / "webnovel-writer" / ".claude-plugin" / "plugin.json"
-    _write_json(
-        tmp_path / ".cursor-plugin" / "plugin.json",
-        {"name": "webnovel-writer", "version": "1.2.3", "description": "desc"},
-    )
-    legacy_manifest.unlink()
 
     report = validate_release_notes(tmp_path, previous_tag="v1.2.2")
 
@@ -216,5 +227,23 @@ def test_validate_release_notes_rejects_reusing_a_tagged_version(tmp_path):
     assert report["ok"] is False
     assert any(
         item["code"] == "git.version_reused_after_tag"
+        for item in report["issues"]
+    )
+
+
+def test_validate_release_notes_rejects_version_lower_than_highest_tag(tmp_path):
+    _write_release_files(tmp_path, version="1.2.3", previous_tag="v1.2.2")
+    _init_release_git(tmp_path)
+    assert subprocess.run(
+        ["git", "tag", "v2.0.0"], cwd=tmp_path, capture_output=True, check=False
+    ).returncode == 0
+
+    report = validate_release_notes(
+        tmp_path, version="1.2.3", previous_tag="v1.2.2"
+    )
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "git.version_not_monotonic"
         for item in report["issues"]
     )

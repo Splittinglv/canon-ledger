@@ -14,12 +14,12 @@
 7. 伏笔紧急度排序：基于三层级系统（核心/支线/装饰）的优先级计算
 
 输出格式：
-  - Markdown 报告（.webnovel/health_report.md）
+  - Markdown 报告（.canon-ledger/health_report.md）
   - 包含 Mermaid 图表（角色关系图、爽点热力图）
 
 使用方式：
   # 生成完整健康报告
-  python status_reporter.py --output .webnovel/health_report.md
+  python status_reporter.py --output .canon-ledger/health_report.md
 
   # 仅分析角色活跃度
   python status_reporter.py --focus characters
@@ -96,7 +96,6 @@ try:
     from data_modules.index_manager import IndexManager
     from data_modules.state_validator import (
         get_chapter_meta_entry,
-        is_resolved_foreshadowing_status,
         normalize_foreshadowing_tier,
         normalize_state_runtime_sections,
         resolve_chapter_field,
@@ -107,7 +106,6 @@ except ImportError:
     from scripts.data_modules.index_manager import IndexManager
     from scripts.data_modules.state_validator import (
         get_chapter_meta_entry,
-        is_resolved_foreshadowing_status,
         normalize_foreshadowing_tier,
         normalize_state_runtime_sections,
         resolve_chapter_field,
@@ -115,8 +113,8 @@ except ImportError:
     )
 
 def _is_resolved_foreshadowing_status(raw_status: Any) -> bool:
-    """判断伏笔是否已回收（兼容历史字段与同义词）。"""
-    return is_resolved_foreshadowing_status(raw_status)
+    """按当前 schema 判断伏笔是否已回收。"""
+    return str(raw_status or "").strip() == "已回收"
 
 def _enable_windows_utf8_stdio() -> None:
     """在 Windows 下启用 UTF-8 输出；pytest 环境跳过以避免捕获冲突。"""
@@ -129,7 +127,7 @@ class StatusReporter:
     def __init__(self, project_root: str):
         self.project_root = Path(project_root)
         self.config = get_config(self.project_root)
-        self.state_file = self.project_root / ".webnovel/state.json"
+        self.state_file = self.project_root / ".canon-ledger/state.json"
         self.chapters_dir = self.project_root / "正文"
 
         self.state = None
@@ -345,10 +343,7 @@ class StatusReporter:
             print(f"⚠️  正文目录不存在: {self.chapters_dir}")
             return
 
-        # 支持两种目录结构：
-        # 1) 正文/第0001章.md
-        # 2) 正文/第1卷/第001章-标题.md
-        chapter_files = sorted(self.chapters_dir.rglob("第*.md"))
+        chapter_files = sorted(self.chapters_dir.glob("第????章*.md"))
 
         # v5.1 引入: 从 SQLite 获取已知角色名
         known_character_names: List[str] = []
@@ -779,58 +774,12 @@ class StatusReporter:
         if not self.state:
             return ""
 
-        # v5.5: 优先使用 index.db 关系图谱（可通过配置关闭）
-        if bool(getattr(self.config, "relationship_graph_from_index_enabled", True)):
-            try:
-                graph = self._generate_relationship_graph_from_index()
-                if graph:
-                    return graph
-            except Exception:
-                # 回退老逻辑，避免报告生成中断
-                pass
-
-        # 兼容旧版 state.json relationships 结构
-        relationships = self.state.get("relationships", {})
-        protagonist_name = self.state.get("protagonist_state", {}).get("name", "主角")
-
-        lines = ["```mermaid", "graph LR"]
-
-        # 支持两种格式：
-        # 格式1（新）: {"allies": [...], "enemies": [...]}
-        # 格式2（旧）: {"角色名": {"affection": X, "hatred": Y}}
-
-        allies = relationships.get("allies", [])
-        enemies = relationships.get("enemies", [])
-
-        if allies or enemies:
-            # 新格式
-            for ally in allies:
-                if isinstance(ally, dict):
-                    name = ally.get("name", "未知")
-                    relation = ally.get("relation", "友好")
-                    lines.append(f"    {protagonist_name} -->|{relation}| {name}")
-
-            for enemy in enemies:
-                if isinstance(enemy, dict):
-                    name = enemy.get("name", "未知")
-                    relation = enemy.get("relation", "敌对")
-                    lines.append(f"    {protagonist_name} -.->|{relation}| {name}")
-        else:
-            # 旧格式兼容
-            for char_name, rel_data in relationships.items():
-                if isinstance(rel_data, dict):
-                    affection = rel_data.get("affection", 0)
-                    hatred = rel_data.get("hatred", 0)
-
-                    if affection > 0:
-                        lines.append(f"    {protagonist_name} -->|好感度{affection}| {char_name}")
-
-                    if hatred > 0:
-                        lines.append(f"    {protagonist_name} -.->|仇恨度{hatred}| {char_name}")
-
-        lines.append("```")
-
-        return "\n".join(lines)
+        if not bool(getattr(self.config, "relationship_graph_from_index_enabled", True)):
+            return ""
+        try:
+            return self._generate_relationship_graph_from_index()
+        except Exception:
+            return ""
 
     def generate_report(self, focus: str = "all") -> str:
         """生成健康报告（Markdown 格式）"""
@@ -1179,7 +1128,7 @@ def main():
         epilog="""
 示例：
   # 生成完整健康报告
-  python status_reporter.py --output .webnovel/health_report.md
+  python status_reporter.py --output .canon-ledger/health_report.md
 
   # 仅分析角色活跃度
   python status_reporter.py --focus characters
@@ -1192,7 +1141,7 @@ def main():
         """
     )
 
-    parser.add_argument('--output', default='.webnovel/health_report.md',
+    parser.add_argument('--output', default='.canon-ledger/health_report.md',
                        help='输出文件路径')
     parser.add_argument('--focus', choices=['all', 'basic', 'characters',
                                             'foreshadowing', 'urgency', 'pacing',
@@ -1206,7 +1155,7 @@ def main():
     try:
         project_root = str(resolve_project_root(args.project_root))
     except FileNotFoundError as exc:
-        print(f"❌ 无法定位项目根目录（需要包含 .webnovel/state.json）: {exc}", file=sys.stderr)
+        print(f"❌ 无法定位项目根目录（需要包含 .canon-ledger/state.json）: {exc}", file=sys.stderr)
         sys.exit(1)
 
     # 创建报告生成器
@@ -1228,8 +1177,8 @@ def main():
 
     # 保存报告
     output_file = Path(args.output)
-    if args.output == '.webnovel/health_report.md' and project_root != '.':
-        output_file = Path(project_root) / '.webnovel' / 'health_report.md'
+    if args.output == '.canon-ledger/health_report.md' and project_root != '.':
+        output_file = Path(project_root) / '.canon-ledger' / 'health_report.md'
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_file, 'w', encoding='utf-8') as f:

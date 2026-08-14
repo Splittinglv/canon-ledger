@@ -402,7 +402,7 @@ class IndexProjectionWriter:
         # Encode every value, including strings and null, with an explicit
         # marker.  The index may legitimately contain the text "3", "true"
         # or "null"; shape-based JSON guessing corrupts those facts.
-        return "__webnovel_json_v1__:" + json.dumps(
+        return "__canon_ledger_json_v1__:" + json.dumps(
             value, ensure_ascii=False, sort_keys=True
         )
 

@@ -22,11 +22,11 @@ from .project_phase import (
 )
 
 
-SCHEMA_VERSION = "webnovel-project-status/v1"
+SCHEMA_VERSION = "canon-ledger-project-status/v1"
 
 
 def _project_title(project_root: Path) -> str:
-    state_path = project_root / ".webnovel" / "state.json"
+    state_path = project_root / ".canon-ledger" / "state.json"
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except Exception:
@@ -43,24 +43,24 @@ def next_action_for_phase(snapshot: ProjectPhaseSnapshot) -> str:
     phase = snapshot.phase
     target = snapshot.target_chapter
     if phase == PHASE_NO_PROJECT:
-        return "运行 /webnovel-init，或用 webnovel.py use <项目根目录> 选择项目"
+        return "运行 /canon-ledger-init，或用 canon_ledger.py use <项目根目录> 选择项目"
     if phase == PHASE_INIT_SCAFFOLDED:
-        return "运行 webnovel.py doctor --format text，并补齐初始化文件"
+        return "运行 canon_ledger.py doctor --format text，并补齐初始化文件"
     if phase == PHASE_INIT_READY:
-        return "运行 /webnovel-plan，或刷新 Story System 合同"
+        return "运行 /canon-ledger-plan，或刷新 Story System 合同"
     if phase == PHASE_PLAN_IN_PROGRESS:
         return f"完成规划并生成第 {target} 章运行时合同"
     if phase == PHASE_CHAPTER_CONTRACT_READY:
-        return f"运行 /webnovel-write {target}"
+        return f"运行 /canon-ledger-write {target}"
     if phase == PHASE_DRAFT_IN_PROGRESS:
         return f"完成第 {target} 章的审查与数据产物"
     if phase == PHASE_READY_TO_COMMIT:
-        return f"运行 webnovel.py chapter-commit --chapter {target}"
+        return f"运行 canon_ledger.py chapter-commit --chapter {target}"
     if phase == PHASE_CHAPTER_COMMITTED:
         return f"继续写第 {snapshot.latest_accepted_chapter + 1} 章"
     if phase == PHASE_PROJECTION_FAILED:
         return "检查 projection_log / projection_status，并修复失败或待处理的投影"
-    return "运行 webnovel.py doctor --format text"
+    return "运行 canon_ledger.py doctor --format text"
 
 
 def build_project_status(project_root: str | Path | None, chapter: int | None = None) -> dict[str, Any]:
@@ -106,7 +106,7 @@ def format_project_status(report: dict[str, Any], output_format: str = "summary"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build short machine-readable webnovel project status")
+    parser = argparse.ArgumentParser(description="生成简短、可机读的 CanonLedger 项目状态")
     parser.add_argument("--project-root", default="", help="书项目根目录")
     parser.add_argument("--chapter", type=int, default=None, help="目标章节号")
     parser.add_argument("--format", choices=["summary", "json"], default="summary")

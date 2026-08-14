@@ -4,12 +4,12 @@
 网文项目初始化脚本
 
 目标：
-- 生成可运行的项目结构（webnovel-project）
-- 创建/更新 .webnovel/state.json（初始化配置与兼容读模型）
-- 生成基础设定集与大纲模板文件（供 /webnovel-plan 与 /webnovel-write 使用）
+- 生成可运行的项目结构（canon-ledger-project）
+- 创建/更新 .canon-ledger/state.json（当前状态读模型）
+- 生成基础设定集与大纲模板文件（供 /canon-ledger-plan 与 /canon-ledger-write 使用）
 
 说明：
-- 该脚本是命令 /webnovel-init 的“唯一允许的文件生成入口”（与命令文档保持一致）。
+- 该脚本是命令 /canon-ledger-init 的“唯一允许的文件生成入口”（与命令文档保持一致）。
 - 生成的内容以“模板骨架”为主，便于 AI/作者后续补全；但保证所有关键文件存在。
 """
 
@@ -123,13 +123,19 @@ def _render_team_rows(names: List[str], roles: List[str]) -> List[str]:
 
 
 def _ensure_state_schema(state: Dict[str, Any]) -> Dict[str, Any]:
-    """确保 state.json 具备 v5.1 架构所需的字段集合（v5.4 沿用）。
-
-    v5.1 变更:
-    - entities_v3 和 alias_index 已迁移到 index.db，不再存储在 state.json
-    - structured_relationships 已迁移到 index.db relationships 表
-    - state.json 保持精简 (< 5KB)
-    """
+    """确保 state.json 符合 CanonLedger 7 当前投影结构。"""
+    removed_fields = {
+        "entities_v3",
+        "alias_index",
+        "state_changes",
+        "structured_relationships",
+        "_migrated_to_sqlite",
+    }
+    found = sorted(removed_fields.intersection(state))
+    if found:
+        raise SystemExit(
+            "检测到不受支持的旧 state.json 字段：" + "、".join(found)
+        )
     state.setdefault("project_info", {})
     state.setdefault("progress", {})
     state.setdefault("protagonist_state", {})
@@ -151,10 +157,7 @@ def _ensure_state_schema(state: Dict[str, Any]) -> Dict[str, Any]:
             "history": [],
         },
     )
-    # v5.1: entities_v3, alias_index, structured_relationships 已迁移到 index.db
-    # 不再在 state.json 中初始化这些字段
-
-    # progress schema evolution
+    # 当前进度投影
     state["progress"].setdefault("current_chapter", 0)
     state["progress"].setdefault("total_words", 0)
     state["progress"].setdefault("last_updated", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
@@ -162,7 +165,7 @@ def _ensure_state_schema(state: Dict[str, Any]) -> Dict[str, Any]:
     state["progress"].setdefault("current_volume", 1)
     state["progress"].setdefault("volumes_planned", [])
 
-    # protagonist schema evolution
+    # 当前主角投影
     ps = state["protagonist_state"]
     ps.setdefault("name", "")
     ps.setdefault("power", {"realm": "", "layer": 1, "bottleneck": ""})
@@ -185,7 +188,7 @@ def _build_master_outline(target_chapters: int, *, chapters_per_volume: int = 50
     lines: list[str] = [
         "# 总纲",
         "",
-        "> 本文件为“总纲骨架”，用于 /webnovel-plan 细化为卷大纲与章纲。",
+        "> 本文件为“总纲骨架”，用于 /canon-ledger-plan 细化为卷大纲与章纲。",
         "",
         "## 卷结构",
         "",
@@ -269,18 +272,18 @@ def init_project(
     include_genre_templates: bool = False,
 ) -> None:
     project_path = Path(project_dir).expanduser().resolve()
-    if ".claude" in project_path.parts:
-        raise SystemExit("Refusing to initialize a project inside .claude. Choose a different directory.")
+    if ".cursor" in project_path.parts:
+        raise SystemExit("不能在 .cursor 内初始化小说项目，请选择其他目录。")
     genre = _validate_initial_genre_source(genre)
     genre_resolution = resolve_genre_input(genre)
     canonical_genre = genre_resolution.canonical_genre or genre
     project_path.mkdir(parents=True, exist_ok=True)
 
-    # 目录结构（同时兼容“卷目录”与后续扩展）
+    # 当前项目目录结构
     directories = [
-        ".webnovel/backups",
-        ".webnovel/archive",
-        ".webnovel/summaries",
+        ".canon-ledger/backups",
+        ".canon-ledger/archive",
+        ".canon-ledger/summaries",
         "设定集",
         "大纲",
         "正文",
@@ -289,8 +292,8 @@ def init_project(
     for dir_path in directories:
         (project_path / dir_path).mkdir(parents=True, exist_ok=True)
 
-    # state.json（创建或增量补齐）
-    state_path = project_path / ".webnovel" / "state.json"
+    # state.json（创建或更新当前项目）
+    state_path = project_path / ".canon-ledger" / "state.json"
     if state_path.exists():
         try:
             state: Dict[str, Any] = json.loads(state_path.read_text(encoding="utf-8"))
@@ -304,9 +307,6 @@ def init_project(
         state = {}
 
     state = _ensure_state_schema(state)
-    previous_golden_finger_name = str(
-        (state.get("project_info") or {}).get("golden_finger_name") or ""
-    ).strip()
     created_at = state.get("project_info", {}).get("created_at") or datetime.now().strftime("%Y-%m-%d")
 
     state["project_info"].update(
@@ -368,12 +368,6 @@ def init_project(
         golden_finger["cooldown"] = 0
     elif golden_finger_name:
         golden_finger["name"] = golden_finger_name
-    elif golden_finger.get("name") == "未命名金手指" and not previous_golden_finger_name:
-        # 迁移旧版本自动制造的占位事实；未声明金手指应保持未知/未设置。
-        golden_finger["name"] = ""
-        golden_finger["level"] = 0
-        golden_finger["cooldown"] = 0
-
     state["progress"]["last_updated"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     state_path.parent.mkdir(parents=True, exist_ok=True)
     # 使用原子化写入（初始化不需要备份旧文件）
@@ -755,7 +749,7 @@ def init_project(
             indent=2,
         )
     _write_text_if_missing(
-        project_path / ".webnovel" / "subagent-models.json",
+        project_path / ".canon-ledger" / "subagent-models.json",
         subagent_models.rstrip() + "\n",
     )
 
@@ -771,7 +765,7 @@ def init_project(
         project_path / ".env.example",
         "\n".join(
             [
-                "# Webnovel Writer 配置示例（复制为 .env 后填写）",
+                "# 叙典 CanonLedger 配置示例（复制为 .env 后填写）",
                 "# 注意：请勿将包含真实 API_KEY 的 .env 提交到版本库。",
                 "",
                 "# Embedding",
@@ -822,11 +816,11 @@ __pycache__/
 .vscode/
 .idea/
 
-# Don't ignore .webnovel (we need to track state.json)
+# Don't ignore .canon-ledger (we need to track state.json)
 # But ignore cache files
-.webnovel/context_cache.json
-.webnovel/*.lock
-.webnovel/*.bak
+.canon-ledger/context_cache.json
+.canon-ledger/*.lock
+.canon-ledger/*.bak
 """,
                         encoding="utf-8",
                     )
@@ -854,8 +848,8 @@ __pycache__/
 
     print(f"\nProject initialized at: {project_path}")
     print("Key files:")
-    print(" - .webnovel/state.json")
-    print(" - .webnovel/subagent-models.json")
+    print(" - .canon-ledger/state.json")
+    print(" - .canon-ledger/subagent-models.json")
     print(" - 设定集/世界观.md")
     print(" - 设定集/力量体系.md")
     print(" - 设定集/主角卡.md")
@@ -865,7 +859,7 @@ __pycache__/
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="网文项目初始化脚本（生成项目结构 + state.json + 基础模板）")
-    parser.add_argument("project_dir", help="项目目录（建议 ./webnovel-project）")
+    parser.add_argument("project_dir", help="项目目录（建议 ./canon-ledger-project）")
     parser.add_argument("title", help="小说标题")
     parser.add_argument(
         "genre",
@@ -886,7 +880,7 @@ def main() -> None:
     parser.add_argument("--heroine-role", default="", help="女主定位（事业线/情感线/对抗线）")
     parser.add_argument("--co-protagonists", default="", help="多主角姓名（逗号分隔）")
     parser.add_argument("--co-protagonist-roles", default="", help="多主角定位（逗号分隔）")
-    parser.add_argument("--antagonist-tiers", default="", help="用户明确指定的对立角色分类映射（兼容旧参数名）")
+    parser.add_argument("--antagonist-tiers", default="", help="用户明确指定的对立角色分类映射")
     parser.add_argument("--world-scale", default="", help="世界规模")
     parser.add_argument("--factions", default="", help="势力格局/核心势力")
     parser.add_argument("--power-system-type", default="", help="力量体系类型")

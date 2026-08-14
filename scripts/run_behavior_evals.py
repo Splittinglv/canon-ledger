@@ -13,22 +13,22 @@ from typing import Any
 from runtime_compat import enable_windows_utf8_stdio
 
 
-SCHEMA_VERSION = "webnovel-behavior-eval-report/v1"
+SCHEMA_VERSION = "canon-ledger-behavior-eval-report/v1"
 
 
 def _repo_root() -> Path:
     here = Path(__file__).resolve()
     plugin_root = here.parent.parent
-    if (plugin_root / "scripts" / "webnovel.py").is_file():
+    if (plugin_root / "scripts" / "canon_ledger.py").is_file():
         return plugin_root
     return here.parents[2]
 
 
 def _plugin_root(root: Path) -> Path:
-    if (root / ".cursor-plugin" / "plugin.json").is_file() or (root / ".claude-plugin" / "plugin.json").is_file():
+    if (root / ".cursor-plugin" / "plugin.json").is_file():
         return root
-    nested = root / "webnovel-writer"
-    if (nested / "scripts" / "webnovel.py").is_file():
+    nested = root / "canon-ledger"
+    if (nested / "scripts" / "canon_ledger.py").is_file():
         return nested
     return root
 
@@ -113,7 +113,7 @@ def _eval_skill_contract(root: Path, case: dict[str, Any]) -> dict[str, Any]:
 
 
 def _eval_write_blocking_gate(root: Path, case: dict[str, Any]) -> dict[str, Any]:
-    path = _plugin_root(root) / "skills" / "webnovel-write" / "SKILL.md"
+    path = _plugin_root(root) / "skills" / "canon-ledger-write" / "SKILL.md"
     text = _read(path)
     required = [
         "blocking=true",
@@ -141,15 +141,15 @@ def _eval_data_agent_boundary(root: Path, case: dict[str, Any]) -> dict[str, Any
     text = _read(path)
     required = [
         "三份 JSON",
-        "`.webnovel/tmp/`",
+        "`.canon-ledger/tmp/`",
         "不直接写 state/index/summaries/memory",
         "chapter-commit",
     ]
     missing = [item for item in required if item not in text]
     forbidden_patterns = [
-        r"webnovel\.py[^\n]+state\s+process",
-        r"webnovel\.py[^\n]+memory\s+update",
-        r"webnovel\.py[^\n]+rag\s+index-chapter",
+        r"canon_ledger\.py[^\n]+state\s+process",
+        r"canon_ledger\.py[^\n]+memory\s+update",
+        r"canon_ledger\.py[^\n]+rag\s+index-chapter",
     ]
     forbidden = [pattern for pattern in forbidden_patterns if re.search(pattern, text)]
     return _result(
@@ -162,8 +162,8 @@ def _eval_data_agent_boundary(root: Path, case: dict[str, Any]) -> dict[str, Any
 
 def _eval_artifact_ownership(root: Path, case: dict[str, Any]) -> dict[str, Any]:
     plugin_root = _plugin_root(root)
-    write_text = _read(plugin_root / "skills" / "webnovel-write" / "SKILL.md")
-    review_text = _read(plugin_root / "skills" / "webnovel-review" / "SKILL.md")
+    write_text = _read(plugin_root / "skills" / "canon-ledger-write" / "SKILL.md")
+    review_text = _read(plugin_root / "skills" / "canon-ledger-review" / "SKILL.md")
     reviewer_tools = _frontmatter(_read(plugin_root / "agents" / "reviewer.md")).get("tools", "")
     data_tools = _frontmatter(_read(plugin_root / "agents" / "data-agent.md")).get("tools", "")
     missing: list[str] = []
@@ -171,8 +171,8 @@ def _eval_artifact_ownership(root: Path, case: dict[str, Any]) -> dict[str, Any]
         missing.append("reviewer 不应持 Write（review_results.json 由主流程落盘）")
     if "Write" not in data_tools:
         missing.append("data-agent 应持 Write（它是 tmp artifact 的唯一写入者）")
-    for text, owner in ((write_text, "webnovel-write"), (review_text, "webnovel-review")):
-        if "主流程" not in text or ".webnovel/tmp/review_results.json" not in text:
+    for text, owner in ((write_text, "canon-ledger-write"), (review_text, "canon-ledger-review")):
+        if "主流程" not in text or ".canon-ledger/tmp/review_results.json" not in text:
             missing.append(f"{owner}: 缺 reviewer→主流程落盘 review_results.json 的所有权说明")
     for item in (
         "唯一写入者",
@@ -180,7 +180,7 @@ def _eval_artifact_ownership(root: Path, case: dict[str, Any]) -> dict[str, Any]
         "不直接写 state/index/summaries/memory/vectors/projection",
     ):
         if item not in write_text:
-            missing.append(f"webnovel-write 缺写入所有权红线：{item}")
+            missing.append(f"canon-ledger-write 缺写入所有权红线：{item}")
     return _result(
         case,
         passed=not missing,
@@ -198,11 +198,26 @@ def _eval_commit_projection_runtime(root: Path, case: dict[str, Any]) -> dict[st
 
     with tempfile.TemporaryDirectory() as tmp:
         project_root = Path(tmp)
-        (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-        (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+        (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+        (project_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
         chapter_file = project_root / "正文" / "第0001章.md"
         chapter_file.parent.mkdir(parents=True, exist_ok=True)
         chapter_file.write_text("第1章行为评估正文\n", encoding="utf-8")
+        _write_json(
+            project_root / ".story-system" / "chapters" / "chapter_001.json",
+            {
+                "meta": {
+                    "schema_version": "story-system/v1",
+                    "contract_type": "CHAPTER_BRIEF",
+                    "chapter": 1,
+                },
+                "chapter_directive": {
+                    "goal": "验证阻断提交仍能驱动状态投影",
+                    "must_cover_nodes": [],
+                    "forbidden_zones": [],
+                },
+            },
+        )
         binding = build_chapter_binding(project_root, 1)
         service = ChapterCommitService(project_root)
         payload = service.build_commit(
@@ -224,7 +239,7 @@ def _eval_commit_projection_runtime(root: Path, case: dict[str, Any]) -> dict[st
             },
         )
         projected = service.apply_projections(payload)
-        state_path = project_root / ".webnovel" / "state.json"
+        state_path = project_root / ".canon-ledger" / "state.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
     ok = (
         projected.get("projection_status", {}).get("state") == "done"
@@ -261,15 +276,15 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def _make_report_project(project_root: Path) -> None:
     for rel in (
-        ".webnovel/tmp",
-        ".webnovel/backups",
+        ".canon-ledger/tmp",
+        ".canon-ledger/backups",
         ".story-system/commits",
         "正文",
         "审查报告",
     ):
         (project_root / rel).mkdir(parents=True, exist_ok=True)
     _write_json(
-        project_root / ".webnovel" / "state.json",
+        project_root / ".canon-ledger" / "state.json",
         {"project_info": {"title": "测试书", "genre": "玄幻"}, "progress": {"current_chapter": 0}},
     )
 
@@ -336,9 +351,9 @@ def _review_artifact(binding: dict[str, Any], *, blocking: bool = False, minimal
 def _write_report_artifacts(project_root: Path, *, chapter: int = 1, review_skipped: bool = False, blocking: bool = False) -> None:
     binding = _report_binding(project_root, chapter)
     review = _review_artifact(binding, blocking=blocking, minimal=review_skipped)
-    _write_json(project_root / ".webnovel" / "tmp" / "review_results.json", review)
+    _write_json(project_root / ".canon-ledger" / "tmp" / "review_results.json", review)
     _write_json(
-        project_root / ".webnovel" / "tmp" / "review_audit.json",
+        project_root / ".canon-ledger" / "tmp" / "review_audit.json",
         {
             "chapter": chapter,
             "start_chapter": chapter,
@@ -355,7 +370,7 @@ def _write_report_artifacts(project_root: Path, *, chapter: int = 1, review_skip
     )
     (project_root / "审查报告" / f"第{chapter}章审查报告.md").write_text("# 审查报告\n", encoding="utf-8")
     _write_json(
-        project_root / ".webnovel" / "tmp" / "fulfillment_result.json",
+        project_root / ".canon-ledger" / "tmp" / "fulfillment_result.json",
         {
             "planned_nodes": [],
             "covered_nodes": [],
@@ -365,11 +380,11 @@ def _write_report_artifacts(project_root: Path, *, chapter: int = 1, review_skip
         },
     )
     _write_json(
-        project_root / ".webnovel" / "tmp" / "disambiguation_result.json",
+        project_root / ".canon-ledger" / "tmp" / "disambiguation_result.json",
         {"pending": [], "chapter_binding": binding},
     )
     _write_json(
-        project_root / ".webnovel" / "tmp" / "extraction_result.json",
+        project_root / ".canon-ledger" / "tmp" / "extraction_result.json",
         {
             "accepted_events": [],
             "state_deltas": [],
@@ -455,14 +470,14 @@ def _eval_user_report_probe(root: Path, case: dict[str, Any]) -> dict[str, Any]:
                     }
                 ),
             )
-            (project_root / ".webnovel" / "backups" / "ch0001_ok").mkdir(parents=True, exist_ok=True)
+            (project_root / ".canon-ledger" / "backups" / "ch0001_ok").mkdir(parents=True, exist_ok=True)
             report = build_user_report(project_root, stage="write", chapter=1)
             text = render_user_report_text(report)
             ok = report["overall_status"] == "partial" and "review_skipped" in json.dumps(report, ensure_ascii=False) and "minimal" in text
             evidence = [report["overall_status"], text]
         elif scenario == "missing_data_artifacts":
             for rel in ("fulfillment_result.json", "disambiguation_result.json", "extraction_result.json"):
-                path = project_root / ".webnovel" / "tmp" / rel
+                path = project_root / ".canon-ledger" / "tmp" / rel
                 if path.exists():
                     path.unlink()
             report = build_user_report(project_root, stage="write", chapter=1)
@@ -487,7 +502,7 @@ def _eval_user_report_probe(root: Path, case: dict[str, Any]) -> dict[str, Any]:
                 },
                 commit_path=commit_path,
             )
-            (project_root / ".webnovel" / "backups" / "ch0001_ok").mkdir(parents=True, exist_ok=True)
+            (project_root / ".canon-ledger" / "backups" / "ch0001_ok").mkdir(parents=True, exist_ok=True)
             report = build_user_report(project_root, stage="write", chapter=1)
             ok = any(item.get("code") == "projection retry" for item in report["issues"]["auto_handled"]) and not report["issues"]["must_handle"]
             evidence = [json.dumps(report["issues"], ensure_ascii=False)]

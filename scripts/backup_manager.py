@@ -13,7 +13,7 @@ Git 集成备份管理系统 (Backup Manager with Git)
 4. ✅ 分支管理：天然支持"平行世界"创作
 
 功能：
-1. 自动 Git 提交：每次 /webnovel-write 完成后自动 commit
+1. 自动 Git 提交：每次 /canon-ledger-write 完成后自动 commit
 2. 原子性回滚：git checkout 同时回滚所有文件
 3. 版本历史：git log 查看完整历史
 4. 差异对比：git diff 查看任意两个版本的差异
@@ -67,6 +67,7 @@ from project_locator import resolve_project_root
 from data_modules.chapter_content_binding import verify_commit_content_binding
 from data_modules.projection_log import commit_hash
 from data_modules.run_ledger import (
+    GIT_BACKUP_RECEIPT_SCHEMA,
     LOCAL_BACKUP_RECEIPT_SCHEMA,
     LOCAL_SNAPSHOT_MANIFEST,
     LOCAL_SNAPSHOT_ROOTS,
@@ -101,7 +102,7 @@ class GitBackupManager:
 
         # 检查 Git 是否初始化
         if not self.git_dir.exists():
-            print("⚠️  Git 未初始化，请先运行 /webnovel-init 或手动执行 git init")
+            print("⚠️  Git 未初始化，请先运行 /canon-ledger-init 或手动执行 git init")
             print("💡 现在自动初始化 Git...")
             self._init_git()
 
@@ -134,10 +135,10 @@ __pycache__/
 .vscode/
 .idea/
 
-# Don't ignore .webnovel (we need to track state.json)
+# Don't ignore .canon-ledger (we need to track state.json)
 # But ignore cache files
-.webnovel/context_cache.json
-.webnovel/backups/.integrity-key
+.canon-ledger/context_cache.json
+.canon-ledger/backups/.integrity-key
 
 # Env files
 .env
@@ -242,7 +243,7 @@ __pycache__/
                 continue
             if not source.is_dir():
                 raise OSError(f"一致性根目录不是安全目录: {source}")
-            excluded = {"backups"} if root_name == ".webnovel" else set()
+            excluded = {"backups"} if root_name == ".canon-ledger" else set()
             self._copy_tree(source, target_root / root_name, exclude_top=excluded)
             copied.append(root_name)
         return copied
@@ -295,7 +296,7 @@ __pycache__/
         chapter_num: int,
         snapshot_name: str,
     ) -> tuple[Path, dict]:
-        backup_dir = self.project_root / ".webnovel" / "backups"
+        backup_dir = self.project_root / ".canon-ledger" / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         if not ensure_backup_integrity_key(self.project_root):
             raise OSError("无法创建本地备份完整性密钥")
@@ -321,7 +322,7 @@ __pycache__/
             raise
 
     def _prune_local_snapshots(self, *, keep: int = 10) -> None:
-        backup_dir = self.project_root / ".webnovel" / "backups"
+        backup_dir = self.project_root / ".canon-ledger" / "backups"
         snapshots = sorted(
             (path for path in backup_dir.glob("snapshot_ch*") if path.is_dir()),
             key=lambda path: path.name,
@@ -339,7 +340,7 @@ __pycache__/
 
     def _local_backup(self, chapter_num: int, accepted_receipt: dict | None = None) -> bool:
         """创建带签名清单的完整本地一致性快照。"""
-        backup_dir = self.project_root / ".webnovel" / "backups"
+        backup_dir = self.project_root / ".canon-ledger" / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -387,7 +388,7 @@ __pycache__/
             self._prune_local_snapshots()
 
             print(f"✅ 本地备份完成: {backup_path}")
-            print("📦 已备份: 正文、大纲、设定集、完整 .story-system 与必要 .webnovel 状态")
+            print("📦 已备份: 正文、大纲、设定集、完整 .story-system 与必要 .canon-ledger 状态")
             return True
         except (OSError, ValueError) as e:
             print(f"❌ 本地备份失败: {e}")
@@ -396,7 +397,7 @@ __pycache__/
     def _receipt_path(self, chapter_num: int) -> Path:
         return (
             self.project_root
-            / ".webnovel"
+            / ".canon-ledger"
             / "backups"
             / f"ch{chapter_num:04d}.receipt.json"
         )
@@ -438,7 +439,7 @@ __pycache__/
             print(f"❌ 备份失败：当前正文没有可信 accepted binding（{reason}）")
             return None
         return {
-            "schema_version": "webnovel-backup-receipt/v1",
+            "schema_version": GIT_BACKUP_RECEIPT_SCHEMA,
             "chapter": chapter_num,
             "chapter_binding": payload["chapter_binding"],
             "chapter_commit_path": commit_path.relative_to(self.project_root).as_posix(),
@@ -625,9 +626,9 @@ __pycache__/
                 source = snapshot_root / root_name
                 target = self.project_root / root_name
                 present = bool(root_presence.get(root_name))
-                if root_name == ".webnovel":
+                if root_name == ".canon-ledger":
                     if target.is_symlink() or (target.exists() and not target.is_dir()):
-                        raise OSError(".webnovel 不是安全目录")
+                        raise OSError(".canon-ledger 不是安全目录")
                     target.mkdir(parents=True, exist_ok=True)
                     for child in list(target.iterdir()):
                         if child.name == "backups":
@@ -667,7 +668,7 @@ __pycache__/
             return False
 
         snapshot_root = (
-            self.project_root / ".webnovel" / "backups" / str(receipt["snapshot"])
+            self.project_root / ".canon-ledger" / "backups" / str(receipt["snapshot"])
         )
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         rescue_chapter = self._latest_canonical_chapter(chapter_num)
@@ -710,7 +711,7 @@ __pycache__/
             return False
 
         print(f"✅ 已从本地完整快照恢复到第 {chapter_num} 章")
-        print("✅ canonical 数据、正文与 .webnovel 状态已同步，投影已统一重建")
+        print("✅ canonical 数据、正文与 .canon-ledger 状态已同步，投影已统一重建")
         print(f"💡 恢复前状态仍保留在救援快照: {rescue_root}")
         return True
 
@@ -786,7 +787,7 @@ __pycache__/
         # 显示 state.json 的详细差异
         print("\n📝 state.json 详细差异：")
         success, state_diff, _ = self._run_git_command(
-            ["diff", tag_a, tag_b, "--", ".webnovel/state.json"],
+            ["diff", tag_a, tag_b, "--", ".canon-ledger/state.json"],
             check=False,
         )
 
@@ -908,7 +909,7 @@ def main():
     try:
         project_root = str(resolve_project_root(args.project_root))
     except FileNotFoundError as exc:
-        print(f"❌ 无法定位项目根目录（需要包含 .webnovel/state.json）: {exc}", file=sys.stderr)
+        print(f"❌ 无法定位项目根目录（需要包含 .canon-ledger/state.json）: {exc}", file=sys.stderr)
         sys.exit(1)
 
     # 创建管理器

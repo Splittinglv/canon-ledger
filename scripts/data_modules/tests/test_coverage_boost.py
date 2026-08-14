@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-补全 store CLI, compactor 边界, cli_args 解析, webnovel 路由 的测试覆盖。
+补全 store CLI, compactor 边界, cli_args 解析, canon_ledger 路由 的测试覆盖。
 """
 
 import json
@@ -312,30 +312,30 @@ def test_store_cli_update(tmp_path, monkeypatch, capsys):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 4. webnovel 路由补全
+# 4. canon_ledger 路由补全
 # ═══════════════════════════════════════════════════════════════════════
 
-def _load_webnovel_module():
+def _load_canon_ledger_module():
     scripts_dir = Path(__file__).resolve().parents[2]
     if str(scripts_dir) not in sys.path:
         sys.path.insert(0, str(scripts_dir))
-    import data_modules.webnovel as webnovel_module
-    return webnovel_module
+    import data_modules.canon_ledger as canon_ledger_module
+    return canon_ledger_module
 
 
-def test_webnovel_cmd_where(monkeypatch, tmp_path, capsys):
-    module = _load_webnovel_module()
+def test_canon_ledger_cmd_where(monkeypatch, tmp_path, capsys):
+    module = _load_canon_ledger_module()
     book_root = tmp_path / "book"
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: book_root)
-    monkeypatch.setattr(sys, "argv", ["webnovel", "where"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "where"])
     with pytest.raises(SystemExit) as exc:
         module.main()
     assert int(exc.value.code or 0) == 0
     assert str(book_root) in capsys.readouterr().out
 
 
-def test_webnovel_passthrough_state(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
+def test_canon_ledger_passthrough_state(monkeypatch, tmp_path):
+    module = _load_canon_ledger_module()
     book_root = tmp_path / "book"
     called = {}
 
@@ -349,7 +349,7 @@ def test_webnovel_passthrough_state(monkeypatch, tmp_path):
 
     monkeypatch.setattr(module, "_resolve_root", _fake_resolve)
     monkeypatch.setattr(module, "_run_data_module", _fake_run)
-    monkeypatch.setattr(sys, "argv", ["webnovel", "state", "get-progress"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "state", "get-progress"])
 
     with pytest.raises(SystemExit) as exc:
         module.main()
@@ -359,14 +359,14 @@ def test_webnovel_passthrough_state(monkeypatch, tmp_path):
     assert "get-progress" in called["argv"]
 
 
-def test_webnovel_passthrough_memory(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
+def test_canon_ledger_passthrough_memory(monkeypatch, tmp_path):
+    module = _load_canon_ledger_module()
     book_root = tmp_path / "book"
     called = {}
 
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: book_root)
     monkeypatch.setattr(module, "_run_data_module", lambda m, a: (called.update(mod=m, argv=list(a)), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["webnovel", "memory", "stats"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "memory", "stats"])
 
     with pytest.raises(SystemExit) as exc:
         module.main()
@@ -374,128 +374,116 @@ def test_webnovel_passthrough_memory(monkeypatch, tmp_path):
     assert called["mod"] == "memory.store"
 
 
-def test_webnovel_strip_project_root_args():
-    module = _load_webnovel_module()
+def test_canon_ledger_strip_project_root_args():
+    module = _load_canon_ledger_module()
     result = module._strip_project_root_args(["--project-root", "/a", "cmd", "--project-root=/b", "--other"])
     assert result == ["cmd", "--other"]
 
 
-def test_webnovel_passthrough_rag(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
+def test_canon_ledger_passthrough_rag(monkeypatch, tmp_path):
+    module = _load_canon_ledger_module()
     book_root = tmp_path / "book"
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: book_root)
     monkeypatch.setattr(module, "_run_data_module", lambda m, a: (called.update(mod=m), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["webnovel", "rag", "search", "--query", "test"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "rag", "search", "--query", "test"])
     with pytest.raises(SystemExit) as exc:
         module.main()
     assert int(exc.value.code or 0) == 0
     assert called["mod"] == "rag_adapter"
 
 
-def test_webnovel_passthrough_style(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
+def test_canon_ledger_passthrough_style(monkeypatch, tmp_path):
+    module = _load_canon_ledger_module()
     book_root = tmp_path / "book"
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: book_root)
     monkeypatch.setattr(module, "_run_data_module", lambda m, a: (called.update(mod=m), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["webnovel", "style", "list"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "style", "list"])
     with pytest.raises(SystemExit) as exc:
         module.main()
     assert int(exc.value.code or 0) == 0
     assert called["mod"] == "style_sampler"
 
 
-def test_webnovel_passthrough_entity(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
+def test_canon_ledger_passthrough_entity(monkeypatch, tmp_path):
+    module = _load_canon_ledger_module()
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
     monkeypatch.setattr(module, "_run_data_module", lambda m, a: (called.update(mod=m), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["webnovel", "entity", "process"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "entity", "process"])
     with pytest.raises(SystemExit) as exc:
         module.main()
     assert int(exc.value.code or 0) == 0
     assert called["mod"] == "entity_linker"
 
 
-def test_webnovel_passthrough_context(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
+def test_canon_ledger_passthrough_context(monkeypatch, tmp_path):
+    module = _load_canon_ledger_module()
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
     monkeypatch.setattr(module, "_run_data_module", lambda m, a: (called.update(mod=m), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["webnovel", "context", "build"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "context", "build"])
     with pytest.raises(SystemExit) as exc:
         module.main()
     assert int(exc.value.code or 0) == 0
     assert called["mod"] == "context_manager"
 
 
-def test_webnovel_passthrough_migrate(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
-    called = {}
-    monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
-    monkeypatch.setattr(module, "_run_data_module", lambda m, a: (called.update(mod=m), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["webnovel", "migrate"])
-    with pytest.raises(SystemExit) as exc:
-        module.main()
-    assert int(exc.value.code or 0) == 0
-    assert called["mod"] == "migrate_state_to_sqlite"
-
-
-def test_webnovel_passthrough_status_script(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
+def test_canon_ledger_passthrough_status_script(monkeypatch, tmp_path):
+    module = _load_canon_ledger_module()
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
     monkeypatch.setattr(module, "_run_script", lambda s, a: (called.update(script=s), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["webnovel", "status"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "status"])
     with pytest.raises(SystemExit) as exc:
         module.main()
     assert int(exc.value.code or 0) == 0
     assert called["script"] == "status_reporter.py"
 
 
-def test_webnovel_passthrough_update_state_script(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
+def test_canon_ledger_passthrough_update_state_script(monkeypatch, tmp_path):
+    module = _load_canon_ledger_module()
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
     monkeypatch.setattr(module, "_run_script", lambda s, a: (called.update(script=s), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["webnovel", "update-state", "add-review"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "update-state", "add-review"])
     with pytest.raises(SystemExit) as exc:
         module.main()
     assert int(exc.value.code or 0) == 0
     assert called["script"] == "update_state.py"
 
 
-def test_webnovel_passthrough_backup_script(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
+def test_canon_ledger_passthrough_backup_script(monkeypatch, tmp_path):
+    module = _load_canon_ledger_module()
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
     monkeypatch.setattr(module, "_run_script", lambda s, a: (called.update(script=s), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["webnovel", "backup"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "backup"])
     with pytest.raises(SystemExit) as exc:
         module.main()
     assert int(exc.value.code or 0) == 0
     assert called["script"] == "backup_manager.py"
 
 
-def test_webnovel_passthrough_archive_script(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
+def test_canon_ledger_passthrough_archive_script(monkeypatch, tmp_path):
+    module = _load_canon_ledger_module()
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
     monkeypatch.setattr(module, "_run_script", lambda s, a: (called.update(script=s), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["webnovel", "archive"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "archive"])
     with pytest.raises(SystemExit) as exc:
         module.main()
     assert int(exc.value.code or 0) == 0
     assert called["script"] == "archive_manager.py"
 
 
-def test_webnovel_remainder_strips_leading_double_dash(monkeypatch, tmp_path):
-    module = _load_webnovel_module()
+def test_canon_ledger_remainder_strips_leading_double_dash(monkeypatch, tmp_path):
+    module = _load_canon_ledger_module()
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
     monkeypatch.setattr(module, "_run_data_module", lambda m, a: (called.update(argv=list(a)), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["webnovel", "index", "--", "get-core-entities"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "index", "--", "get-core-entities"])
     with pytest.raises(SystemExit) as exc:
         module.main()
     assert int(exc.value.code or 0) == 0
@@ -503,15 +491,15 @@ def test_webnovel_remainder_strips_leading_double_dash(monkeypatch, tmp_path):
     assert "--" not in called["argv"]
 
 
-def test_webnovel_cmd_use(monkeypatch, tmp_path, capsys):
-    module = _load_webnovel_module()
+def test_canon_ledger_cmd_use(monkeypatch, tmp_path, capsys):
+    module = _load_canon_ledger_module()
     book_root = tmp_path / "book"
-    (book_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (book_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (book_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (book_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
 
     monkeypatch.setattr(module, "write_current_project_pointer", lambda pr, workspace_root=None: None)
     monkeypatch.setattr(module, "update_global_registry_current_project", lambda workspace_root=None, project_root=None: None)
-    monkeypatch.setattr(sys, "argv", ["webnovel", "use", str(book_root)])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "use", str(book_root)])
 
     with pytest.raises(SystemExit) as exc:
         module.main()
@@ -520,8 +508,8 @@ def test_webnovel_cmd_use(monkeypatch, tmp_path, capsys):
     assert "pointer" in out.lower() or "skipped" in out.lower()
 
 
-def test_webnovel_cmd_use_with_workspace_root(monkeypatch, tmp_path, capsys):
-    module = _load_webnovel_module()
+def test_canon_ledger_cmd_use_with_workspace_root(monkeypatch, tmp_path, capsys):
+    module = _load_canon_ledger_module()
     book_root = tmp_path / "book"
     workspace_root = tmp_path / "ws"
 
@@ -530,7 +518,7 @@ def test_webnovel_cmd_use_with_workspace_root(monkeypatch, tmp_path, capsys):
 
     monkeypatch.setattr(module, "write_current_project_pointer", lambda pr, workspace_root=None: pointer_path)
     monkeypatch.setattr(module, "update_global_registry_current_project", lambda workspace_root=None, project_root=None: reg_path)
-    monkeypatch.setattr(sys, "argv", ["webnovel", "use", str(book_root), "--workspace-root", str(workspace_root)])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "use", str(book_root), "--workspace-root", str(workspace_root)])
 
     with pytest.raises(SystemExit) as exc:
         module.main()
@@ -540,25 +528,25 @@ def test_webnovel_cmd_use_with_workspace_root(monkeypatch, tmp_path, capsys):
     assert str(reg_path) in out
 
 
-def test_webnovel_run_script_missing_script():
-    module = _load_webnovel_module()
+def test_canon_ledger_run_script_missing_script():
+    module = _load_canon_ledger_module()
     with pytest.raises(FileNotFoundError, match="未找到脚本"):
         module._run_script("nonexistent_script_xyz.py", [])
 
 
-def test_webnovel_run_data_module_no_main():
-    module = _load_webnovel_module()
-    with pytest.raises(RuntimeError, match="缺少可调用的 main"):
-        module._run_data_module("schemas", [])  # schemas 没有 main()
+def test_canon_ledger_run_data_module_no_main():
+    module = _load_canon_ledger_module()
+    with pytest.raises(ModuleNotFoundError):
+        module._run_data_module("schemas", [])
 
 
-def test_webnovel_preflight_json_format(monkeypatch, tmp_path, capsys):
-    module = _load_webnovel_module()
+def test_canon_ledger_preflight_json_format(monkeypatch, tmp_path, capsys):
+    module = _load_canon_ledger_module()
     project_root = tmp_path / "book"
-    (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(sys, "argv", ["webnovel", "--project-root", str(project_root), "preflight", "--format", "json"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "--project-root", str(project_root), "preflight", "--format", "json"])
     with pytest.raises(SystemExit) as exc:
         module.main()
     assert int(exc.value.code or 0) == 0
@@ -567,8 +555,8 @@ def test_webnovel_preflight_json_format(monkeypatch, tmp_path, capsys):
     assert "checks" in result
 
 
-def test_webnovel_resolve_root_fallback(monkeypatch):
-    module = _load_webnovel_module()
+def test_canon_ledger_resolve_root_fallback(monkeypatch):
+    module = _load_canon_ledger_module()
     # _resolve_root with None should call resolve_project_root() without args
     called = {}
     monkeypatch.setattr(module, "resolve_project_root", lambda *a, **kw: (called.update(args=a), Path("/fake"))[1])

@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Project location helpers for webnovel-writer scripts.
+Project location helpers for the CanonLedger runtime.
 
 Problem this solves:
-- Many scripts assumed CWD is the project root and used relative paths like `.webnovel/state.json`.
-- In this repo, commands/scripts are often invoked from the repo root, while the actual project lives
-  in a subdirectory (default: `webnovel-project/`).
+- Runtime code must consistently bind to the book directory that contains
+  `.canon-ledger/state.json`.
 
 These helpers provide a single, consistent way to locate the active project root.
 """
@@ -21,28 +20,25 @@ from typing import Iterable, Optional
 from runtime_compat import normalize_windows_path
 
 
-DEFAULT_PROJECT_DIR_NAMES: tuple[str, ...] = ("webnovel-project",)
-CURRENT_PROJECT_POINTER_REL: Path = Path(".claude") / ".webnovel-current-project"
-CURSOR_PROJECT_POINTER_REL: Path = Path(".cursor") / "webnovel-current-project"
-PROJECT_POINTER_RELS: tuple[Path, ...] = (
-    CURSOR_PROJECT_POINTER_REL,
-    CURRENT_PROJECT_POINTER_REL,
-)
+CANONICAL_PROJECT_DATA_DIR = ".canon-ledger"
+PROJECT_STATE_FILE = "state.json"
 
-# 用户级全局映射（当 skills/agents 安装在 ~/.claude 或 ~/.cursor 时，项目目录可能在任意盘符）
+DEFAULT_PROJECT_DIR_NAMES: tuple[str, ...] = ("canon-ledger-project",)
+CURSOR_PROJECT_POINTER_REL: Path = Path(".cursor") / "canon-ledger-current-project"
+PROJECT_POINTER_RELS: tuple[Path, ...] = (CURSOR_PROJECT_POINTER_REL,)
+
+# 用户级全局映射（skills/agents 安装在 ~/.cursor 时，项目目录可能在任意盘符）
 # 该文件用于在“空上下文 + CWD 不在项目内”的情况下仍能定位到正确 project_root。
-GLOBAL_REGISTRY_REL: Path = Path("webnovel-writer") / "workspaces.json"
+GLOBAL_REGISTRY_REL: Path = Path("canon-ledger") / "workspaces.json"
 
-# Claude Code / Cursor 常见环境变量（存在时优先作为“工作区根目录”提示）
-ENV_CLAUDE_PROJECT_DIR = "CLAUDE_PROJECT_DIR"
+# Cursor 环境变量（存在时优先作为“工作区根目录”提示）
 ENV_CURSOR_PROJECT_DIR = "CURSOR_PROJECT_DIR"
-ENV_CLAUDE_HOME = "CLAUDE_HOME"
 ENV_CURSOR_HOME = "CURSOR_HOME"
-ENV_WEBNOVEL_CLAUDE_HOME = "WEBNOVEL_CLAUDE_HOME"
+ENV_PROJECT_ROOT = "CANON_LEDGER_PROJECT_ROOT"
 
 
 def _workspace_dir_env() -> Optional[str]:
-    return os.environ.get(ENV_CURSOR_PROJECT_DIR) or os.environ.get(ENV_CLAUDE_PROJECT_DIR)
+    return os.environ.get(ENV_CURSOR_PROJECT_DIR)
 
 
 def _find_git_root(cwd: Path) -> Optional[Path]:
@@ -70,16 +66,6 @@ def _normcase_path_key(p: Path) -> str:
     return os.path.normcase(str(resolved))
 
 
-def _get_user_claude_root() -> Path:
-    raw = os.environ.get(ENV_WEBNOVEL_CLAUDE_HOME) or os.environ.get(ENV_CLAUDE_HOME)
-    if raw:
-        try:
-            return normalize_windows_path(raw).expanduser().resolve()
-        except Exception:
-            return normalize_windows_path(raw).expanduser()
-    return (Path.home() / ".claude").resolve()
-
-
 def _get_user_cursor_root() -> Path:
     raw = os.environ.get(ENV_CURSOR_HOME)
     if raw:
@@ -90,15 +76,19 @@ def _get_user_cursor_root() -> Path:
     return (Path.home() / ".cursor").resolve()
 
 
+def _global_registry_read_path() -> Path:
+    """Return the CanonLedger registry under Cursor's user directory."""
+    return _get_user_cursor_root() / GLOBAL_REGISTRY_REL
+
+
+def _global_registry_write_path() -> Path:
+    """Always write mappings under the CanonLedger identity."""
+    return _get_user_cursor_root() / GLOBAL_REGISTRY_REL
+
+
 def _global_registry_path() -> Path:
-    # Cursor 移植优先写 ~/.cursor/webnovel-writer/workspaces.json；仍可读 ~/.claude 旧映射。
-    cursor_path = _get_user_cursor_root() / GLOBAL_REGISTRY_REL
-    if cursor_path.is_file() or os.environ.get(ENV_CURSOR_PROJECT_DIR):
-        return cursor_path
-    claude_path = _get_user_claude_root() / GLOBAL_REGISTRY_REL
-    if claude_path.is_file() and not os.environ.get(ENV_CURSOR_HOME):
-        return claude_path
-    return cursor_path
+    """Return the registry used by read-only callers."""
+    return _global_registry_read_path()
 
 
 def _default_registry() -> dict:
@@ -153,10 +143,10 @@ def _resolve_project_root_from_global_registry(
     从用户级 registry 中解析 project_root。
 
     安全策略：
-    - 优先使用 workspace_hint / CLAUDE_PROJECT_DIR 提示做匹配。
+    - 优先使用 workspace_hint / CURSOR_PROJECT_DIR 提示做匹配。
     - 默认不使用 last_used 兜底，避免在“完全无上下文”时误命中错误项目。
     """
-    reg_path = _global_registry_path()
+    reg_path = _global_registry_read_path()
     reg = _load_global_registry(reg_path)
     workspaces = reg.get("workspaces") or {}
     if not isinstance(workspaces, dict) or not workspaces:
@@ -232,7 +222,9 @@ def update_global_registry_current_project(
     except Exception:
         root = root
     if not _is_project_root(root):
-        raise FileNotFoundError(f"Not a webnovel project root (missing .webnovel/state.json): {root}")
+        raise FileNotFoundError(
+            f"不是有效的叙典项目根目录（缺少 {CANONICAL_PROJECT_DATA_DIR}/{PROJECT_STATE_FILE}）：{root}"
+        )
 
     ws = workspace_root
     if ws is None:
@@ -247,8 +239,9 @@ def update_global_registry_current_project(
     except Exception:
         ws = ws.expanduser()
 
-    reg_path = _global_registry_path()
-    reg = _load_global_registry(reg_path)
+    source_path = _global_registry_read_path()
+    reg_path = _global_registry_write_path()
+    reg = _load_global_registry(source_path)
     workspaces = reg.get("workspaces")
     if not isinstance(workspaces, dict):
         workspaces = {}
@@ -278,7 +271,8 @@ def _candidate_roots(cwd: Path, *, stop_at: Optional[Path] = None) -> Iterable[P
 
 
 def _is_project_root(path: Path) -> bool:
-    return (path / ".webnovel" / "state.json").is_file()
+    data_dir = path / CANONICAL_PROJECT_DATA_DIR
+    return data_dir.is_dir() and not data_dir.is_symlink() and (data_dir / PROJECT_STATE_FILE).is_file()
 
 
 def _pointer_candidates(cwd: Path, *, stop_at: Optional[Path] = None) -> Iterable[Path]:
@@ -328,10 +322,10 @@ def _resolve_unique_child_project_root(root: Path) -> Optional[Path]:
     return None
 
 
-def _find_workspace_root_with_claude(start: Path) -> Optional[Path]:
-    """Find nearest ancestor containing `.cursor/` or `.claude/`."""
+def _find_workspace_root_with_cursor(start: Path) -> Optional[Path]:
+    """Find the nearest ancestor containing `.cursor/`."""
     for candidate in (start, *start.parents):
-        if (candidate / ".cursor").is_dir() or (candidate / ".claude").is_dir():
+        if (candidate / ".cursor").is_dir():
             return candidate
     return None
 
@@ -344,11 +338,13 @@ def write_current_project_pointer(project_root: Path, *, workspace_root: Optiona
     """
     root = normalize_windows_path(project_root).expanduser().resolve()
     if not _is_project_root(root):
-        raise FileNotFoundError(f"Not a webnovel project root (missing .webnovel/state.json): {root}")
+        raise FileNotFoundError(
+            f"不是有效的叙典项目根目录（缺少 {CANONICAL_PROJECT_DATA_DIR}/{PROJECT_STATE_FILE}）：{root}"
+        )
 
-    ws_root = Path(workspace_root).expanduser().resolve() if workspace_root else _find_workspace_root_with_claude(root)
+    ws_root = Path(workspace_root).expanduser().resolve() if workspace_root else _find_workspace_root_with_cursor(root)
     if ws_root is None:
-        ws_root = _find_workspace_root_with_claude(Path.cwd().resolve())
+        ws_root = _find_workspace_root_with_cursor(Path.cwd().resolve())
     if ws_root is None:
         env_ws = _workspace_dir_env()
         if env_ws:
@@ -361,15 +357,14 @@ def write_current_project_pointer(project_root: Path, *, workspace_root: Optiona
         # 兜底：若无法找到工作区标记目录，将项目父目录视为“工作区”候选，
         # 仅用于写入用户级 registry。
         ws_root = root.parent if root.parent != root else None
-    # 注意：ws_root 可能为 None（例如全局安装的 skills/agents，工作区内没有 `.cursor/` / `.claude/`）。
+    # 注意：ws_root 可能为 None（例如全局安装的 skills/agents，工作区内没有 `.cursor/`）。
     # 这类情况仍然需要写入用户级 registry，以支持后续“空上下文”定位。
 
     pointer_file: Optional[Path] = None
     explicit_workspace = workspace_root is not None or bool(_workspace_dir_env())
     if ws_root is not None:
         has_cursor_dir = (ws_root / ".cursor").is_dir()
-        has_claude_dir = (ws_root / ".claude").is_dir()
-        if explicit_workspace or has_cursor_dir or has_claude_dir:
+        if explicit_workspace or has_cursor_dir:
             try:
                 cursor_dir = ws_root / ".cursor"
                 cursor_dir.mkdir(parents=True, exist_ok=True)
@@ -378,16 +373,6 @@ def write_current_project_pointer(project_root: Path, *, workspace_root: Optiona
                 pointer_file = cursor_pointer
             except Exception:
                 pointer_file = None
-        # 兼容 Claude Code 工作区：已有 `.claude/` 时同步旧指针，不凭空创建 `.claude/`。
-        if has_claude_dir:
-            try:
-                claude_pointer = ws_root / CURRENT_PROJECT_POINTER_REL
-                claude_pointer.write_text(str(root), encoding="utf-8")
-                if pointer_file is None:
-                    pointer_file = claude_pointer
-            except Exception:
-                pass
-
     # best-effort 更新用户级 registry（不阻断）
     try:
         update_global_registry_current_project(workspace_root=ws_root, project_root=root)
@@ -399,12 +384,12 @@ def write_current_project_pointer(project_root: Path, *, workspace_root: Optiona
 
 def resolve_project_root(explicit_project_root: Optional[str] = None, *, cwd: Optional[Path] = None) -> Path:
     """
-    Resolve the webnovel project root directory (the directory containing `.webnovel/state.json`).
+    Resolve the CanonLedger project root containing `.canon-ledger/state.json`.
 
     Resolution order:
     1) explicit_project_root (if provided)
-    2) env var WEBNOVEL_PROJECT_ROOT (if set)
-    3) Search from cwd and parents, including common subdir `webnovel-project/`
+    2) env var CANON_LEDGER_PROJECT_ROOT (if set)
+    3) Search from cwd and parents, including common project subdirectories
 
     Search safety:
     - If current location is inside a Git repo, parent search stops at the repo root.
@@ -418,7 +403,7 @@ def resolve_project_root(explicit_project_root: Optional[str] = None, *, cwd: Op
         if _is_project_root(root):
             return root
 
-        # 兼容：显式传入“工作区根目录”（含 Cursor/Claude 项目指针）
+        # 支持显式传入含 Cursor 项目指针的工作区根目录。
         # 例如：D:\wk\xiaoshuo 不是项目根，但其指针指向 D:\wk\xiaoshuo\<书名>
         pointer_root = _resolve_project_root_from_pointer(root, stop_at=_find_git_root(root))
         if pointer_root is not None:
@@ -428,8 +413,7 @@ def resolve_project_root(explicit_project_root: Optional[str] = None, *, cwd: Op
         if child_root is not None:
             return child_root
 
-        # 兼容：显式传入“工作区根目录”但其 `.claude/` 在用户目录（全局安装）时，
-        # workspace 内部可能没有指针文件。此时从用户级 registry 查找。
+        # 工作区内部没有指针文件时，再从用户级 registry 查找。
         reg_root = _resolve_project_root_from_global_registry(
             root,
             workspace_hint=root,
@@ -438,25 +422,30 @@ def resolve_project_root(explicit_project_root: Optional[str] = None, *, cwd: Op
         if reg_root is not None:
             return reg_root
 
-        raise FileNotFoundError(f"Not a webnovel project root (missing .webnovel/state.json): {root}")
+        raise FileNotFoundError(
+            f"不是有效的叙典项目根目录（缺少 {CANONICAL_PROJECT_DATA_DIR}/{PROJECT_STATE_FILE}）：{root}"
+        )
 
-    env_root = os.environ.get("WEBNOVEL_PROJECT_ROOT")
+    env_root = os.environ.get(ENV_PROJECT_ROOT)
     if env_root:
         root = normalize_windows_path(env_root).expanduser().resolve()
         if _is_project_root(root):
             return root
-        raise FileNotFoundError(f"WEBNOVEL_PROJECT_ROOT is set but invalid (missing .webnovel/state.json): {root}")
+        raise FileNotFoundError(
+            f"{ENV_PROJECT_ROOT} 已设置但不是有效项目根目录（缺少 "
+            f"{CANONICAL_PROJECT_DATA_DIR}/{PROJECT_STATE_FILE}）：{root}"
+        )
 
     base = (cwd or Path.cwd()).resolve()
     git_root = _find_git_root(base)
 
-    # Workspace pointer fallback (for layouts where `.cursor` / `.claude` is in workspace root and projects are subdirs).
+    # 工作区根含 `.cursor` 且书项目位于子目录时，使用项目指针。
     pointer_root = _resolve_project_root_from_pointer(base, stop_at=git_root)
     if pointer_root is not None:
         return pointer_root
 
-    # 用户级 registry fallback（仅在“有上下文提示”时启用，避免误命中）
-    # - 若 CURSOR_PROJECT_DIR / CLAUDE_PROJECT_DIR 存在：认为宿主提供了工作区上下文
+    # 用户级 registry 兜底（仅在“有上下文提示”时启用，避免误命中）
+    # - 若 CURSOR_PROJECT_DIR 存在：认为宿主提供了工作区上下文
     # - 否则仅在 base 位于某个已记录 workspace 内时启用（前缀匹配）
     allow_last_used = bool(_workspace_dir_env())
     reg_root = _resolve_project_root_from_global_registry(
@@ -472,9 +461,9 @@ def resolve_project_root(explicit_project_root: Optional[str] = None, *, cwd: Op
             return candidate.resolve()
 
     raise FileNotFoundError(
-        "Unable to locate webnovel project root. Expected `.webnovel/state.json` under the current directory, "
-        "a parent directory, or `webnovel-project/`. Run /webnovel-init first or pass --project-root / set "
-        "WEBNOVEL_PROJECT_ROOT."
+        "无法定位叙典项目根目录。当前目录、父目录或默认项目子目录中均未找到 "
+        "`.canon-ledger/state.json`。请先运行初始化命令，或传入 --project-root / 设置 "
+        "CANON_LEDGER_PROJECT_ROOT。"
     )
 
 
@@ -485,7 +474,7 @@ def resolve_state_file(
     cwd: Optional[Path] = None,
 ) -> Path:
     """
-    Resolve `.webnovel/state.json` path.
+    Resolve `.canon-ledger/state.json` path.
 
     If explicit_state_file is provided, returns it as-is (resolved to absolute if relative).
     Otherwise derives it from resolve_project_root().
@@ -496,5 +485,4 @@ def resolve_state_file(
         return (base / p).resolve() if not p.is_absolute() else p.resolve()
 
     root = resolve_project_root(explicit_project_root, cwd=base)
-    return root / ".webnovel" / "state.json"
-
+    return root / CANONICAL_PROJECT_DATA_DIR / PROJECT_STATE_FILE

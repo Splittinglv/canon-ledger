@@ -18,7 +18,6 @@ from data_modules import (
     IndexManager,
     RAGAdapter,
     StyleSampler,
-    EntityState,
     ChapterMeta,
     SceneMeta,
     StyleSample,
@@ -51,7 +50,7 @@ def temp_project():
 
 def _ensure_project_state(config):
     config.ensure_dirs()
-    state_path = config.webnovel_dir / "state.json"
+    state_path = config.canon_ledger_dir / "state.json"
     if not state_path.exists():
         state_path.write_text(json.dumps({}, ensure_ascii=False), encoding="utf-8")
 
@@ -172,202 +171,35 @@ class TestEntityLinker:
 
 
 class TestStateManager:
-    """状态管理器测试"""
+    """当前状态入口只读取 commit 生成的投影。"""
 
-    def test_add_and_get_entity(self, temp_project):
-        manager = StateManager(temp_project)
-
-        entity = EntityState(
-            id="xiaoyan",
-            name="萧炎",
-            type="角色",
-            tier="核心"
-        )
-        assert manager.add_entity(entity)
-
-        # 获取实体
-        result = manager.get_entity("xiaoyan")
-        assert result is not None
-        assert result["canonical_name"] == "萧炎"
-
-    def test_update_entity(self, temp_project):
-        manager = StateManager(temp_project)
-
-        entity = EntityState(id="xiaoyan", name="萧炎", type="角色")
-        manager.add_entity(entity)
-
-        # 更新属性 (v5.0: attributes 存在 current 字段)
-        manager.update_entity("xiaoyan", {"current": {"realm": "斗师"}})
-
-        result = manager.get_entity("xiaoyan")
-        assert result["current"]["realm"] == "斗师"
-
-    def test_record_state_change(self, temp_project):
-        manager = StateManager(temp_project)
-
-        entity = EntityState(id="xiaoyan", name="萧炎", type="角色")
-        manager.add_entity(entity)
-
-        manager.record_state_change(
-            entity_id="xiaoyan",
-            field="realm",
-            old_value="斗者",
-            new_value="斗师",
-            reason="突破",
-            chapter=100
+    def test_reads_current_index_projection(self, temp_project):
+        index = IndexManager(temp_project)
+        index.upsert_entity(
+            EntityMeta(
+                id="xiaoyan",
+                type="角色",
+                canonical_name="萧炎",
+                current={"realm": "斗师"},
+                first_appearance=1,
+                last_appearance=3,
+            )
         )
 
-        changes = manager.get_state_changes("xiaoyan")
-        assert len(changes) == 1
-        assert changes[0]["new_value"] == "斗师"
-
-    def test_add_relationship(self, temp_project):
         manager = StateManager(temp_project)
 
-        manager.add_relationship(
-            from_entity="xiaoyan",
-            to_entity="yaolao",
-            rel_type="师徒",
-            description="药老收萧炎为徒",
-            chapter=10
+        entity = manager.get_entity("xiaoyan")
+        assert entity is not None, "当前实体投影应能被状态查询入口读取"
+        assert entity["current_json"]["realm"] == "斗师"
+
+    def test_rejects_removed_state_shape(self, temp_project):
+        temp_project.state_file.write_text(
+            json.dumps({"entities_v3": {"角色": {}}}, ensure_ascii=False),
+            encoding="utf-8",
         )
 
-        rels = manager.get_relationships("xiaoyan")
-        assert len(rels) == 1
-        assert rels[0]["type"] == "师徒"
-
-    def test_process_chapter_result(self, temp_project):
-        manager = StateManager(temp_project)
-
-        result = {
-            "entities_appeared": [
-                {"id": "xiaoyan", "mentions": ["萧炎", "他"]}
-            ],
-            "entities_new": [
-                {"suggested_id": "hongyi_girl", "name": "红衣女子", "type": "角色", "tier": "装饰"}
-            ],
-            "state_changes": [
-                {"entity_id": "xiaoyan", "field": "realm", "old": "斗者", "new": "斗师", "reason": "突破"}
-            ],
-            "relationships_new": [
-                {"from": "xiaoyan", "to": "hongyi_girl", "type": "相识", "description": "初次见面"}
-            ]
-        }
-
-        # 先添加萧炎
-        manager.add_entity(EntityState(id="xiaoyan", name="萧炎", type="角色"))
-
-        warnings = manager.process_chapter_result(100, result)
-
-        # 验证新实体被添加
-        assert manager.get_entity("hongyi_girl") is not None
-
-        # 验证状态变化
-        changes = manager.get_state_changes("xiaoyan")
-        assert len(changes) == 1
-
-        # 验证进度更新
-        assert manager.get_current_chapter() == 100
-
-    def test_save_state_with_init_project_schema(self, temp_project):
-        """回归：init_project 生成的 state.json，StateManager 仍应可写入。(v5.1 SQLite-only)"""
-        # v5.1: state.json 不再包含 entities_v3/alias_index，实体数据在 SQLite
-        init_state = {
-            "project_info": {"title": "测试书名", "genre": "修仙/玄幻", "created_at": "2026-01-01"},
-            "progress": {"current_chapter": 0, "total_words": 0, "last_updated": "2026-01-01 00:00:00"},
-            "protagonist_state": {"name": "测试主角"},
-            "relationships": {},
-            "world_settings": {"power_system": [], "factions": [], "locations": []},
-            "plot_threads": {"active_threads": [], "foreshadowing": []},
-            "review_checkpoints": [],
-            "strand_tracker": {"current_dominant": "quest", "history": []},
-        }
-        temp_project.state_file.write_text(json.dumps(init_state, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        manager = StateManager(temp_project)
-        manager.update_progress(5, words=100)
-        manager.save_state()
-
-        saved = json.loads(temp_project.state_file.read_text(encoding="utf-8"))
-        assert "meta" not in saved
-        assert saved["progress"]["current_chapter"] == 5
-        assert saved["progress"]["total_words"] == 100
-        # v5.1: entities_v3/alias_index 不再在 state.json 中
-
-    def test_save_state_preserves_unrelated_fields(self, temp_project):
-        """回归：仅写入增量，不应覆盖/丢失其他模块维护的字段。(v5.1 SQLite-only)"""
-        init_state = {
-            "project_info": {"title": "测试书名", "genre": "修仙/玄幻", "created_at": "2026-01-01"},
-            "progress": {"current_chapter": 10, "total_words": 1000, "last_updated": "2026-01-01 00:00:00"},
-            "protagonist_state": {"name": "测试主角"},
-            "relationships": {"allies": ["药老"], "enemies": []},
-            "world_settings": {"power_system": [], "factions": [], "locations": []},
-            "plot_threads": {"active_threads": [{"id": "t1", "title": "主线"}], "foreshadowing": []},
-            "review_checkpoints": [],
-            "strand_tracker": {"current_dominant": "quest", "history": []},
-            "custom_field": {"keep": True},
-        }
-        temp_project.state_file.write_text(json.dumps(init_state, ensure_ascii=False, indent=2), encoding="utf-8")
-
-        manager = StateManager(temp_project)
-        manager.add_entity(EntityState(id="xiaoyan", name="萧炎", type="角色", tier="核心"))
-        manager.save_state()
-
-        saved = json.loads(temp_project.state_file.read_text(encoding="utf-8"))
-        assert saved.get("custom_field", {}).get("keep") is True
-        assert saved.get("plot_threads", {}).get("active_threads", [])[0].get("id") == "t1"
-        assert isinstance(saved.get("relationships"), dict)
-
-    def test_disambiguation_feedback_persisted(self, temp_project):
-        """回归：中/低置信度消歧必须对 Writer 可见（写入 state.json）。"""
-        manager = StateManager(temp_project)
-
-        result = {
-            "entities_appeared": [],
-            "entities_new": [],
-            "state_changes": [],
-            "relationships_new": [],
-            "uncertain": [
-                {
-                    "mention": "那位前辈",
-                    "context": "那位前辈看了他一眼",
-                    "candidates": [{"type": "角色", "id": "yaolao"}, {"type": "角色", "id": "elder_zhang"}],
-                    "suggested": "yaolao",
-                    "confidence": 0.6,
-                },
-                {
-                    "mention": "宗主",
-                    "context": "宗主出现在血煞秘境",
-                    "candidates": ["xueshazonzhu", "lintian"],
-                    "suggested": "xueshazonzhu",
-                    "confidence": 0.4,
-                },
-            ],
-        }
-
-        warnings = manager.process_chapter_result(100, result)
-        manager.save_state()
-
-        state = json.loads(temp_project.state_file.read_text(encoding="utf-8"))
-        assert isinstance(state.get("disambiguation_warnings"), list)
-        assert isinstance(state.get("disambiguation_pending"), list)
-
-        assert len(state["disambiguation_warnings"]) == 1
-        assert len(state["disambiguation_pending"]) == 1
-
-        warn = state["disambiguation_warnings"][0]
-        assert warn.get("chapter") == 100
-        assert warn.get("mention") == "那位前辈"
-        assert warn.get("chosen_id") == "yaolao"
-
-        pending = state["disambiguation_pending"][0]
-        assert pending.get("chapter") == 100
-        assert pending.get("mention") == "宗主"
-
-        # 返回值也应包含可见警告，便于 CLI/日志透出
-        assert any("消歧警告" in w for w in warnings)
-        assert any("需人工确认" in w for w in warnings)
-
+        with pytest.raises(ValueError, match="不受支持的字段"):
+            StateManager(temp_project)
 
 class TestIndexManager:
     """索引管理器测试"""
@@ -1345,7 +1177,7 @@ class TestIndexManager:
         workspace = tmp_path / "workspace"
         workspace.mkdir()
         (workspace / ".git").mkdir()
-        (workspace / ".claude").mkdir()
+        (workspace / ".cursor").mkdir()
         project_root = workspace / "book"
         config = DataModulesConfig.from_project_root(project_root)
         config.ensure_dirs()

@@ -17,7 +17,7 @@ _ORIGINAL_TEMPORARY_DIRECTORY = tempfile.TemporaryDirectory
 def _repo_root() -> Path:
     here = Path(__file__).resolve()
     plugin_root = here.parent.parent
-    if (plugin_root / "scripts" / "webnovel.py").is_file():
+    if (plugin_root / "scripts" / "canon_ledger.py").is_file():
         return plugin_root
     return here.parents[2]
 
@@ -50,7 +50,7 @@ def _install_safe_tempfile() -> None:
     root = _tmp_root()
     for name in ("TMP", "TEMP", "TMPDIR"):
         os.environ[name] = str(root)
-    os.environ["WEBNOVEL_TEST_RELAX_ATOMIC_REPLACE"] = "1"
+    os.environ["CANON_LEDGER_TEST_RELAX_ATOMIC_REPLACE"] = "1"
     tempfile.tempdir = str(root)
     tempfile.mkdtemp = _safe_mkdtemp
     tempfile.TemporaryDirectory = _SafeTemporaryDirectory
@@ -93,7 +93,7 @@ def tmp_path(request: pytest.FixtureRequest) -> Path:
     try:
         yield path
     finally:
-        if os.environ.get("WEBNOVEL_KEEP_TEST_TMP") != "1":
+        if os.environ.get("CANON_LEDGER_KEEP_TEST_TMP") != "1":
             shutil.rmtree(path, ignore_errors=True)
 
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Resolve webnovel-writer plugin root and workspace root for Cursor (and Claude Code)."""
+"""Resolve CanonLedger plugin and workspace roots for Cursor."""
 
 from __future__ import annotations
 
@@ -10,17 +10,16 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-PLUGIN_MARKER = Path("scripts") / "webnovel.py"
-LOCAL_INSTALL_REL = Path(".cursor") / "plugins" / "local" / "webnovel-writer"
+PLUGIN_MARKER = Path("scripts") / "canon_ledger.py"
+PLUGIN_NAME = "canon-ledger"
+LOCAL_INSTALL_REL = Path(".cursor") / "plugins" / "local" / PLUGIN_NAME
 
 ENV_PLUGIN_ROOTS = (
-    "WEBNOVEL_PLUGIN_ROOT",
+    "CANON_LEDGER_PLUGIN_ROOT",
     "CURSOR_PLUGIN_ROOT",
-    "CLAUDE_PLUGIN_ROOT",
 )
 ENV_WORKSPACE_ROOTS = (
     "CURSOR_PROJECT_DIR",
-    "CLAUDE_PROJECT_DIR",
 )
 
 
@@ -48,12 +47,12 @@ def _env_path(name: str) -> Optional[Path]:
 
 def resolve_plugin_root(*, start: Optional[Path] = None) -> Path:
     """
-    Locate the Cursor/Claude plugin directory that contains scripts/webnovel.py.
+    Locate the Cursor plugin directory that contains scripts/canon_ledger.py.
 
     Order:
-    1) WEBNOVEL_PLUGIN_ROOT / CURSOR_PLUGIN_ROOT / CLAUDE_PLUGIN_ROOT
+    1) CANON_LEDGER_PLUGIN_ROOT / host plugin roots
     2) this file's plugin root (scripts/ parent)
-    3) ~/.cursor/plugins/local/webnovel-writer
+    3) ~/.cursor/plugins/local/canon-ledger
 
     Cache directories are deliberately not searched. Cursor must inject the
     active plugin root; otherwise only this package or the fixed local install
@@ -78,9 +77,9 @@ def resolve_plugin_root(*, start: Optional[Path] = None) -> Path:
         return _normalized(local)
 
     raise FileNotFoundError(
-        "Unable to locate webnovel-writer plugin root (missing scripts/webnovel.py). "
-        "Install this repo to ~/.cursor/plugins/local/webnovel-writer or set "
-        "WEBNOVEL_PLUGIN_ROOT / CURSOR_PLUGIN_ROOT."
+        "无法定位叙典 CanonLedger 插件根目录（缺少 scripts/canon_ledger.py）。"
+        "请安装到 ~/.cursor/plugins/local/canon-ledger，或设置 "
+        "CANON_LEDGER_PLUGIN_ROOT / CURSOR_PLUGIN_ROOT。"
     )
 
 
@@ -102,7 +101,7 @@ def emit_json_paths(*, plugin_root: Optional[Path] = None) -> int:
     print(
         json.dumps(
             {
-                "schema_version": "webnovel-cursor-paths/v1",
+                "schema_version": "canon-ledger-cursor-paths/v1",
                 "plugin_root": str(root),
                 "scripts_dir": str(root / "scripts"),
                 "workspace_root": str(workspace),

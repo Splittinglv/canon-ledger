@@ -49,7 +49,7 @@ class _LockedState:
 class StateProjectionWriter:
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
-        self.state_path = self.project_root / ".webnovel" / "state.json"
+        self.state_path = self.project_root / ".canon-ledger" / "state.json"
         self.lock_path = self.state_path.with_suffix(self.state_path.suffix + ".lock")
 
     def apply(self, commit_payload: dict) -> dict:

@@ -19,7 +19,10 @@ from data_modules.chapter_content_binding import build_chapter_binding  # noqa: 
 from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
 from data_modules.projection_log import read_projection_runs  # noqa: E402
 from data_modules.projections import replay_projections, retry_projection  # noqa: E402
-from .review_test_helpers import standard_review  # noqa: E402
+from .review_test_helpers import (  # noqa: E402
+    standard_review,
+    write_current_chapter_contract,
+)
 
 
 def _build_bound_commit(service: ChapterCommitService, **kwargs):
@@ -29,6 +32,11 @@ def _build_bound_commit(service: ChapterCommitService, **kwargs):
     if not chapter_path.exists():
         chapter_path.write_text(f"第{chapter}章测试正文\n", encoding="utf-8")
     binding = build_chapter_binding(service.project_root, chapter)
+    write_current_chapter_contract(
+        service.project_root,
+        chapter,
+        planned_nodes=list(kwargs["fulfillment_result"].get("planned_nodes") or []),
+    )
     if "blocking_count" in kwargs["review_result"]:
         kwargs["review_result"] = standard_review(
             binding,
@@ -48,8 +56,8 @@ def _build_bound_commit(service: ChapterCommitService, **kwargs):
 
 
 def _make_rejected_commit(project_root: Path, chapter: int) -> None:
-    (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     service = ChapterCommitService(project_root)
     payload = _build_bound_commit(
         service,
@@ -63,8 +71,8 @@ def _make_rejected_commit(project_root: Path, chapter: int) -> None:
 
 
 def _make_accepted_commit_with_event(project_root: Path, chapter: int) -> None:
-    (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     service = ChapterCommitService(project_root)
     payload = _build_bound_commit(
         service,
@@ -98,7 +106,7 @@ def test_retry_projection_replays_existing_commit(tmp_path):
 
     assert report["ok"] is True
     assert report["projection_status"]["state"] == "done"
-    state = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    state = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     assert state["progress"]["chapter_status"]["3"] == "chapter_rejected"
     assert read_projection_runs(tmp_path, chapter=3)
 
@@ -152,8 +160,8 @@ def test_retry_projection_backfills_only_vector_after_key_is_configured(
     monkeypatch,
 ):
     monkeypatch.setenv("EMBED_API_KEY", "")
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     service = ChapterCommitService(tmp_path)
     payload = _build_bound_commit(
         service,
@@ -201,8 +209,8 @@ def test_retry_projection_backfills_only_vector_after_key_is_configured(
 
 def test_retry_projection_refreshes_legacy_fact_filter_marker(tmp_path, monkeypatch):
     monkeypatch.setenv("EMBED_API_KEY", "")
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     service = ChapterCommitService(tmp_path)
     payload = _build_bound_commit(
         service,
@@ -228,7 +236,7 @@ def test_retry_projection_refreshes_legacy_fact_filter_marker(tmp_path, monkeypa
     payload = service.apply_projections(payload)
     assert payload["projection_status"]["vector"] == "skipped"
 
-    vector_db = tmp_path / ".webnovel" / "vectors.db"
+    vector_db = tmp_path / ".canon-ledger" / "vectors.db"
     with sqlite3.connect(vector_db) as conn:
         conn.execute(
             "UPDATE vectors SET source_file = ? WHERE chapter = 4",

@@ -9,6 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from data_modules.chapter_commit_service import ChapterCommitService
+from data_modules.chapter_content_binding import build_chapter_binding
+from .review_test_helpers import standard_review, write_current_chapter_contract
+
 _scripts_dir = str(Path(__file__).resolve().parent.parent.parent)
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
@@ -21,11 +25,45 @@ def _ensure_scripts_on_path():
 
 
 def _make_project(tmp_path: Path):
-    webnovel_dir = tmp_path / ".webnovel"
-    webnovel_dir.mkdir(parents=True, exist_ok=True)
-    (webnovel_dir / "state.json").write_text("{}", encoding="utf-8")
-    (webnovel_dir / "summaries").mkdir(exist_ok=True)
+    canon_ledger_dir = tmp_path / ".canon-ledger"
+    canon_ledger_dir.mkdir(parents=True, exist_ok=True)
+    (canon_ledger_dir / "state.json").write_text("{}", encoding="utf-8")
+    (canon_ledger_dir / "summaries").mkdir(exist_ok=True)
     return tmp_path
+
+
+def _persist_current_entity(project: Path) -> None:
+    chapter_path = project / "正文" / "第0001章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("萧炎在第一章正式登场。", encoding="utf-8")
+    binding = build_chapter_binding(project, 1)
+    write_current_chapter_contract(project, 1)
+    payload = ChapterCommitService(project).build_commit(
+        chapter=1,
+        review_result=standard_review(binding),
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        disambiguation_result={"pending": [], "chapter_binding": binding},
+        extraction_result={
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [
+                {
+                    "entity_id": "xiaoyan",
+                    "canonical_name": "萧炎",
+                    "entity_type": "角色",
+                    "tier": "核心",
+                }
+            ],
+            "chapter_binding": binding,
+        },
+    )
+    ChapterCommitService(project).persist_commit(payload)
 
 
 def test_load_context_cli(tmp_path, capsys):
@@ -70,7 +108,7 @@ def test_load_context_cli_passes_budget_tokens(tmp_path, capsys):
     assert output["budget"]["requested_tokens"] == 7
     assert output["budget_used_tokens"] > 0
     assert "context_budget" not in output["sections"]
-    assert output["schema_version"] == "webnovel-context-pack/v2"
+    assert output["schema_version"] == "canon-ledger-context-pack/v2"
 
 
 def test_query_entity_not_found(tmp_path, capsys):
@@ -94,14 +132,7 @@ def test_query_entity_found(tmp_path, capsys):
     import memory_cli
 
     project = _make_project(tmp_path)
-    state = {
-        "entities_v3": {
-            "角色": {
-                "xiaoyan": {"name": "萧炎", "tier": "核心", "aliases": [], "first_appearance": 1, "last_appearance": 10}
-            }
-        }
-    }
-    (project / ".webnovel" / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    _persist_current_entity(project)
 
     old_argv = sys.argv
     sys.argv = ["memory_cli", "--project-root", str(project), "query-entity", "--id", "xiaoyan"]
@@ -152,7 +183,7 @@ def test_read_summary_exists(tmp_path, capsys):
     import memory_cli
 
     project = _make_project(tmp_path)
-    (project / ".webnovel" / "summaries" / "ch0005.md").write_text("第5章摘要", encoding="utf-8")
+    (project / ".canon-ledger" / "summaries" / "ch0005.md").write_text("第5章摘要", encoding="utf-8")
 
     old_argv = sys.argv
     sys.argv = ["memory_cli", "--project-root", str(project), "read-summary", "--chapter", "5"]

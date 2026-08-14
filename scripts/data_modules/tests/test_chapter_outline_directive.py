@@ -12,8 +12,8 @@ from chapter_outline_loader import (
 def test_load_chapter_execution_directive_from_volume_outline(tmp_path):
     outline_dir = tmp_path / "大纲"
     outline_dir.mkdir()
-    (tmp_path / ".webnovel").mkdir()
-    (tmp_path / ".webnovel" / "state.json").write_text(
+    (tmp_path / ".canon-ledger").mkdir()
+    (tmp_path / ".canon-ledger" / "state.json").write_text(
         json.dumps({"progress": {"volumes_planned": [{"volume": 1, "chapters_range": "1-50"}]}}),
         encoding="utf-8",
     )
@@ -91,8 +91,8 @@ def test_load_directive_supports_hundred_chinese_heading_without_neighbor_leakag
 ):
     outline_dir = tmp_path / "大纲"
     outline_dir.mkdir()
-    (tmp_path / ".webnovel").mkdir()
-    (tmp_path / ".webnovel" / "state.json").write_text(
+    (tmp_path / ".canon-ledger").mkdir()
+    (tmp_path / ".canon-ledger" / "state.json").write_text(
         json.dumps(
             {
                 "progress": {

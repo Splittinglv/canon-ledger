@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = "webnovel-author-glossary/v1"
+SCHEMA_VERSION = "canon-ledger-author-glossary/v1"
 
 
 @dataclass(frozen=True)

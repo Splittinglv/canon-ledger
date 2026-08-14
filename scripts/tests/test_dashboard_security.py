@@ -21,8 +21,8 @@ def _create_dashboard_client(monkeypatch, project_root: Path) -> TestClient:
 
 
 def test_dashboard_cors_allows_localhost_origin(monkeypatch, tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     client = _create_dashboard_client(monkeypatch, tmp_path)
 
     response = client.options(
@@ -37,8 +37,8 @@ def test_dashboard_cors_allows_localhost_origin(monkeypatch, tmp_path):
 
 
 def test_dashboard_cors_rejects_untrusted_origin(monkeypatch, tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     client = _create_dashboard_client(monkeypatch, tmp_path)
 
     response = client.options(
@@ -53,8 +53,8 @@ def test_dashboard_cors_rejects_untrusted_origin(monkeypatch, tmp_path):
 
 
 def test_dashboard_file_read_rejects_large_files(monkeypatch, tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     prose_dir = tmp_path / "正文"
     prose_dir.mkdir()
     large_file = prose_dir / "huge.md"

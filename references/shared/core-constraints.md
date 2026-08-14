@@ -3,8 +3,8 @@ name: core-constraints
 purpose: 写章前加载的长期一致性协议
 ---
 
-> **主服务 skill**: `webnovel-write` Step 2
-> **次服务 skill**: `webnovel-review` Step 2
+> **主服务 skill**: `canon-ledger-write` Step 2
+> **次服务 skill**: `canon-ledger-review` Step 2
 > 只补充长篇防幻觉，不规定口吻、句式或网文章法。
 
 <instructions>

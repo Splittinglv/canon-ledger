@@ -8,12 +8,12 @@ from types import SimpleNamespace
 
 
 def test_dashboard_watcher_notifies_story_system_commit_changes(tmp_path):
-    from dashboard.watcher import _WebnovelFileHandler
+    from dashboard.watcher import _CanonLedgerFileHandler
 
     changed = []
-    handler = _WebnovelFileHandler(
+    handler = _CanonLedgerFileHandler(
         lambda path, kind: changed.append((Path(path).name, kind)),
-        watch_webnovel_dir=tmp_path / ".webnovel",
+        watch_canon_ledger_dir=tmp_path / ".canon-ledger",
         watch_story_system_dir=tmp_path / ".story-system",
     )
 

@@ -25,7 +25,7 @@ class PrewriteValidator:
             dict(state_snapshot)
             if state_snapshot is not None
             else json.loads(
-                (self.project_root / ".webnovel" / "state.json").read_text(
+                (self.project_root / ".canon-ledger" / "state.json").read_text(
                     encoding="utf-8"
                 )
             )
@@ -57,7 +57,7 @@ class PrewriteValidator:
             "blocking_reasons": blocking_reasons,
             "missing_contracts": missing_contracts,
             "related_placeholders": related_placeholders,
-            "forbidden_zones": list(review_contract.get("blocking_rules") or []),
+            "forbidden_zones": list(plot_structure.get("forbidden_zones") or []),
             "disambiguation_domain": {
                 "pending_count": len(pending),
                 "warning_count": len(warnings),
@@ -68,8 +68,8 @@ class PrewriteValidator:
                 ],
             },
             "fulfillment_seed": {
-                "planned_nodes": list(plot_structure.get("mandatory_nodes") or []),
-                "prohibitions": list(plot_structure.get("prohibitions") or []),
+                "planned_nodes": list(plot_structure.get("must_cover_nodes") or []),
+                "forbidden_zones": list(plot_structure.get("forbidden_zones") or []),
             },
         }
 

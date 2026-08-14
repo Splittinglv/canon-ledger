@@ -10,8 +10,8 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = "webnovel-projection-log/v1"
-PROJECTION_LOG_REL = Path(".webnovel") / "projection_log.jsonl"
+SCHEMA_VERSION = "canon-ledger-projection-log/v1"
+PROJECTION_LOG_REL = Path(".canon-ledger") / "projection_log.jsonl"
 
 
 def projection_log_path(project_root: str | Path) -> Path:

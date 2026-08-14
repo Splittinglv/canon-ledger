@@ -17,7 +17,7 @@ VERSION_RE = sync_plugin_version.VERSION_PATTERN
 REQUIRED_RELEASE_HEADINGS = (
     "## 发版范围",
     "## 给作者看的变化",
-    "## 是否需要改旧项目",
+    "## 安装方式",
     "## 给维护者",
     "## 验证",
 )
@@ -137,6 +137,23 @@ def _git_release_issues(root: Path, version: str) -> list[dict[str, str]]:
                 repair="先为已有正式版本补建并推送 tag，再发布新版本。",
             )
         )
+    current_version = _parse_version_tag(version)
+    parsed_tags = [
+        (parsed, tag)
+        for tag in semantic_tags
+        if (parsed := _parse_version_tag(tag)) is not None
+    ]
+    if current_version is not None and parsed_tags:
+        highest_version, highest_tag = max(parsed_tags)
+        if current_version < highest_version:
+            issues.append(
+                _issue(
+                    "git.version_not_monotonic",
+                    message=f"目标版本 v{version} 低于已有最高正式版本 {highest_tag}",
+                    path=str(root),
+                    repair="将目标版本递增到已有最高正式版本之上。",
+                )
+            )
     current_tag = f"v{version}"
     if current_tag in semantic_tags:
         target = subprocess.run(
@@ -198,7 +215,7 @@ def validate_release_notes(
                     "layout.plugin_manifest",
                     message=str(exc),
                     path=str(repo_root),
-                    repair="恢复根级 .cursor-plugin/plugin.json，或使用受支持的 legacy 布局。",
+                    repair="恢复根级 .cursor-plugin/plugin.json。",
                 )
             )
     previous = previous_tag or _infer_previous_tag(repo_root, target_version)
@@ -240,13 +257,14 @@ def validate_release_notes(
                         repair="使用 releases/README.md 中的固定模板。",
                     )
                 )
-        if previous and previous not in release_text:
+        expected_range = f"{previous}..v{target_version}" if previous else ""
+        if expected_range and expected_range not in release_text:
             issues.append(
                 _issue(
                     "release_note.range",
-                    message=f"previous tag {previous} not mentioned",
+                    message=f"发行说明缺少精确发版范围 {expected_range}",
                     path=str(release_path),
-                    repair="在“发版范围”中写明从上个正式 tag 到本次发布的范围。",
+                    repair=f"在“发版范围”中写明 `{expected_range}`。",
                 )
             )
         if not any(word in release_text for word in AUTHOR_WORDS):
@@ -281,18 +299,19 @@ def validate_release_notes(
                     repair="在 CHANGELOG.md 中新增当前版本小节。",
                 )
             )
-        if previous and current_changelog_section and previous not in current_changelog_section:
+        expected_range = f"{previous}..v{target_version}" if previous else ""
+        if expected_range and current_changelog_section and expected_range not in current_changelog_section:
             issues.append(
                 _issue(
                     "changelog.range",
-                    message=f"CHANGELOG.md does not mention previous tag {previous}",
+                    message=f"CHANGELOG.md 当前版本小节缺少精确发版范围 {expected_range}",
                     path=str(changelog_path),
-                    repair="在当前版本小节写明发版范围。",
+                    repair=f"在当前版本小节写明 `{expected_range}`。",
                 )
             )
 
     return {
-        "schema_version": "webnovel-release-notes-validator/v1",
+        "schema_version": "canon-ledger-release-notes-validator/v1",
         "ok": not issues,
         "root": str(repo_root),
         "version": target_version,

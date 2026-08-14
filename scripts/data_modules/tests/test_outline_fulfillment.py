@@ -33,7 +33,7 @@ def _write_outline(tmp_path, nodes):
     )
 
 
-def test_authoritative_nodes_preserve_canonical_and_legacy_order(tmp_path):
+def test_authoritative_nodes_only_read_current_contract_field(tmp_path):
     _write_contract(
         tmp_path,
         {
@@ -42,14 +42,12 @@ def test_authoritative_nodes_preserve_canonical_and_legacy_order(tmp_path):
         },
     )
 
-    assert load_authoritative_planned_nodes(tmp_path, 1) == [
-        "识别封蜡缺口",
-        "记下账房暗号",
-    ]
+    assert load_authoritative_planned_nodes(tmp_path, 1) == ["识别封蜡缺口"]
 
 
-def test_authoritative_goal_keeps_legacy_project_without_outline_compatible(tmp_path):
-    assert load_authoritative_chapter_goal(tmp_path, 1) is None
+def test_authoritative_goal_rejects_project_without_current_contract(tmp_path):
+    with pytest.raises(ValueError, match="chapter_contract_missing_goal"):
+        load_authoritative_chapter_goal(tmp_path, 1)
 
 
 def test_outline_goal_requires_a_persisted_chapter_contract(tmp_path):

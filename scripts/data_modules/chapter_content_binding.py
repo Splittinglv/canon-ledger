@@ -11,8 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-SCHEMA_VERSION = "webnovel-chapter-content-binding/v1"
-_CHAPTER_FILENAME_RE = re.compile(r"^第0*(?P<chapter>\d+)章.*\.md$")
+SCHEMA_VERSION = "canon-ledger-chapter-content-binding/v1"
+_CHAPTER_FILENAME_RE = re.compile(r"^第(?P<chapter>\d{4})章(?:-.+)?\.md$")
 
 VERIFY_CODES = {
     "ok",
@@ -87,7 +87,7 @@ def build_chapter_binding(project_root: str | Path, chapter: int) -> dict[str, A
     chapters_dir = root / "正文"
     candidates: list[Path] = []
     if chapters_dir.is_dir():
-        for candidate in chapters_dir.rglob("*.md"):
+        for candidate in chapters_dir.glob("*.md"):
             match = _CHAPTER_FILENAME_RE.match(candidate.name)
             if match and int(match.group("chapter")) == chapter_no and candidate.is_file():
                 candidates.append(candidate)

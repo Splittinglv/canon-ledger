@@ -95,16 +95,16 @@ def test_build_and_verify_report_missing_empty_and_missing_binding(tmp_path):
     )
 
 
-def test_build_rejects_ambiguous_flat_and_volume_chapter_files(tmp_path):
+def test_build_ignores_removed_volume_layout_and_binds_current_root_file(tmp_path):
     _write_chapter(tmp_path, 3, "平铺正文".encode("utf-8"))
     volume = tmp_path / "正文" / "第1卷" / "第003章-别稿.md"
     volume.parent.mkdir(parents=True, exist_ok=True)
     volume.write_bytes("分卷正文".encode("utf-8"))
 
-    with pytest.raises(ChapterBindingError) as exc_info:
-        build_chapter_binding(tmp_path, 3)
+    binding = build_chapter_binding(tmp_path, 3)
 
-    assert exc_info.value.code == "chapter_file_ambiguous"
+    assert binding["path"] == "正文/第0003章.md"
+    assert binding["sha256"] == hashlib.sha256("平铺正文".encode("utf-8")).hexdigest()
 
 
 def _commit_envelope(binding: dict, *, chapter: int = 3) -> dict:

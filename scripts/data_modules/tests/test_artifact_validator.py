@@ -355,7 +355,7 @@ def test_validate_chapter_commit_checks_expected_chapter(tmp_path):
 def test_artifact_validator_rejects_missing_required_top_level_fields(tmp_path):
     """precommit 负向用例：缺关键顶层字段时 runtime validator 必须拦截。
 
-    取代已退役的 test_webnovel_write_data_agent_prompt_requires_extraction_schema
+    取代已退役的 test_canon_ledger_write_data_agent_prompt_requires_extraction_schema
     （plan §12.2）：字段保障由 runtime schema 强制，而非主 Skill 文案锚定。
     """
     # fulfillment_result 缺 missed_nodes

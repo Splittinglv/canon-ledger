@@ -34,7 +34,7 @@ def _parse_chapters_range(value: object) -> tuple[int, int] | None:
 
 
 def volume_num_for_chapter_from_state(project_root: Path, chapter_num: int) -> int | None:
-    state_path = project_root / ".webnovel" / "state.json"
+    state_path = project_root / ".canon-ledger" / "state.json"
     if not state_path.exists():
         return None
 

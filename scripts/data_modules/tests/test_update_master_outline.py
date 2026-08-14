@@ -150,9 +150,9 @@ def test_master_outline_sync_rejects_noncanonical_writeback_source(tmp_path):
         sync_master_outline(tmp_path, 1, writeback_file=other)
 
 
-def test_webnovel_master_outline_sync_cli_forwards_project_root(monkeypatch, tmp_path):
+def test_canon_ledger_master_outline_sync_cli_forwards_project_root(monkeypatch, tmp_path):
     _ensure_scripts_on_path()
-    import data_modules.webnovel as webnovel_module
+    import data_modules.canon_ledger as canon_ledger_module
 
     project_root = (tmp_path / "book").resolve()
     called = {}
@@ -165,13 +165,13 @@ def test_webnovel_master_outline_sync_cli_forwards_project_root(monkeypatch, tmp
         called["argv"] = list(argv)
         return 0
 
-    monkeypatch.setattr(webnovel_module, "_resolve_root", _fake_resolve)
-    monkeypatch.setattr(webnovel_module, "_run_script", _fake_run_script)
+    monkeypatch.setattr(canon_ledger_module, "_resolve_root", _fake_resolve)
+    monkeypatch.setattr(canon_ledger_module, "_run_script", _fake_run_script)
     monkeypatch.setattr(
         sys,
         "argv",
         [
-            "webnovel",
+            "canon-ledger",
             "--project-root",
             str(tmp_path),
             "master-outline-sync",
@@ -185,7 +185,7 @@ def test_webnovel_master_outline_sync_cli_forwards_project_root(monkeypatch, tmp
     )
 
     with pytest.raises(SystemExit) as exc:
-        webnovel_module.main()
+        canon_ledger_module.main()
 
     assert int(exc.value.code or 0) == 0
     assert called["script_name"] == "update_master_outline.py"

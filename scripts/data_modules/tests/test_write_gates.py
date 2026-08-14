@@ -22,14 +22,30 @@ from data_modules.projection_log import append_projection_run  # noqa: E402
 from .review_test_helpers import standard_review  # noqa: E402
 
 
+def _make_current_contracts(project_root: Path, chapter: int = 1) -> None:
+    """创建包含当前必达节点与禁区字段的章合同。"""
+    _make_contracts(project_root, chapter=chapter)
+    path = (
+        project_root
+        / ".story-system"
+        / "chapters"
+        / f"chapter_{chapter:03d}.json"
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    directive = payload.setdefault("chapter_directive", {})
+    directive["must_cover_nodes"] = []
+    directive["forbidden_zones"] = []
+    _write_json(path, payload)
+
+
 def _write_valid_artifacts(project_root: Path) -> None:
     binding = build_chapter_binding(project_root, 1)
     _write_json(
-        project_root / ".webnovel" / "tmp" / "review_results.json",
+        project_root / ".canon-ledger" / "tmp" / "review_results.json",
         standard_review(binding),
     )
     _write_json(
-        project_root / ".webnovel" / "tmp" / "fulfillment_result.json",
+        project_root / ".canon-ledger" / "tmp" / "fulfillment_result.json",
         {
             "planned_nodes": [],
             "covered_nodes": [],
@@ -39,11 +55,11 @@ def _write_valid_artifacts(project_root: Path) -> None:
         },
     )
     _write_json(
-        project_root / ".webnovel" / "tmp" / "disambiguation_result.json",
+        project_root / ".canon-ledger" / "tmp" / "disambiguation_result.json",
         {"pending": [], "chapter_binding": binding},
     )
     _write_json(
-        project_root / ".webnovel" / "tmp" / "extraction_result.json",
+        project_root / ".canon-ledger" / "tmp" / "extraction_result.json",
         {
             "accepted_events": [],
             "state_deltas": [],
@@ -86,7 +102,7 @@ def _valid_commit_payload(project_root: Path, projection_status: dict) -> dict:
 
 def test_prewrite_gate_allows_contract_ready_project_with_warning(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
 
     report = run_write_gate(tmp_path, chapter=1, stage="prewrite")
 
@@ -97,12 +113,16 @@ def test_prewrite_gate_allows_contract_ready_project_with_warning(tmp_path):
 
 def test_prewrite_gate_blocks_when_persisted_chapter_goal_is_empty(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
     _write_json(
         tmp_path / ".story-system" / "chapters" / "chapter_001.json",
         {
             "meta": {"chapter": 1},
-            "chapter_directive": {"goal": "", "must_cover_nodes": []},
+            "chapter_directive": {
+                "goal": "",
+                "must_cover_nodes": [],
+                "forbidden_zones": [],
+            },
         },
     )
 
@@ -117,9 +137,9 @@ def test_prewrite_gate_blocks_when_persisted_chapter_goal_is_empty(tmp_path):
     assert goal_error["details"]["validation_code"] == "chapter_contract_missing_goal"
 
 
-def test_prewrite_gate_merges_canonical_and_legacy_must_cover_nodes(tmp_path):
+def test_prewrite_gate_uses_only_current_must_cover_nodes(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
     _write_json(
         tmp_path / ".story-system" / "chapters" / "chapter_001.json",
         {
@@ -127,7 +147,8 @@ def test_prewrite_gate_merges_canonical_and_legacy_must_cover_nodes(tmp_path):
             "chapter_directive": {
                 "goal": "查清封蜡缺口与账房暗号的联系",
                 "must_cover_nodes": ["识别封蜡缺口"],
-                "mandatory_nodes": ["识别封蜡缺口", "记下账房暗号"],
+                "forbidden_zones": [],
+                "mandatory_nodes": ["这个未知字段不得进入章合同"],
             },
         },
     )
@@ -136,13 +157,39 @@ def test_prewrite_gate_merges_canonical_and_legacy_must_cover_nodes(tmp_path):
 
     assert report["details"]["prewrite_validation"]["fulfillment_seed"][
         "planned_nodes"
-    ] == ["识别封蜡缺口", "记下账房暗号"]
+    ] == ["识别封蜡缺口"]
+
+
+def test_prewrite_gate_rejects_invalid_current_forbidden_zones(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=1)
+    _write_json(
+        tmp_path / ".story-system" / "chapters" / "chapter_001.json",
+        {
+            "meta": {"chapter": 1},
+            "chapter_directive": {
+                "goal": "确认封蜡缺口的来源",
+                "must_cover_nodes": ["识别封蜡缺口"],
+                "forbidden_zones": "不可提前揭露掌柜身份",
+            },
+        },
+    )
+
+    report = run_write_gate(tmp_path, chapter=1, stage="prewrite")
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "chapter_contract.forbidden_zones_invalid"
+        and item["details"]["validation_code"]
+        == "chapter_contract_forbidden_zones_must_be_list"
+        for item in report["errors"]
+    )
 
 
 def test_prewrite_gate_wraps_existing_prewrite_validator_blocking(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
-    state_path = tmp_path / ".webnovel" / "state.json"
+    _make_current_contracts(tmp_path, chapter=1)
+    state_path = tmp_path / ".canon-ledger" / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["disambiguation_pending"] = [{"mention": "宗主"}]
     state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
@@ -156,7 +203,7 @@ def test_prewrite_gate_wraps_existing_prewrite_validator_blocking(tmp_path):
 
 def test_precommit_gate_reports_missing_artifacts(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
     (tmp_path / "正文" / "第0001章.md").write_text("正文\n", encoding="utf-8")
 
     report = run_write_gate(tmp_path, chapter=1, stage="precommit")
@@ -167,7 +214,7 @@ def test_precommit_gate_reports_missing_artifacts(tmp_path):
 
 def test_precommit_gate_accepts_valid_artifacts(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
     (tmp_path / "正文" / "第0001章.md").write_text("正文\n", encoding="utf-8")
     _write_valid_artifacts(tmp_path)
 
@@ -179,7 +226,7 @@ def test_precommit_gate_accepts_valid_artifacts(tmp_path):
 
 def test_precommit_gate_rejects_empty_fulfillment_for_authoritative_nodes(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
     _write_json(
         tmp_path / ".story-system" / "chapters" / "chapter_001.json",
         {
@@ -204,7 +251,7 @@ def test_precommit_gate_rejects_empty_fulfillment_for_authoritative_nodes(tmp_pa
 
 def test_precommit_gate_rejects_malformed_authoritative_nodes(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
     _write_json(
         tmp_path / ".story-system" / "chapters" / "chapter_001.json",
         {
@@ -229,7 +276,7 @@ def test_precommit_gate_rejects_malformed_authoritative_nodes(tmp_path):
 
 def test_precommit_gate_rejects_outline_nodes_dropped_from_contract(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
     (tmp_path / "大纲").mkdir(exist_ok=True)
     (tmp_path / "大纲" / "第1章-账簿.md").write_text(
         "### 第一章：账簿\n- 必须覆盖节点：识别封蜡缺口",
@@ -244,14 +291,14 @@ def test_precommit_gate_rejects_outline_nodes_dropped_from_contract(tmp_path):
     assert any(
         item["code"] == "chapter_contract.must_cover_nodes_invalid"
         and item["details"]["validation_code"]
-        == "chapter_contract_missing_must_cover_nodes"
+        == "chapter_contract_outline_nodes_mismatch"
         for item in report["errors"]
     )
 
 
 def test_precommit_gate_rejects_artifacts_after_manuscript_changed(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
     chapter_file = tmp_path / "正文" / "第0001章.md"
     chapter_file.write_text("正文 v1\n", encoding="utf-8")
     _write_valid_artifacts(tmp_path)
@@ -273,11 +320,11 @@ def test_precommit_gate_rejects_artifacts_after_manuscript_changed(tmp_path):
 
 def test_precommit_gate_rejects_fulfillment_missing_missed_nodes(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
     (tmp_path / "正文" / "第0001章.md").write_text("正文\n", encoding="utf-8")
     _write_valid_artifacts(tmp_path)
     _write_json(
-        tmp_path / ".webnovel" / "tmp" / "fulfillment_result.json",
+        tmp_path / ".canon-ledger" / "tmp" / "fulfillment_result.json",
         {"planned_nodes": [], "covered_nodes": [], "extra_nodes": []},
     )
 
@@ -290,10 +337,10 @@ def test_precommit_gate_rejects_fulfillment_missing_missed_nodes(tmp_path):
 
 def test_precommit_gate_rejects_disambiguation_missing_pending(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
     (tmp_path / "正文" / "第0001章.md").write_text("正文\n", encoding="utf-8")
     _write_valid_artifacts(tmp_path)
-    _write_json(tmp_path / ".webnovel" / "tmp" / "disambiguation_result.json", {"warnings": []})
+    _write_json(tmp_path / ".canon-ledger" / "tmp" / "disambiguation_result.json", {"warnings": []})
 
     report = run_write_gate(tmp_path, chapter=1, stage="precommit")
 
@@ -304,11 +351,11 @@ def test_precommit_gate_rejects_disambiguation_missing_pending(tmp_path):
 
 def test_precommit_gate_rejects_extraction_missing_accepted_events(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
     (tmp_path / "正文" / "第0001章.md").write_text("正文\n", encoding="utf-8")
     _write_valid_artifacts(tmp_path)
     _write_json(
-        tmp_path / ".webnovel" / "tmp" / "extraction_result.json",
+        tmp_path / ".canon-ledger" / "tmp" / "extraction_result.json",
         {"state_deltas": [], "entity_deltas": [], "summary_text": "摘要"},
     )
 
@@ -321,7 +368,7 @@ def test_precommit_gate_rejects_extraction_missing_accepted_events(tmp_path):
 
 def test_precommit_gate_blocks_projection_failed_phase(tmp_path):
     _make_init_ready(tmp_path)
-    _make_contracts(tmp_path, chapter=1)
+    _make_current_contracts(tmp_path, chapter=1)
     (tmp_path / "正文" / "第0001章.md").write_text("正文\n", encoding="utf-8")
     _write_valid_artifacts(tmp_path)
     _write_json(
@@ -484,7 +531,7 @@ def test_postcommit_gate_accepts_done_or_skipped_projection(tmp_path):
     assert report["ok"] is True
 
 
-def test_postcommit_gate_rejects_legacy_accepted_commit_without_binding(tmp_path):
+def test_postcommit_gate_rejects_current_commit_without_binding(tmp_path):
     _make_init_ready(tmp_path)
     (tmp_path / "正文" / "第0001章.md").write_text("正文\n", encoding="utf-8")
     _write_json(

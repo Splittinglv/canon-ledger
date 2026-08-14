@@ -12,7 +12,7 @@ from data_modules.knowledge_query import KnowledgeQuery
 
 @pytest.fixture
 def setup_db(tmp_path):
-    db_path = tmp_path / ".webnovel" / "index.db"
+    db_path = tmp_path / ".canon-ledger" / "index.db"
     db_path.parent.mkdir(parents=True)
 
     conn = sqlite3.connect(str(db_path))

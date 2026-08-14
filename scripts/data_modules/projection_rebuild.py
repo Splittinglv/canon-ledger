@@ -27,7 +27,7 @@ from .commit_artifacts import extraction_list, extraction_text
 from .config import DataModulesConfig
 from .event_log_store import EventLogStore
 from .event_projection_router import EventProjectionRouter
-from .memory.schema import MemoryItem, ScratchpadData
+from .memory.schema import ScratchpadData
 from .override_ledger_service import (
     AmendProposalTrigger,
     ensure_override_ledger_columns,
@@ -37,10 +37,10 @@ from .projection_log import append_projection_run
 from .story_contracts import read_json_if_exists, write_json
 
 
-MANIFEST_SCHEMA = "webnovel-projection-manifest/v1"
-REBUILD_SCHEMA = "webnovel-projection-rebuild/v1"
-PROJECTION_MANIFEST_REL = Path(".webnovel") / "projection_manifest.json"
-REBUILD_STATUS_REL = Path(".webnovel") / "projection_rebuild.json"
+MANIFEST_SCHEMA = "canon-ledger-projection-manifest/v1"
+REBUILD_SCHEMA = "canon-ledger-projection-rebuild/v1"
+PROJECTION_MANIFEST_REL = Path(".canon-ledger") / "projection_manifest.json"
+REBUILD_STATUS_REL = Path(".canon-ledger") / "projection_rebuild.json"
 PROJECTION_STATUS = {
     "state": "pending",
     "index": "pending",
@@ -158,18 +158,18 @@ def projection_snapshot_requires_rebuild(
         # multi-commit corpus is an upgraded project with unknown provenance;
         # rebuild it once instead of blessing possibly stale data.
         commit_count = len(list(_commit_dir(root).glob("chapter_*.commit.json")))
-        webnovel = root / ".webnovel"
+        canon_ledger = root / ".canon-ledger"
         story_events = root / ".story-system" / "events"
         has_projection_files = any(
             (
-                (webnovel / "index.db").is_file(),
-                (webnovel / "vectors.db").is_file(),
-                (webnovel / "memory_scratchpad.json").is_file(),
-                any((webnovel / "summaries").glob("ch*.md")),
+                (canon_ledger / "index.db").is_file(),
+                (canon_ledger / "vectors.db").is_file(),
+                (canon_ledger / "memory_scratchpad.json").is_file(),
+                any((canon_ledger / "summaries").glob("ch*.md")),
                 any(story_events.glob("chapter_*.events.json")),
             )
         )
-        state = read_json_if_exists(webnovel / "state.json") or {}
+        state = read_json_if_exists(canon_ledger / "state.json") or {}
         has_projected_state = bool(
             isinstance(state, dict)
             and (
@@ -241,7 +241,7 @@ def projection_read_models_missing(
     elif event_path.exists():
         return True
 
-    summary_path = config.webnovel_dir / "summaries" / f"ch{chapter:04d}.md"
+    summary_path = config.canon_ledger_dir / "summaries" / f"ch{chapter:04d}.md"
     if bool(extraction_text(payload, "summary_text")) != summary_path.is_file():
         return True
     required = set(EventProjectionRouter().required_writers(payload))
@@ -304,7 +304,7 @@ def _delete_path(target: dict[str, Any], dotted: str) -> None:
 
 def _state_baseline(root: Path, commits: list[dict[str, Any]]) -> dict[str, Any]:
     """Keep init/user metadata while removing fields owned by projections."""
-    state = copy.deepcopy(read_json_if_exists(root / ".webnovel" / "state.json") or {})
+    state = copy.deepcopy(read_json_if_exists(root / ".canon-ledger" / "state.json") or {})
     if not isinstance(state, dict):
         state = {}
     versions = state.get("_projection_state_versions")
@@ -432,10 +432,9 @@ def _copy_bound_manuscripts(root: Path, stage_root: Path, commits: list[dict[str
 def _seed_non_projection_memory(
     root: Path,
     stage_root: Path,
-    commits: list[dict[str, Any]],
 ) -> None:
-    """把不属于章节投影的作者规则和旧生命周期墓碑带入重建区。"""
-    source_path = root / ".webnovel" / "memory_scratchpad.json"
+    """把不属于章节投影的作者显式一致性规则带入重建区。"""
+    source_path = root / ".canon-ledger" / "memory_scratchpad.json"
     raw = read_json_if_exists(source_path)
     if raw is None:
         return
@@ -444,86 +443,35 @@ def _seed_non_projection_memory(
 
     source = ScratchpadData.from_dict(raw)
     seed = ScratchpadData.empty()
-    canonical_chapters = {
-        int((payload.get("meta") or {}).get("chapter") or 0)
-        for payload in commits
-    }
-
-    # `/webnovel-learn` 是作者显式写入的一致性规则，不是章节投影；
+    # `/canon-ledger-learn` 是作者显式写入的一致性规则，不是章节投影；
     # 全量重放不能把它当作可丢缓存删除。
     for item in source.world_rules:
         payload = item.payload if isinstance(item.payload, dict) else {}
         if (
             item.status == "active"
             and item.id.startswith("author-consistency-")
-            and payload.get("origin") == "/webnovel-learn"
+            and payload.get("origin") == "/canon-ledger-learn"
         ):
             seed.world_rules.append(item)
 
-    resolved_values = {"resolved", "closed", "done", "paid_off", "payoff"}
-    for bucket, category in (
-        ("open_loops", "open_loop"),
-        ("reader_promises", "reader_promise"),
-    ):
-        for item in getattr(source, bucket):
-            payload = item.payload if isinstance(item.payload, dict) else {}
-            legacy_status = str(
-                payload.get("lifecycle_status") or payload.get("status") or ""
-            ).strip().lower()
-            is_resolved = item.status == "resolved" or legacy_status in resolved_values
-            is_unbound_legacy_active = (
-                item.status == "active"
-                and int(item.source_chapter or 0) not in canonical_chapters
-            )
-            if not (is_resolved or is_unbound_legacy_active):
-                continue
-            normalized = item
-            if is_resolved and item.status != "resolved":
-                normalized = MemoryItem(
-                    id=item.id,
-                    layer=item.layer,
-                    category=item.category,
-                    subject=item.subject,
-                    field=item.field,
-                    value=item.value,
-                    payload=dict(payload),
-                    status="resolved",
-                    source_chapter=item.source_chapter,
-                    evidence=list(item.evidence),
-                    updated_at=item.updated_at,
-                ).normalized()
-            getattr(seed, bucket).append(normalized)
-
-    ledger = (source.meta or {}).get("resolved_lifecycle_ids") or {}
-    if isinstance(ledger, dict):
-        clean_ledger: dict[str, list[str]] = {}
-        for category in ("open_loop", "reader_promise"):
-            values = ledger.get(category) or []
-            if isinstance(values, list):
-                clean_ledger[category] = sorted(
-                    {str(value).strip() for value in values if str(value).strip()}
-                )
-        if clean_ledger:
-            seed.meta["resolved_lifecycle_ids"] = clean_ledger
-
-    if seed.count_items() or seed.meta.get("resolved_lifecycle_ids"):
+    if seed.count_items():
         write_json(
-            stage_root / ".webnovel" / "memory_scratchpad.json",
+            stage_root / ".canon-ledger" / "memory_scratchpad.json",
             seed.to_dict(),
         )
 
 
 def _prepare_stage(root: Path, commits: list[dict[str, Any]]) -> Path:
-    work_parent = root / ".webnovel"
+    work_parent = root / ".canon-ledger"
     work_parent.mkdir(parents=True, exist_ok=True)
     stage_root = Path(tempfile.mkdtemp(prefix=".projection-stage-", dir=work_parent))
-    (stage_root / ".webnovel" / "summaries").mkdir(parents=True, exist_ok=True)
+    (stage_root / ".canon-ledger" / "summaries").mkdir(parents=True, exist_ok=True)
     (stage_root / ".story-system" / "events").mkdir(parents=True, exist_ok=True)
     (stage_root / ".story-system" / "commits").mkdir(parents=True, exist_ok=True)
     _copy_bound_manuscripts(root, stage_root, commits)
-    _seed_non_projection_memory(root, stage_root, commits)
-    write_json(stage_root / ".webnovel" / "state.json", _state_baseline(root, commits))
-    _sqlite_backup(root / ".webnovel" / "index.db", stage_root / ".webnovel" / "index.db")
+    _seed_non_projection_memory(root, stage_root)
+    write_json(stage_root / ".canon-ledger" / "state.json", _state_baseline(root, commits))
+    _sqlite_backup(root / ".canon-ledger" / "index.db", stage_root / ".canon-ledger" / "index.db")
     _clear_projection_tables(stage_root)
     for payload in commits:
         chapter = int((payload.get("meta") or {}).get("chapter") or 0)
@@ -617,7 +565,7 @@ def _validate_stage(stage_root: Path, projected: list[dict[str, Any]]) -> None:
         path.name for path in (stage_root / ".story-system" / "events").glob("chapter_*.events.json")
     }
     actual_summary_files = {
-        path.name for path in (stage_root / ".webnovel" / "summaries").glob("ch*.md")
+        path.name for path in (stage_root / ".canon-ledger" / "summaries").glob("ch*.md")
     }
     if actual_event_files != expected_event_files:
         raise ProjectionRebuildError("stage_event_set_mismatch")
@@ -638,8 +586,8 @@ def _install_stage(
     projected: list[dict[str, Any]],
     writer_results: dict[int, dict[str, dict[str, Any]]],
 ) -> None:
-    stage_log = stage_root / ".webnovel" / "projection_log.jsonl"
-    current_log = root / ".webnovel" / "projection_log.jsonl"
+    stage_log = stage_root / ".canon-ledger" / "projection_log.jsonl"
+    current_log = root / ".canon-ledger" / "projection_log.jsonl"
     if current_log.is_file():
         stage_log.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(current_log, stage_log)
@@ -652,23 +600,23 @@ def _install_stage(
             commit_path=root / ".story-system" / "commits" / f"chapter_{chapter:03d}.commit.json",
         )
 
-    backup_root = Path(tempfile.mkdtemp(prefix=".projection-backup-", dir=root / ".webnovel"))
+    backup_root = Path(tempfile.mkdtemp(prefix=".projection-backup-", dir=root / ".canon-ledger"))
     pairs: list[tuple[Path, Path | None, Path]] = []
 
     def add(relative: Path, stage_relative: Path | None = None) -> None:
         source = stage_root / (stage_relative or relative)
         pairs.append((root / relative, source if source.exists() else None, backup_root / relative))
 
-    add(Path(".webnovel/state.json"))
-    add(Path(".webnovel/index.db"))
-    add(Path(".webnovel/index.db-wal"))
-    add(Path(".webnovel/index.db-shm"))
-    add(Path(".webnovel/vectors.db"))
-    add(Path(".webnovel/vectors.db-wal"))
-    add(Path(".webnovel/vectors.db-shm"))
-    add(Path(".webnovel/memory_scratchpad.json"))
-    add(Path(".webnovel/projection_log.jsonl"))
-    add(Path(".webnovel/summaries"))
+    add(Path(".canon-ledger/state.json"))
+    add(Path(".canon-ledger/index.db"))
+    add(Path(".canon-ledger/index.db-wal"))
+    add(Path(".canon-ledger/index.db-shm"))
+    add(Path(".canon-ledger/vectors.db"))
+    add(Path(".canon-ledger/vectors.db-wal"))
+    add(Path(".canon-ledger/vectors.db-shm"))
+    add(Path(".canon-ledger/memory_scratchpad.json"))
+    add(Path(".canon-ledger/projection_log.jsonl"))
+    add(Path(".canon-ledger/summaries"))
     add(Path(".story-system/events"))
     for payload in projected:
         chapter = int((payload.get("meta") or {}).get("chapter") or 0)
@@ -718,9 +666,9 @@ def rebuild_all_projections(
 ) -> dict[str, Any]:
     """Build in isolation, validate, then install all projection artifacts."""
     root = Path(project_root).expanduser().resolve()
-    lock_path = root / ".webnovel" / "projection_rebuild.lock"
+    lock_path = root / ".canon-ledger" / "projection_rebuild.lock"
     status_path = root / REBUILD_STATUS_REL
-    root.joinpath(".webnovel").mkdir(parents=True, exist_ok=True)
+    root.joinpath(".canon-ledger").mkdir(parents=True, exist_ok=True)
     stage_root: Path | None = None
     with FileLock(str(lock_path), timeout=30):
         try:

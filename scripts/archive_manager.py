@@ -71,8 +71,8 @@ class ArchiveManager:
             project_root = Path(project_root)
 
         self.project_root = project_root
-        self.state_file = project_root / ".webnovel" / "state.json"
-        self.archive_dir = project_root / ".webnovel" / "archive"
+        self.state_file = project_root / ".canon-ledger" / "state.json"
+        self.archive_dir = project_root / ".canon-ledger" / "archive"
 
         # v5.1 引入: IndexManager 用于读取实体
         self._config = get_config(project_root)
@@ -193,34 +193,15 @@ class ArchiveManager:
         current_chapter = state.get("progress", {}).get("current_chapter", 0)
         plot_threads = state.get("plot_threads", {}) or {}
         foreshadowing = plot_threads.get("foreshadowing", []) or []
-        resolved_legacy = plot_threads.get("resolved", []) or []
         threshold = self.config["plot_resolved_threshold"]
 
         archivable = []
-        # 新格式：plot_threads.foreshadowing（用 status 标识是否已回收）
         if isinstance(foreshadowing, list):
             for item in foreshadowing:
                 if not isinstance(item, dict):
                     continue
                 status = str(item.get("status", "")).strip()
-                if status not in ["已回收", "resolved"]:
-                    continue
-                try:
-                    resolved_chapter = int(item.get("resolved_chapter", 0))
-                except (TypeError, ValueError):
-                    continue
-                chapters_since_resolved = current_chapter - resolved_chapter
-                if chapters_since_resolved >= threshold:
-                    archivable.append({
-                        "thread": item,
-                        "chapters_since_resolved": chapters_since_resolved,
-                        "resolved_chapter": resolved_chapter
-                    })
-
-        # 旧格式兼容：plot_threads.resolved（直接存已回收列表）
-        if isinstance(resolved_legacy, list):
-            for item in resolved_legacy:
-                if not isinstance(item, dict):
+                if status != "已回收":
                     continue
                 try:
                     resolved_chapter = int(item.get("resolved_chapter", 0))
@@ -243,38 +224,12 @@ class ArchiveManager:
         threshold = self.config["review_old_threshold"]
 
         def _parse_end_chapter(review: dict) -> int:
-            # 新格式：{"chapters":"5-6","report":"...","reviewed_at":"..."}
             chapters = review.get("chapters")
             if isinstance(chapters, str):
                 parts = [p.strip() for p in chapters.replace("—", "-").split("-") if p.strip()]
                 if parts:
                     try:
                         return int(parts[-1])
-                    except ValueError:
-                        pass
-
-            # 旧格式：{"chapter_range":[5,6], "date":"..."}
-            cr = review.get("chapter_range")
-            if isinstance(cr, (list, tuple)) and len(cr) >= 2:
-                try:
-                    return int(cr[1])
-                except (TypeError, ValueError):
-                    pass
-
-            # 兜底：从 report 文件名里抓 "Ch5-6" 或 "第005-006"
-            report = review.get("report")
-            if isinstance(report, str):
-                import re
-                m = re.search(r"Ch(\d+)[-–—](\d+)", report)
-                if m:
-                    try:
-                        return int(m.group(2))
-                    except ValueError:
-                        pass
-                m = re.search(r"第(\d+)[-–—](\d+)章", report)
-                if m:
-                    try:
-                        return int(m.group(2))
                     except ValueError:
                         pass
 
@@ -371,7 +326,7 @@ class ArchiveManager:
         # 移除已归档的伏笔
         if resolved_threads:
             thread_ids = {
-                (item.get("thread", {}) or {}).get("content") or (item.get("thread", {}) or {}).get("description")
+                (item.get("thread", {}) or {}).get("content")
                 for item in resolved_threads
             }
             thread_ids = {t for t in thread_ids if isinstance(t, str) and t.strip()}
@@ -380,12 +335,7 @@ class ArchiveManager:
             if isinstance(plot_threads.get("foreshadowing"), list):
                 plot_threads["foreshadowing"] = [
                     t for t in plot_threads["foreshadowing"]
-                    if not isinstance(t, dict) or (t.get("content") or t.get("description")) not in thread_ids
-                ]
-            if isinstance(plot_threads.get("resolved"), list):
-                plot_threads["resolved"] = [
-                    t for t in plot_threads["resolved"]
-                    if not isinstance(t, dict) or (t.get("content") or t.get("description")) not in thread_ids
+                    if not isinstance(t, dict) or t.get("content") not in thread_ids
                 ]
             state["plot_threads"] = plot_threads
 
@@ -394,13 +344,13 @@ class ArchiveManager:
             review_keys = set()
             for item in old_reviews:
                 review = item.get("review", {}) or {}
-                key = review.get("report") or review.get("reviewed_at") or review.get("date")
+                key = review.get("report") or review.get("reviewed_at")
                 if isinstance(key, str) and key.strip():
                     review_keys.add(key)
 
             state["review_checkpoints"] = [
                 review for review in state.get("review_checkpoints", [])
-                if (review.get("report") or review.get("reviewed_at") or review.get("date")) not in review_keys
+                if (review.get("report") or review.get("reviewed_at")) not in review_keys
             ]
 
         return state
@@ -552,7 +502,7 @@ def main():
     try:
         project_root = str(resolve_project_root(args.project_root) if args.project_root else resolve_project_root())
     except FileNotFoundError as exc:
-        print(f"❌ 无法定位项目根目录（需要包含 .webnovel/state.json）: {exc}", file=sys.stderr)
+        print(f"❌ 无法定位项目根目录（需要包含 .canon-ledger/state.json）: {exc}", file=sys.stderr)
         sys.exit(1)
 
     manager = ArchiveManager(project_root=project_root)

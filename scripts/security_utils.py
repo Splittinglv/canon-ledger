@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 安全工具函数库
-用于webnovel-writer系统的通用安全函数
+用于叙典 CanonLedger 的通用安全函数
 
 创建时间: 2026-01-02
 创建原因: 安全审计发现路径遍历和命令注入漏洞
@@ -150,8 +150,8 @@ def create_secure_directory(path: str, mode: int = 0o700) -> Path:
         Path对象
 
     示例:
-        >>> create_secure_directory('.webnovel')
-        PosixPath('.webnovel')  # drwx------ (700)
+        >>> create_secure_directory('.canon-ledger')
+        PosixPath('.canon-ledger')  # drwx------ (700)
 
     安全验证:
         - ✅ 仅所有者可访问（0o700）
@@ -402,7 +402,7 @@ def atomic_write_json(
         AtomicWriteError: 写入失败时抛出
 
     示例:
-        >>> atomic_write_json('.webnovel/state.json', {'progress': {'chapter': 10}})
+        >>> atomic_write_json('.canon-ledger/state.json', {'progress': {'chapter': 10}})
 
     安全验证:
         - ✅ 防止写入中断导致的数据损坏（先写临时文件）
@@ -458,7 +458,7 @@ def atomic_write_json(
                 _replace_with_retry(temp_path, file_path)
                 temp_path = None  # 标记已成功，不需要清理
             except PermissionError:
-                if os.environ.get("WEBNOVEL_TEST_RELAX_ATOMIC_REPLACE") != "1":
+                if os.environ.get("CANON_LEDGER_TEST_RELAX_ATOMIC_REPLACE") != "1":
                     raise
                 # 测试沙箱可能允许写入但拒绝替换/删除既有文件；生产环境不启用该降级。
                 with open(file_path, "w", encoding="utf-8") as f:
@@ -497,7 +497,7 @@ def read_json_safe(
         解析后的字典，或默认值
 
     示例:
-        >>> state = read_json_safe('.webnovel/state.json', {})
+        >>> state = read_json_safe('.canon-ledger/state.json', {})
     """
     file_path = Path(file_path)
     if default is None:
@@ -525,7 +525,7 @@ def restore_from_backup(file_path: Union[str, Path]) -> bool:
         是否成功恢复
 
     示例:
-        >>> restore_from_backup('.webnovel/state.json')
+        >>> restore_from_backup('.canon-ledger/state.json')
         True
     """
     file_path = Path(file_path)

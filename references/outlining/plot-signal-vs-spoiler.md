@@ -5,7 +5,7 @@ purpose: plan 章纲拆分时区分"信号"与"剧透"
 
 # Plot Signal vs Spoiler
 
-> 主服务 skill: `webnovel-plan` 章纲拆分（Step 7）
+> 主服务 skill: `canon-ledger-plan` 章纲拆分（Step 7）
 > 内容层级: 提醒层 / 缺陷补偿层 / 知识补充层
 
 ---

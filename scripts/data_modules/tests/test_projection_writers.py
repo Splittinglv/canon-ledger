@@ -14,7 +14,7 @@ from data_modules.memory_projection_writer import MemoryProjectionWriter
 from data_modules.state_projection_writer import StateProjectionWriter
 from data_modules.summary_projection_writer import SummaryProjectionWriter
 from data_modules.vector_projection_writer import VectorProjectionWriter
-from .review_test_helpers import standard_review
+from .review_test_helpers import standard_review, write_current_chapter_contract
 
 
 def _build_bound_commit(service: ChapterCommitService, **kwargs):
@@ -24,6 +24,11 @@ def _build_bound_commit(service: ChapterCommitService, **kwargs):
     if not chapter_path.exists():
         chapter_path.write_text(f"第{chapter}章测试正文\n", encoding="utf-8")
     binding = build_chapter_binding(service.project_root, chapter)
+    write_current_chapter_contract(
+        service.project_root,
+        chapter,
+        planned_nodes=list(kwargs["fulfillment_result"].get("planned_nodes") or []),
+    )
     if "blocking_count" in kwargs["review_result"]:
         kwargs["review_result"] = standard_review(
             binding,
@@ -61,24 +66,24 @@ def _commit_payload(*, chapter=3, status="accepted", **extraction):
 
 
 def test_state_projection_writer_handles_rejected_commit(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     writer = StateProjectionWriter(tmp_path)
     result = writer.apply(_commit_payload(status="rejected"))
     assert result["applied"] is True
-    state = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    state = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     assert state["progress"]["chapter_status"]["3"] == "chapter_rejected"
 
 
 def test_state_projection_writer_applies_accepted_commit(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     writer = StateProjectionWriter(tmp_path)
     result = writer.apply(
         _commit_payload(state_deltas=[{"entity_id": "x", "field": "realm", "new": "斗者"}])
     )
     assert result["applied"] is True
-    payload = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    payload = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     assert payload["entity_state"]["x"]["realm"] == "斗者"
     assert payload["progress"]["chapter_status"]["3"] == "chapter_committed"
     assert payload["progress"]["current_chapter"] == 3
@@ -86,8 +91,8 @@ def test_state_projection_writer_applies_accepted_commit(tmp_path):
 
 
 def test_accepted_chapter_commits_advance_progress_and_word_count(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text(
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text(
         json.dumps(
             {"progress": {"current_chapter": 0, "total_words": 0, "last_updated": "2026-01-01 00:00:00"}},
             ensure_ascii=False,
@@ -111,7 +116,7 @@ def test_accepted_chapter_commits_advance_progress_and_word_count(tmp_path):
         )
         service.apply_projections(payload)
 
-    state = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    state = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     assert state["progress"]["chapter_status"]["1"] == "chapter_committed"
     assert state["progress"]["chapter_status"]["2"] == "chapter_committed"
     assert state["progress"]["current_chapter"] == 2
@@ -120,8 +125,8 @@ def test_accepted_chapter_commits_advance_progress_and_word_count(tmp_path):
 
 
 def test_reapplying_accepted_chapter_commit_does_not_double_count_words(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text(
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text(
         json.dumps(
             {"progress": {"current_chapter": 0, "total_words": 0}},
             ensure_ascii=False,
@@ -135,10 +140,10 @@ def test_reapplying_accepted_chapter_commit_does_not_double_count_words(tmp_path
     payload = _commit_payload(chapter=1)
     writer = StateProjectionWriter(tmp_path)
     writer.apply(payload)
-    first_state = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    first_state = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
 
     writer.apply(payload)
-    second_state = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    second_state = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
 
     assert second_state["progress"]["current_chapter"] == 1
     assert second_state["progress"]["total_words"] == first_state["progress"]["total_words"]
@@ -146,8 +151,8 @@ def test_reapplying_accepted_chapter_commit_does_not_double_count_words(tmp_path
 
 
 def test_state_projection_writer_derives_delta_from_power_breakthrough_event(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     writer = StateProjectionWriter(tmp_path)
     result = writer.apply(
         _commit_payload(
@@ -163,14 +168,14 @@ def test_state_projection_writer_derives_delta_from_power_breakthrough_event(tmp
         )
     )
 
-    payload = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    payload = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     assert result["applied"] is True
     assert payload["entity_state"]["xiaoyan"]["realm"] == "斗师"
 
 
 def test_state_projection_writer_updates_strand_tracker(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     writer = StateProjectionWriter(tmp_path)
 
     writer.apply(
@@ -180,7 +185,7 @@ def test_state_projection_writer_updates_strand_tracker(tmp_path):
         _commit_payload(chapter=4, dominant_strand="quest")
     )
 
-    payload = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    payload = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     tracker = payload["strand_tracker"]
     assert tracker["current_dominant"] == "quest"
     assert tracker["last_quest_chapter"] == 4
@@ -189,8 +194,8 @@ def test_state_projection_writer_updates_strand_tracker(tmp_path):
 
 
 def test_state_projection_writer_reapplying_chapter_replaces_strand(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     writer = StateProjectionWriter(tmp_path)
 
     writer.apply(
@@ -200,7 +205,7 @@ def test_state_projection_writer_reapplying_chapter_replaces_strand(tmp_path):
         _commit_payload(chapter=3, dominant_strand="fire")
     )
 
-    payload = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    payload = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     tracker = payload["strand_tracker"]
     assert tracker["current_dominant"] == "fire"
     assert tracker["last_quest_chapter"] == 0
@@ -209,8 +214,8 @@ def test_state_projection_writer_reapplying_chapter_replaces_strand(tmp_path):
 
 
 def test_accepted_commit_updates_state_json_end_to_end(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
 
     service = ChapterCommitService(tmp_path)
     commit_payload = _build_bound_commit(
@@ -223,7 +228,7 @@ def test_accepted_commit_updates_state_json_end_to_end(tmp_path):
     )
 
     StateProjectionWriter(tmp_path).apply(commit_payload)
-    payload = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    payload = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     assert payload["entity_state"]["x"]["realm"] == "斗者"
 
 
@@ -373,7 +378,7 @@ def test_index_projection_writer_derives_artifact_entity_from_event(tmp_path):
 def test_accepted_commit_writes_chapter_index_tables(tmp_path):
     cfg = DataModulesConfig.from_project_root(tmp_path)
     cfg.ensure_dirs()
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     chapters_dir = tmp_path / "正文"
     chapters_dir.mkdir(parents=True, exist_ok=True)
     (chapters_dir / "第0003章.md").write_text("第三章正文内容", encoding="utf-8")
@@ -420,7 +425,7 @@ def test_accepted_commit_writes_chapter_index_tables(tmp_path):
 def test_index_projection_writer_is_idempotent_for_replay(tmp_path):
     cfg = DataModulesConfig.from_project_root(tmp_path)
     cfg.ensure_dirs()
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     chapters_dir = tmp_path / "正文"
     chapters_dir.mkdir(parents=True, exist_ok=True)
     (chapters_dir / "第0003章.md").write_text("第三章正文内容", encoding="utf-8")
@@ -505,7 +510,7 @@ def test_summary_projection_writer_writes_summary_markdown(tmp_path):
         _commit_payload(summary_text="本章主角发现陷阱并决定隐忍。")
     )
 
-    summary_path = tmp_path / ".webnovel" / "summaries" / "ch0003.md"
+    summary_path = tmp_path / ".canon-ledger" / "summaries" / "ch0003.md"
     assert result["applied"] is True
     assert summary_path.is_file()
     assert "剧情摘要" in summary_path.read_text(encoding="utf-8")
@@ -520,7 +525,7 @@ def test_summary_projection_writer_replay_overwrites_not_appends(tmp_path):
     writer.apply(payload)
     writer.apply(payload)
 
-    summary_path = tmp_path / ".webnovel" / "summaries" / "ch0003.md"
+    summary_path = tmp_path / ".canon-ledger" / "summaries" / "ch0003.md"
     text = summary_path.read_text(encoding="utf-8")
     assert text.count("本章主角发现陷阱并决定隐忍。") == 1
 

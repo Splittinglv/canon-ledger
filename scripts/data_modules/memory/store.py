@@ -170,14 +170,8 @@ class ScratchpadManager:
 
     @staticmethod
     def _row_lifecycle_id(row: MemoryItem) -> str:
-        """Return the public target ID, including pre-lifecycle scratchpads.
-
-        Older releases stored lifecycle rows without ``payload.lifecycle_id``.
-        Their deterministic ``MemoryItem.id`` is the only lossless identifier
-        left on disk, so expose it as the explicit migration target instead of
-        attempting unsafe subject/content matching.
-        """
-        return str((row.payload or {}).get("lifecycle_id") or row.id or "").strip()
+        """返回当前生命周期义务的稳定公开标识。"""
+        return str((row.payload or {}).get("lifecycle_id") or "").strip()
 
     @staticmethod
     def _resolved_lifecycle_ids(data: ScratchpadData, category: str) -> set[str]:
@@ -222,75 +216,20 @@ class ScratchpadManager:
         normalized = item.normalized()
         bucket = CATEGORY_TO_BUCKET[normalized.category]
         lifecycle_id = str((normalized.payload or {}).get("lifecycle_id") or "").strip()
-        legacy_item_id = str((normalized.payload or {}).get("legacy_item_id") or "").strip()
+        if not lifecycle_id:
+            raise ValueError("生命周期义务缺少 lifecycle_id")
         with self._lock:
             data = self.load()
             resolved_ids = self._resolved_lifecycle_ids(data, normalized.category)
-            if lifecycle_id in resolved_ids or (legacy_item_id and legacy_item_id in resolved_ids):
-                # A legacy row may have been closed by its public MemoryItem
-                # ID before a delayed canonical creation is replayed.  Record
-                # both aliases as tombstones so neither identity can reopen it.
+            if lifecycle_id in resolved_ids:
                 self._remember_resolved_lifecycle(data, normalized.category, lifecycle_id)
-                self._remember_resolved_lifecycle(data, normalized.category, legacy_item_id)
                 self.save(data, _use_lock=False)
                 return {"added": 0, "updated": 0, "outdated": 0, "preserved": 1}
             rows: List[MemoryItem] = list(getattr(data, bucket))
-            for index, row in enumerate(rows):
+            for row in rows:
                 row_lifecycle_id = self._row_lifecycle_id(row)
                 if row.id == normalized.id or (lifecycle_id and row_lifecycle_id == lifecycle_id):
                     return {"added": 0, "updated": 0, "outdated": 0, "preserved": 1}
-                if (
-                    legacy_item_id
-                    and row.id == legacy_item_id
-                    and not str((row.payload or {}).get("lifecycle_id") or "").strip()
-                ):
-                    legacy_state = str(
-                        (row.payload or {}).get("lifecycle_status")
-                        or (row.payload or {}).get("status")
-                        or ""
-                    ).strip().lower()
-                    if row.status == "resolved" or legacy_state in {
-                        "resolved", "closed", "done", "paid_off", "payoff"
-                    }:
-                        self._remember_resolved_lifecycle(
-                            data, normalized.category, lifecycle_id
-                        )
-                        self._remember_resolved_lifecycle(
-                            data, normalized.category, legacy_item_id
-                        )
-                        rows.pop(index)
-                        setattr(data, bucket, rows)
-                        self.save(data, _use_lock=False)
-                        return {
-                            "added": 0,
-                            "updated": 0,
-                            "outdated": 0,
-                            "preserved": 1,
-                        }
-                    # Deterministic migration from the exact ID produced by
-                    # the pre-lifecycle writer.  This is identity based; prose
-                    # is never searched or compared to choose a target.
-                    merged_payload = {**dict(row.payload or {}), **dict(normalized.payload or {})}
-                    merged_payload.pop("legacy_item_id", None)
-                    rows[index] = MemoryItem(
-                        **{
-                            **asdict(row),
-                            "id": normalized.id,
-                            "payload": merged_payload,
-                            "evidence": list(dict.fromkeys([*row.evidence, *normalized.evidence])),
-                            "updated_at": now_iso(),
-                        }
-                    )
-                    setattr(data, bucket, rows)
-                    self.save(data, _use_lock=False)
-                    return {
-                        "added": 0,
-                        "updated": 1,
-                        "outdated": 0,
-                        "preserved": 0,
-                        "migrated": 1,
-                    }
-            normalized.payload.pop("legacy_item_id", None)
             rows.append(normalized)
             setattr(data, bucket, rows)
             self.save(data, _use_lock=False)

@@ -7,7 +7,10 @@ import backup_manager
 from backup_manager import GitBackupManager
 from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.chapter_content_binding import build_chapter_binding
-from data_modules.tests.review_test_helpers import standard_review
+from data_modules.tests.review_test_helpers import (
+    standard_review,
+    write_current_chapter_contract,
+)
 
 
 def test_backup_manager_gitignore_excludes_env(tmp_path, monkeypatch):
@@ -25,7 +28,7 @@ def test_backup_manager_gitignore_excludes_env(tmp_path, monkeypatch):
     assert ".env" in gitignore
     assert ".env.*" in gitignore
     assert "!.env.example" in gitignore
-    assert ".webnovel/backups/.integrity-key" in gitignore
+    assert ".canon-ledger/backups/.integrity-key" in gitignore
 
 
 def _run_git(project_root, *args):
@@ -49,6 +52,7 @@ def _persist_accepted_bound_commit(project_root, chapter=1):
     chapter_file.parent.mkdir(parents=True, exist_ok=True)
     chapter_file.write_text(f"第{chapter}章最终正文\n", encoding="utf-8")
     binding = build_chapter_binding(project_root, chapter)
+    write_current_chapter_contract(project_root, chapter)
     service = ChapterCommitService(project_root)
     payload = service.build_commit(
         chapter=chapter,
@@ -135,15 +139,15 @@ def test_rollback_restores_files_on_current_branch_with_new_commit(tmp_path):
 def test_local_backup_copies_manuscript_when_git_unavailable(tmp_path, monkeypatch):
     monkeypatch.setattr(backup_manager, "is_git_available", lambda: False)
 
-    webnovel_dir = tmp_path / ".webnovel"
+    canon_ledger_dir = tmp_path / ".canon-ledger"
     manuscript_dir = tmp_path / "正文"
     outline_dir = tmp_path / "大纲"
     settings_dir = tmp_path / "设定集"
-    webnovel_dir.mkdir()
+    canon_ledger_dir.mkdir()
     manuscript_dir.mkdir()
     outline_dir.mkdir()
     settings_dir.mkdir()
-    (webnovel_dir / "state.json").write_text('{"current_chapter": 1}', encoding="utf-8")
+    (canon_ledger_dir / "state.json").write_text('{"current_chapter": 1}', encoding="utf-8")
     (manuscript_dir / "第0001章-x.md").write_text("正文内容", encoding="utf-8")
     (outline_dir / "第0001章.md").write_text("大纲内容", encoding="utf-8")
     (settings_dir / "人物.md").write_text("设定内容", encoding="utf-8")
@@ -152,18 +156,18 @@ def test_local_backup_copies_manuscript_when_git_unavailable(tmp_path, monkeypat
 
     assert manager.backup(1) is True
 
-    snapshots = sorted((webnovel_dir / "backups").glob("snapshot_ch0001_*"))
+    snapshots = sorted((canon_ledger_dir / "backups").glob("snapshot_ch0001_*"))
     assert len(snapshots) == 1
     snapshot = snapshots[0]
     assert (snapshot / "正文" / "第0001章-x.md").read_text(encoding="utf-8") == "正文内容"
     assert (snapshot / "大纲" / "第0001章.md").read_text(encoding="utf-8") == "大纲内容"
     assert (snapshot / "设定集" / "人物.md").read_text(encoding="utf-8") == "设定内容"
-    assert (snapshot / ".webnovel" / "state.json").read_text(encoding="utf-8") == '{"current_chapter": 1}'
+    assert (snapshot / ".canon-ledger" / "state.json").read_text(encoding="utf-8") == '{"current_chapter": 1}'
 
     for chapter in range(2, 13):
         assert manager.backup(chapter) is True
 
-    snapshots = sorted((webnovel_dir / "backups").glob("snapshot_ch*"))
+    snapshots = sorted((canon_ledger_dir / "backups").glob("snapshot_ch*"))
     assert len(snapshots) == 10
     assert snapshot not in snapshots
 
@@ -180,10 +184,11 @@ def test_backup_with_required_accepted_binding_succeeds(tmp_path):
     assert manager.backup(1, require_accepted_binding=True) is True
     assert _run_git(project_root, "rev-parse", "--verify", "ch0001").returncode == 0
     receipt = json.loads(
-        (project_root / ".webnovel" / "backups" / "ch0001.receipt.json").read_text(
+        (project_root / ".canon-ledger" / "backups" / "ch0001.receipt.json").read_text(
             encoding="utf-8"
         )
     )
+    assert receipt["schema_version"] == "canon-ledger-backup-receipt/v1"
     assert receipt["chapter"] == 1
     assert receipt["mode"] == "git"
 
@@ -251,8 +256,8 @@ def test_strict_git_backup_forces_recovery_files_ignored_by_project(tmp_path):
 
 def _prepare_local_consistency_project(project_root, monkeypatch):
     monkeypatch.setattr(backup_manager, "is_git_available", lambda: False)
-    (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (project_root / ".webnovel" / "state.json").write_text(
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text(
         json.dumps(
             {
                 "project_info": {"title": "雾城旧约"},
@@ -283,7 +288,7 @@ def _prepare_local_consistency_project(project_root, monkeypatch):
 
 def test_strict_local_backup_contains_complete_consistency_state(tmp_path, monkeypatch):
     manager = _prepare_local_consistency_project(tmp_path, monkeypatch)
-    (tmp_path / ".webnovel" / "run_ledger.json").write_text(
+    (tmp_path / ".canon-ledger" / "run_ledger.json").write_text(
         '{"write":{"第一章":"完成"}}\n',
         encoding="utf-8",
     )
@@ -291,19 +296,19 @@ def test_strict_local_backup_contains_complete_consistency_state(tmp_path, monke
     assert manager.backup(1, require_accepted_binding=True) is True
 
     receipt = json.loads(manager._receipt_path(1).read_text(encoding="utf-8"))
-    snapshot = tmp_path / ".webnovel" / "backups" / receipt["snapshot"]
+    snapshot = tmp_path / ".canon-ledger" / "backups" / receipt["snapshot"]
     manifest = json.loads(
         (snapshot / "snapshot.manifest.json").read_text(encoding="utf-8")
     )
-    assert receipt["schema_version"] == "webnovel-backup-receipt/v2"
+    assert receipt["schema_version"] == "canon-ledger-backup-receipt/v2"
     assert receipt["signature_algorithm"] == "hmac-sha256"
     assert manifest["snapshot_kind"] == "complete-project-consistency-state"
     assert (snapshot / ".story-system" / "timeline" / "events.json").is_file()
     assert (snapshot / ".story-system" / "foreshadowing" / "open.json").is_file()
     assert (snapshot / ".story-system" / "commits" / "chapter_001.commit.json").is_file()
-    assert (snapshot / ".webnovel" / "state.json").is_file()
-    assert (snapshot / ".webnovel" / "run_ledger.json").is_file()
-    assert not (snapshot / ".webnovel" / "backups").exists()
+    assert (snapshot / ".canon-ledger" / "state.json").is_file()
+    assert (snapshot / ".canon-ledger" / "run_ledger.json").is_file()
+    assert not (snapshot / ".canon-ledger" / "backups").exists()
 
 
 def test_local_rollback_restores_old_chapter_and_removes_later_facts(tmp_path, monkeypatch):
@@ -319,11 +324,11 @@ def test_local_rollback_restores_old_chapter_and_removes_later_facts(tmp_path, m
         '{"后来":"城门失守"}\n',
         encoding="utf-8",
     )
-    (tmp_path / ".webnovel" / "future-only.json").write_text(
+    (tmp_path / ".canon-ledger" / "future-only.json").write_text(
         '{"错误事实":"铜铃已经揭晓"}\n',
         encoding="utf-8",
     )
-    (tmp_path / ".webnovel" / "state.json").write_text(
+    (tmp_path / ".canon-ledger" / "state.json").write_text(
         '{"progress":{"current_chapter":2},"错误事实":"守门人离城"}\n',
         encoding="utf-8",
     )
@@ -343,15 +348,15 @@ def test_local_rollback_restores_old_chapter_and_removes_later_facts(tmp_path, m
     assert not (
         tmp_path / ".story-system" / "timeline" / "future-only.json"
     ).exists()
-    assert not (tmp_path / ".webnovel" / "future-only.json").exists()
+    assert not (tmp_path / ".canon-ledger" / "future-only.json").exists()
     rebuilt = json.loads(
-        (tmp_path / ".webnovel" / "projection_rebuild.json").read_text(
+        (tmp_path / ".canon-ledger" / "projection_rebuild.json").read_text(
             encoding="utf-8"
         )
     )
     assert rebuilt["status"] == "complete"
     rescue = list(
-        (tmp_path / ".webnovel" / "backups").glob(
+        (tmp_path / ".canon-ledger" / "backups").glob(
             "rescue_before_restore_ch0001_*"
         )
     )
@@ -362,7 +367,7 @@ def test_local_rollback_rejects_tampered_snapshot(tmp_path, monkeypatch):
     manager = _prepare_local_consistency_project(tmp_path, monkeypatch)
     assert manager.backup(1, require_accepted_binding=True) is True
     receipt = json.loads(manager._receipt_path(1).read_text(encoding="utf-8"))
-    snapshot = tmp_path / ".webnovel" / "backups" / receipt["snapshot"]
+    snapshot = tmp_path / ".canon-ledger" / "backups" / receipt["snapshot"]
     (snapshot / ".story-system" / "timeline" / "events.json").write_text(
         '{"第一章":"快照已被替换"}\n',
         encoding="utf-8",
@@ -374,7 +379,7 @@ def test_local_rollback_rejects_tampered_snapshot(tmp_path, monkeypatch):
 
     assert current_marker.read_text(encoding="utf-8") == "保留当前内容\n"
     assert not list(
-        (tmp_path / ".webnovel" / "backups").glob(
+        (tmp_path / ".canon-ledger" / "backups").glob(
             "rescue_before_restore_ch0001_*"
         )
     )
@@ -382,13 +387,13 @@ def test_local_rollback_rejects_tampered_snapshot(tmp_path, monkeypatch):
 
 def test_local_rollback_rejects_external_receipt_and_empty_directory(tmp_path, monkeypatch):
     manager = _prepare_local_consistency_project(tmp_path, monkeypatch)
-    backup_dir = tmp_path / ".webnovel" / "backups"
+    backup_dir = tmp_path / ".canon-ledger" / "backups"
     empty_snapshot = backup_dir / "snapshot_ch0001_external"
     empty_snapshot.mkdir(parents=True)
     manager._receipt_path(1).write_text(
         json.dumps(
             {
-                "schema_version": "webnovel-backup-receipt/v2",
+                "schema_version": "canon-ledger-backup-receipt/v2",
                 "chapter": 1,
                 "mode": "local",
                 "snapshot": empty_snapshot.name,

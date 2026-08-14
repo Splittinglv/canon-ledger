@@ -8,7 +8,7 @@ color: blue
 
 # context-agent
 
-运行时模型默认 inherit。可在 `.webnovel/subagent-models.json` 为 `context-agent` 单独指定。
+运行时模型默认 inherit。可在 `.canon-ledger/subagent-models.json` 为 `context-agent` 单独指定。
 
 ## 1. 身份
 
@@ -23,22 +23,22 @@ color: blue
 主入口（一次性拿全基础包）：
 
 ```bash
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" memory-contract load-context --chapter {NNNN}
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" memory-contract load-context --chapter {NNNN}
 ```
 
 按需补查（基础包不足时才调，已含的不重复查）：
 
 ```bash
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" memory-contract query-entity --id "{entity_id}" --as-of-chapter {NNNN_MINUS_1}
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" memory-contract query-rules --domain "{domain}" --as-of-chapter {NNNN_MINUS_1}
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" memory-contract get-obligations --as-of-chapter {NNNN_MINUS_1}
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" memory-contract get-timeline --from {N} --to {M} --as-of-chapter {NNNN_MINUS_1}
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" index get-reader-signals --limit 5 --last-n 20
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" memory-contract query-entity --id "{entity_id}" --as-of-chapter {NNNN_MINUS_1}
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" memory-contract query-rules --domain "{domain}" --as-of-chapter {NNNN_MINUS_1}
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" memory-contract get-obligations --as-of-chapter {NNNN_MINUS_1}
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" memory-contract get-timeline --from {N} --to {M} --as-of-chapter {NNNN_MINUS_1}
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" index get-reader-signals --limit 5 --last-n 20
 ```
 
 load-context 已含（不要重复查）：`story_contracts`（MASTER/volume/chapter/review）、`hard_constraints`、`canonical_facts`、`protagonist`、`memory_pack`、`rag_assist`。`story_contracts.master.initial_canon` 是初始化时由作者明确给出的设定；`canonical_facts` 是截至 N-1 章从有效提交重放得到的人物状态、时间线与一般故事事实，必须完整消费。自由文本摘要默认不注入；历史事实从结构化提交、硬约束与 RAG 证据取得。不得绕过净化层直接读取 `.story-system/*.json`；contracts 缺失或损坏时返回 blocker。
 
-`hard_constraints` 是完整、不可按预算裁剪的 active 事实集合，逐条消费其中的 `world_rule`、`open_loop`、`reader_promise`、`relationship`。`active_constraints` 只是兼容别名；两者同时存在时只读 `hard_constraints`，不要重复。不得按“前 N 条”、最近章节窗口、大纲关键词或 RAG 命中情况省略硬约束。条目很多时可以压缩表述，但不能丢 ID 对应的事实；如果硬约束本身超过模型绝对上下文，返回 blocker，不得自行截断。
+`hard_constraints` 是完整、不可按预算裁剪的 active 事实集合，逐条消费其中的 `world_rule`、`open_loop`、`reader_promise`、`relationship`。不得按“前 N 条”、最近章节窗口、大纲关键词或 RAG 命中情况省略硬约束。条目很多时可以压缩表述，但不能丢 ID 对应的事实；如果硬约束本身超过模型绝对上下文，返回 blocker，不得自行截断。
 
 只有摘要、RAG hits、recent events/appearances、历史 story facts 等软证据可以按预算排序裁剪。“最多 5 条”等数量限制只适用于这些软证据，不适用于硬约束。
 
@@ -49,7 +49,7 @@ load-context 已含（不要重复查）：`story_contracts`（MASTER/volume/cha
 ## 3. 执行流程
 
 1. `load-context --chapter {NNNN}` 取基础包；先完整读取 `story_contracts.chapter.chapter_directive` 的全部字段，包括目标、阻力、代价、时间、跨章时间差、本章变化、核心冲突、视角、关键实体、Strand、反派层级、CBN/CPNs/CEN、必须节点、禁区、未闭合问题与钩子，再按需 `Read` 章纲原文（load-context 的 outline 可能截断，但结构化 directive 不得因此遗漏）。
-2. 确定卷号：优先 runtime contracts / latest commit；必要时兼容读取 `state.json` 投影。
+2. 确定卷号：优先 runtime contracts / latest commit；必要时只读 `state.json` 投影。
 3. 先检查顶层 `completeness`，再逐条核对 `hard_constraints`：世界规则不得违反；所有未闭合伏笔和读者承诺必须保留其未完成状态；所有 active 关系必须进入相关人物的事实边界。某类当前为零是合法状态；只有 source error、结构损坏、`omitted_hard_ids` 非空或声明 overflow/blocker 时才返回 blocker。
 4. 按需深查：先计算 `NNNN_MINUS_1 = max(0, NNNN-1)`；配角 → `query-entity`；规则 → `query-rules`；伏笔/承诺 ID → `get-obligations`；时间跨度 → `get-timeline`。四类补查都必须传 `--as-of-chapter NNNN_MINUS_1`，不得直接读取当前 SQLite 投影或未来章文件。补查用于解释硬项，不得用查询的前 N 条替换完整集合。时间规则：跨夜须过渡、倒计时不跳跃、不回跳。
 5. 软证据按本章相关性和预算取舍，最多 N 条的限制只放在这里。组装时：动机 = 目标+处境+未闭合问题；可用能力 = 境界+设定禁用。只合并剧情向约束（越权、抢戏、钩子未接）。读取 `设定集/文风提示词.md`。不要消费写法教程。
@@ -66,10 +66,10 @@ load-context 已含（不要重复查）：`story_contracts`（MASTER/volume/cha
 ## 5. 输入
 
 ```json
-{"chapter": 100, "project_root": "D:/wk/斗破苍穹", "storage_path": ".webnovel/", "state_file": ".webnovel/state.json"}
+{"chapter": 100, "project_root": "D:/wk/斗破苍穹", "storage_path": ".canon-ledger/", "state_file": ".canon-ledger/state.json"}
 ```
 
-`state.json` 仅作兼容 / read-model 读取；写前合同以 `.story-system/`（`story_contracts`）为准。
+`state.json` 仅作 read-model 读取；写前合同以 `.story-system/`（`story_contracts`）为准。
 
 组装第 5 步时：`Read` `{project_root}/设定集/文风提示词.md`（文件不存在则跳过，不报错）。只消费、不改写该文件。
 

@@ -21,7 +21,7 @@ from .projection_rebuild import (
 from .vector_projection_writer import VectorProjectionWriter
 
 
-SCHEMA_VERSION = "webnovel-projections/v1"
+SCHEMA_VERSION = "canon-ledger-projections/v1"
 DEFAULT_PROJECTION_STATUS = {
     "state": "pending",
     "index": "pending",
@@ -338,7 +338,7 @@ def format_projection_report(report: dict[str, Any], output_format: str = "json"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Retry or replay webnovel projections from existing commits")
+    parser = argparse.ArgumentParser(description="从已有提交重试或重放 CanonLedger 投影")
     parser.add_argument("--project-root", required=True)
     sub = parser.add_subparsers(dest="action", required=True)
 

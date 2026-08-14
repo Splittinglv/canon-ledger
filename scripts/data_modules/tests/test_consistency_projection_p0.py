@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""P0 regression coverage for commit-derived long-term consistency."""
+"""章节提交派生长期一致性的核心回归测试。"""
 
 from __future__ import annotations
 
 import copy
 import json
+import sqlite3
 
 import pytest
 
@@ -15,7 +16,6 @@ from data_modules.config import DataModulesConfig
 from data_modules.index_manager import IndexManager
 from data_modules.index_projection_writer import IndexProjectionWriter
 from data_modules.memory.store import ScratchpadManager
-from data_modules.memory.writer import MemoryWriter
 from data_modules.memory_contract_adapter import MemoryContractAdapter
 from data_modules.memory_projection_writer import MemoryProjectionWriter
 from data_modules.projections import retry_projection
@@ -24,8 +24,8 @@ from .review_test_helpers import standard_review
 
 
 def _prepare_project(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     config = DataModulesConfig.from_project_root(tmp_path)
     config.ensure_dirs()
     return config
@@ -53,6 +53,22 @@ def _build_commit(project_root, chapter: int, extraction: dict):
             encoding="utf-8",
         )
     binding = build_chapter_binding(project_root, chapter)
+    contract_path = project_root / ".story-system" / "chapters" / f"chapter_{chapter:03d}.json"
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(
+        json.dumps(
+            {
+                "meta": {"chapter": chapter},
+                "chapter_directive": {
+                    "goal": f"验证第{chapter}章一致性投影",
+                    "must_cover_nodes": [],
+                    "forbidden_zones": [],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     service = ChapterCommitService(project_root)
     return service.build_commit(
         chapter=chapter,
@@ -145,19 +161,6 @@ def test_timeline_uses_sequence_and_rejects_duplicate_identity(tmp_path):
         )
 
 
-def test_legacy_memory_facts_timeline_is_lifted_into_commit_mainline(tmp_path):
-    config = _prepare_project(tmp_path)
-    projected = _commit(
-        tmp_path,
-        3,
-        {"memory_facts": {"timeline_events": [{"event": "旧格式时间线"}]}},
-    )
-    assert projected["projection_status"]["memory"] == "done"
-    assert [item.event for item in MemoryContractAdapter(config).get_timeline(1, 3)] == [
-        "旧格式时间线"
-    ]
-
-
 def test_timeline_id_cannot_silently_overwrite_a_different_chapter_fact(tmp_path):
     _prepare_project(tmp_path)
     _commit(
@@ -227,8 +230,7 @@ def test_close_and_payoff_use_stable_ids_and_old_reprojection_cannot_reopen(tmp_
     assert store.query(category="reader_promise", status="resolved")[0].payload["resolution"] == "同伴获救"
     assert closed["projection_status"]["memory"] == "done"
 
-    # A delayed/retried creation projection is idempotent and must not reopen
-    # an obligation that a later accepted chapter has already resolved.
+    # 延迟或重试的创建投影必须幂等，不得重新打开后续章节已闭合的义务。
     replay_result = MemoryProjectionWriter(tmp_path).apply(created)
     assert replay_result["applied"] is True
     assert not store.query(category="open_loop", status="active")
@@ -355,52 +357,6 @@ def test_compaction_tombstone_prevents_resolved_promise_replay(tmp_path):
     assert not store.query(category="reader_promise", status=None)
     ledger = store.dump()["meta"]["resolved_lifecycle_ids"]["reader_promise"]
     assert "promise-rescue" in ledger
-
-    MemoryProjectionWriter(tmp_path).apply(created)
-
-    assert not store.query(category="reader_promise", status="active")
-    assert "promise-rescue" in store.lifecycle_ids("reader_promise")
-
-
-def test_legacy_payload_resolved_promise_is_not_migrated_back_to_active(tmp_path):
-    config = _prepare_project(tmp_path)
-    from data_modules.memory.schema import MemoryItem
-
-    writer = MemoryWriter(config)
-    content = "同伴必须获救"
-    legacy_id = writer._item_id("reader_promise", content, "promise", 2)
-    store = ScratchpadManager(config)
-    store.upsert_item(
-        MemoryItem(
-            id=legacy_id,
-            layer="semantic",
-            category="reader_promise",
-            subject=content,
-            field="promise",
-            value=content,
-            payload={"status": "resolved"},
-            status="active",
-            source_chapter=2,
-        )
-    )
-    created = _commit(
-        tmp_path,
-        2,
-        {
-            "accepted_events": [
-                {
-                    "event_id": "evt-promise-legacy-created",
-                    "chapter": 2,
-                    "event_type": "promise_created",
-                    "subject": "companion",
-                    "payload": {
-                        "promise_id": "promise-rescue",
-                        "content": content,
-                    },
-                }
-            ]
-        },
-    )
 
     MemoryProjectionWriter(tmp_path).apply(created)
 
@@ -648,160 +604,6 @@ def test_relationship_event_projects_to_memory_and_old_retry_cannot_roll_back(tm
     ]
 
 
-def test_compaction_tombstones_legacy_payload_resolved_loop(tmp_path):
-    config = _prepare_project(tmp_path)
-    from data_modules.memory.compactor import compact_scratchpad
-    from data_modules.memory.schema import MemoryItem
-
-    store = ScratchpadManager(config)
-    data = store.load()
-    legacy = MemoryItem(
-        id="legacy-resolved-loop",
-        layer="semantic",
-        category="open_loop",
-        subject="旧回收伏笔",
-        field="status",
-        value="旧回收伏笔",
-        payload={"status": "resolved"},
-        status="active",
-        source_chapter=2,
-    )
-    data.open_loops.append(legacy)
-    data.story_facts.append(
-        MemoryItem(
-            id="filler",
-            layer="semantic",
-            category="story_fact",
-            subject="filler",
-            field="filler",
-            value="filler",
-            source_chapter=3,
-        )
-    )
-    store.save(compact_scratchpad(data, max_items=1))
-    assert "legacy-resolved-loop" in store.lifecycle_ids("open_loop")
-    assert not store.query(category="open_loop", status="active")
-
-    delayed_create = _build_commit(
-        tmp_path,
-        2,
-        {
-            "accepted_events": [
-                {
-                    "event_id": "evt-delayed-legacy",
-                    "chapter": 2,
-                    "event_type": "open_loop_created",
-                    "subject": "hero",
-                    "payload": {"loop_id": "canonical-after-legacy", "content": "旧回收伏笔"},
-                }
-            ],
-        },
-    )
-    MemoryProjectionWriter(tmp_path).apply(delayed_create)
-    assert not store.query(category="open_loop", status="active")
-    assert "canonical-after-legacy" in store.lifecycle_ids("open_loop")
-
-
-def test_legacy_lifecycle_row_has_explicit_target_and_migrates_without_duplicate(tmp_path):
-    config = _prepare_project(tmp_path)
-    from data_modules.memory.writer import MemoryWriter
-
-    writer = MemoryWriter(config)
-    writer.update_from_chapter_result(
-        2,
-        {"memory_facts": {"open_loops": [{"content": "旧伏笔", "status": "active"}]}},
-    )
-    adapter = MemoryContractAdapter(config)
-    legacy_id = adapter.get_lifecycle_obligations()[0].id
-
-    # 重放旧版创建事件时，必须按确定性标识迁移旧行，不能留下无法闭合的重复项。
-    created = _commit(
-        tmp_path,
-        2,
-        {
-            "accepted_events": [
-                {
-                    "event_id": "evt-old",
-                    "chapter": 2,
-                    "event_type": "open_loop_created",
-                    "subject": "hero",
-                    "payload": {"loop_id": "evt-old", "content": "旧伏笔"},
-                }
-            ]
-        },
-    )
-    active = ScratchpadManager(config).query(category="open_loop", status="active")
-    assert len(active) == 1
-    assert active[0].payload["lifecycle_id"] == "evt-old"
-
-    # 公共适配器必须暴露 data-agent 实际使用的稳定目标标识。
-    assert adapter.get_open_loops()[0].id == "evt-old"
-    assert adapter.get_lifecycle_obligations()[0].id == "evt-old"
-    _commit(
-        tmp_path,
-        4,
-        {
-            "accepted_events": [
-                {
-                    "event_id": "evt-close-old",
-                    "chapter": 4,
-                    "event_type": "open_loop_closed",
-                    "subject": "hero",
-                    "payload": {"loop_id": "evt-old", "resolution": "已揭晓"},
-                }
-            ]
-        },
-    )
-    assert not ScratchpadManager(config).query(category="open_loop", status="active")
-    assert created["projection_status"]["memory"] == "done"
-    assert legacy_id != "evt-old"
-
-
-def test_closed_legacy_lifecycle_cannot_be_reopened_by_delayed_canonical_create(tmp_path):
-    config = _prepare_project(tmp_path)
-    from data_modules.memory.writer import MemoryWriter
-
-    MemoryWriter(config).update_from_chapter_result(
-        2,
-        {"memory_facts": {"open_loops": [{"content": "旧伏笔", "status": "active"}]}},
-    )
-    legacy_id = MemoryContractAdapter(config).get_lifecycle_obligations()[0].id
-    _commit(
-        tmp_path,
-        4,
-        {
-            "accepted_events": [
-                {
-                    "event_id": "evt-close-legacy",
-                    "chapter": 4,
-                    "event_type": "open_loop_closed",
-                    "subject": "hero",
-                    "payload": {"loop_id": legacy_id, "resolution": "已揭晓"},
-                }
-            ]
-        },
-    )
-    delayed_create = _build_commit(
-        tmp_path,
-        2,
-        {
-            "accepted_events": [
-                {
-                    "event_id": "evt-original-create",
-                    "chapter": 2,
-                    "event_type": "open_loop_created",
-                    "subject": "hero",
-                    "payload": {"loop_id": "canonical-loop", "content": "旧伏笔"},
-                }
-            ],
-        },
-    )
-    MemoryProjectionWriter(tmp_path).apply(delayed_create)
-    store = ScratchpadManager(config)
-    assert not store.query(category="open_loop", status="active")
-    assert {legacy_id, "canonical-loop"}.issubset(store.lifecycle_ids("open_loop"))
-
-
 def test_missing_lifecycle_target_fails_memory_without_changing_active_obligations(tmp_path):
     config = _prepare_project(tmp_path)
     _commit(
@@ -960,7 +762,7 @@ def test_state_deltas_sync_nested_entity_current_and_old_retry_cannot_roll_back(
     assert "power.realm" not in entity["current_json"]
 
     StateProjectionWriter(tmp_path).apply(old)
-    state = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    state = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     assert state["entity_state"]["hero"]["power"]["realm"] == "金丹"
     assert state["progress"]["current_chapter"] == 10
 
@@ -1022,6 +824,13 @@ def test_index_current_materializer_preserves_json_scalar_types(tmp_path):
     assert current["literal_bool"] == "true"
     assert current["literal_null"] == "null"
     assert current["actual_null"] is None
+
+    with sqlite3.connect(config.index_db) as connection:
+        stored = connection.execute(
+            "SELECT new_value FROM state_changes WHERE entity_id = ? AND field = ?",
+            ("hero", "literal_num"),
+        ).fetchone()
+    assert stored == ('__canon_ledger_json_v1__:"3"',)
 
 
 def test_old_entity_retry_cannot_roll_back_newer_metadata(tmp_path):
@@ -1093,11 +902,11 @@ def test_retry_rebuilds_canonical_corpus_and_keeps_newer_state(tmp_path):
     assert report["ok"] is True
     assert report["rebuilt_chapters"] == [1, 3, 10]
 
-    state = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    state = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     assert state["entity_state"]["hero"]["realm"] == "金丹"
 
 
-def test_retry_recognizes_legacy_plain_failed_status(tmp_path, monkeypatch):
+def test_retry_recognizes_current_failed_status(tmp_path, monkeypatch):
     _prepare_project(tmp_path)
     payload = _commit(
         tmp_path,
@@ -1109,19 +918,19 @@ def test_retry_recognizes_legacy_plain_failed_status(tmp_path, monkeypatch):
                     "chapter": 3,
                     "event_type": "open_loop_created",
                     "subject": "hero",
-                    "payload": {"loop_id": "loop-legacy-retry", "content": "待解谜题"},
+                    "payload": {"loop_id": "loop-retry", "content": "待解谜题"},
                 }
             ]
         },
     )
-    payload["projection_status"]["memory"] = "failed"
+    payload["projection_status"]["memory"] = "failed:临时错误"
     ChapterCommitService(tmp_path).persist_commit(payload)
 
     calls: list[str] = []
 
     def spy(self, commit_payload):
         calls.append("memory")
-        return {"applied": False, "writer": "memory", "reason": "not_required"}
+        return {"applied": False, "writer": "memory", "reason": "无需重复写入"}
 
     monkeypatch.setattr(MemoryProjectionWriter, "apply", spy)
     report = retry_projection(tmp_path, chapter=3)

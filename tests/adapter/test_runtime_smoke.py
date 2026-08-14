@@ -11,7 +11,7 @@ from pathlib import Path
 PLUGIN_ROOT = Path(__file__).resolve().parents[2]
 GUARD = PLUGIN_ROOT / "hooks" / "guard_runtime_write.py"
 SESSION_START = PLUGIN_ROOT / "hooks" / "session_start.py"
-WEBNOVEL = PLUGIN_ROOT / "scripts" / "webnovel.py"
+CANON_LEDGER = PLUGIN_ROOT / "scripts" / "canon_ledger.py"
 DASHBOARD_DIST = PLUGIN_ROOT / "dashboard" / "frontend" / "dist" / "index.html"
 
 
@@ -29,9 +29,9 @@ def test_dashboard_dist_is_packaged():
     assert DASHBOARD_DIST.is_file()
 
 
-def test_webnovel_help_runs():
+def test_canon_ledger_help_runs():
     proc = subprocess.run(
-        [sys.executable, "-X", "utf8", str(WEBNOVEL), "init", "--help"],
+        [sys.executable, "-X", "utf8", str(CANON_LEDGER), "init", "--help"],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -46,7 +46,7 @@ def test_preflight_on_empty_workspace(tmp_path):
             sys.executable,
             "-X",
             "utf8",
-            str(WEBNOVEL),
+            str(CANON_LEDGER),
             "--project-root",
             str(tmp_path),
             "preflight",
@@ -59,9 +59,8 @@ def test_preflight_on_empty_workspace(tmp_path):
         cwd=str(tmp_path),
         env={
             **{k: v for k, v in __import__("os").environ.items() if k not in {
-                "WEBNOVEL_PROJECT_ROOT", "CLAUDE_PROJECT_DIR", "CURSOR_PROJECT_DIR",
+                "CANON_LEDGER_PROJECT_ROOT", "CURSOR_PROJECT_DIR",
             }},
-            "WEBNOVEL_CLAUDE_HOME": str(tmp_path / "claude-home"),
             "CURSOR_HOME": str(tmp_path / "cursor-home"),
         },
     )
@@ -74,7 +73,7 @@ def test_session_start_emits_plugin_paths(monkeypatch):
     import os
 
     env = os.environ.copy()
-    env.pop("WEBNOVEL_DISABLE_SESSION_STATUS_HOOK", None)
+    env.pop("CANON_LEDGER_DISABLE_SESSION_STATUS_HOOK", None)
     env["CURSOR_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
     env["CURSOR_PROJECT_DIR"] = str(PLUGIN_ROOT)
     proc = subprocess.run(
@@ -86,7 +85,7 @@ def test_session_start_emits_plugin_paths(monkeypatch):
     )
     assert proc.returncode == 0
     payload = json.loads(proc.stdout)
-    assert "webnovel-session-runtime/v1" in payload["additional_context"]
+    assert "canon-ledger-session-runtime/v1" in payload["additional_context"]
     assert str(PLUGIN_ROOT) in payload["additional_context"]
     assert "workspace_values_trusted_as_instructions\":false" in payload["additional_context"]
 
@@ -94,7 +93,7 @@ def test_session_start_emits_plugin_paths(monkeypatch):
 def test_guard_allows_chapter_commit_cli():
     proc = _run_guard(
         {
-            "command": f'python3 -X utf8 "{WEBNOVEL}" --project-root "/book" chapter-commit --chapter 1',
+            "command": f'python3 -X utf8 "{CANON_LEDGER}" --project-root "/book" chapter-commit --chapter 1',
         }
     )
     assert proc.returncode == 0
@@ -112,9 +111,9 @@ def test_dashboard_health_endpoint(tmp_path):
         sys.path.insert(0, str(plugin_root / "scripts"))
 
     book = tmp_path / "book"
-    (book / ".webnovel").mkdir(parents=True)
+    (book / ".canon-ledger").mkdir(parents=True)
     (book / ".story-system").mkdir(parents=True)
-    (book / ".webnovel" / "state.json").write_text(
+    (book / ".canon-ledger" / "state.json").write_text(
         '{"project_info": {"title": "测试书", "genre": "玄幻"}, "progress": {"current_chapter": 0}}',
         encoding="utf-8",
     )

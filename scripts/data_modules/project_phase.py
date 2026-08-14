@@ -44,10 +44,10 @@ PHASES = (
 )
 
 INIT_REQUIRED_DIRS = (
-    ".webnovel",
-    ".webnovel/backups",
-    ".webnovel/archive",
-    ".webnovel/summaries",
+    ".canon-ledger",
+    ".canon-ledger/backups",
+    ".canon-ledger/archive",
+    ".canon-ledger/summaries",
     "设定集",
     "大纲",
     "正文",
@@ -55,7 +55,7 @@ INIT_REQUIRED_DIRS = (
 )
 
 INIT_REQUIRED_FILES = (
-    ".webnovel/state.json",
+    ".canon-ledger/state.json",
     "设定集/世界观.md",
     "设定集/力量体系.md",
     "设定集/主角卡.md",
@@ -65,10 +65,10 @@ INIT_REQUIRED_FILES = (
 )
 
 COMMIT_ARTIFACT_FILES = (
-    ".webnovel/tmp/review_results.json",
-    ".webnovel/tmp/fulfillment_result.json",
-    ".webnovel/tmp/disambiguation_result.json",
-    ".webnovel/tmp/extraction_result.json",
+    ".canon-ledger/tmp/review_results.json",
+    ".canon-ledger/tmp/fulfillment_result.json",
+    ".canon-ledger/tmp/disambiguation_result.json",
+    ".canon-ledger/tmp/extraction_result.json",
 )
 
 _CHAPTER_FILE_RE = re.compile(r"chapter_(\d{3,4})")
@@ -155,7 +155,7 @@ def _chapter_from_path(path: Path) -> int:
 
 
 def _state_current_chapter(project_root: Path) -> tuple[int, str]:
-    state_path = project_root / ".webnovel" / "state.json"
+    state_path = project_root / ".canon-ledger" / "state.json"
     state, error = _read_json_object(state_path)
     if error:
         return 0, error
@@ -249,8 +249,8 @@ def _latest_draft_chapter(project_root: Path) -> int:
     if not chapters_dir.is_dir():
         return 0
     chapters: list[int] = []
-    for path in chapters_dir.rglob("第*章*.md"):
-        match = re.search(r"第0*(\d+)章", path.name)
+    for path in chapters_dir.glob("第????章*.md"):
+        match = re.fullmatch(r"第(\d{4})章(?:-.+)?\.md", path.name)
         if not match:
             continue
         try:
@@ -346,14 +346,14 @@ def resolve_project_phase(project_root: str | Path | None, chapter: int | None =
         )
 
     root = Path(project_root)
-    state_path = root / ".webnovel" / "state.json"
+    state_path = root / ".canon-ledger" / "state.json"
     if not state_path.is_file():
         return ProjectPhaseSnapshot(
             project_root=str(root),
             phase=PHASE_NO_PROJECT,
             target_chapter=0,
             latest_accepted_chapter=0,
-            blocking=("missing .webnovel/state.json",),
+            blocking=("missing .canon-ledger/state.json",),
         )
 
     state_chapter, state_error = _state_current_chapter(root)

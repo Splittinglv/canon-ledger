@@ -138,9 +138,6 @@ class MemoryOrchestrator:
                 "semantic_memory": [],
                 "long_term_facts": [],
                 "hard_constraints": hard_constraints,
-                # Compatibility alias.  Consumers must prefer hard_constraints
-                # and must not concatenate the two lists.
-                "active_constraints": list(hard_constraints),
                 "recent_changes": [],
                 "warnings": warnings,
                 "stats": {
@@ -254,7 +251,6 @@ class MemoryOrchestrator:
             # long_term_facts 保持对外 contract：仅包含可直接注入的长期语义事实。
             "long_term_facts": semantic_payload,
             "hard_constraints": hard_constraints,
-            "active_constraints": list(hard_constraints),
             "recent_changes": list(recent_changes),
             "warnings": warnings,
             "stats": {
@@ -331,8 +327,8 @@ class MemoryOrchestrator:
             scope = sanitize_fact_atom(raw_payload.get("scope"), max_chars=80)
             if scope:
                 payload["scope"] = scope
-            if str(raw_payload.get("origin") or "") == "/webnovel-learn":
-                payload["origin"] = "/webnovel-learn"
+            if str(raw_payload.get("origin") or "") == "/canon-ledger-learn":
+                payload["origin"] = "/canon-ledger-learn"
         elif item.category in {"open_loop", "reader_promise"}:
             lifecycle_id = sanitize_fact_atom(
                 raw_payload.get("lifecycle_id") or item.id,
@@ -459,7 +455,7 @@ class MemoryOrchestrator:
 
     def _load_recent_summaries(self, chapter: int, window: int) -> List[Dict[str, Any]]:
         result: List[Dict[str, Any]] = []
-        summary_dir = self.config.webnovel_dir / "summaries"
+        summary_dir = self.config.canon_ledger_dir / "summaries"
         if not summary_dir.exists():
             return result
         for ch in range(max(1, chapter - window), chapter):

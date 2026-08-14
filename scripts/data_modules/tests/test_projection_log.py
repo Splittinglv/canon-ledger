@@ -25,7 +25,10 @@ from data_modules.projection_log import (  # noqa: E402
     projection_status_from_run,
     read_projection_runs,
 )
-from .review_test_helpers import standard_review  # noqa: E402
+from .review_test_helpers import (  # noqa: E402
+    standard_review,
+    write_current_chapter_contract,
+)
 
 
 def _build_bound_commit(service: ChapterCommitService, **kwargs):
@@ -35,6 +38,11 @@ def _build_bound_commit(service: ChapterCommitService, **kwargs):
     if not chapter_path.exists():
         chapter_path.write_text(f"第{chapter}章测试正文\n", encoding="utf-8")
     binding = build_chapter_binding(service.project_root, chapter)
+    write_current_chapter_contract(
+        service.project_root,
+        chapter,
+        planned_nodes=list(kwargs["fulfillment_result"].get("planned_nodes") or []),
+    )
     if "blocking_count" in kwargs["review_result"]:
         kwargs["review_result"] = standard_review(
             binding,
@@ -112,8 +120,8 @@ def test_projection_run_pending_detects_overall_and_writer_pending():
 
 
 def test_chapter_commit_service_writes_projection_log(tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
 
     service = ChapterCommitService(tmp_path)
     payload = _build_bound_commit(
@@ -140,8 +148,8 @@ def test_chapter_commit_service_writes_projection_log(tmp_path):
 
 
 def test_chapter_commit_service_marks_vector_store_zero_as_failed(monkeypatch, tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         "data_modules.vector_projection_writer.VectorProjectionWriter._store_chunks",
         lambda self, chunks: 0,
@@ -186,8 +194,8 @@ def test_chapter_commit_service_marks_vector_store_zero_as_failed(monkeypatch, t
 
 
 def test_chapter_commit_service_records_bm25_only_vector_as_skipped(monkeypatch, tmp_path):
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         "data_modules.vector_projection_writer.VectorProjectionWriter._store_chunks",
         lambda self, chunks: StoreOutcome(1, requested=1, embedded=0),

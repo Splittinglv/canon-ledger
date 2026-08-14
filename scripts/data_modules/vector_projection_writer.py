@@ -457,8 +457,15 @@ class VectorProjectionWriter:
         config = DataModulesConfig.from_project_root(self.project_root)
         adapter = RAGAdapter(config)
         chapter = int(chunks[0].get("chapter") or 0) if chunks else 0
+
+        async def store_and_close() -> Any:
+            try:
+                return await adapter.store_chunks(chunks, replace_chapter=chapter)
+            finally:
+                await adapter.close()
+
         return self._run_store_coro(
-            adapter.store_chunks(chunks, replace_chapter=chapter)
+            store_and_close()
         )
 
     def _replace_chapter_chunks(

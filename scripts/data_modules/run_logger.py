@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = "webnovel-run-log/v1"
-LOG_REL = Path(".webnovel") / "logs" / "run_last.log"
+SCHEMA_VERSION = "canon-ledger-run-log/v1"
+LOG_REL = Path(".canon-ledger") / "logs" / "run_last.log"
 SENSITIVE_KEY_RE = re.compile(r"(api[_-]?key|secret|token|authorization|password|passwd|credential)", re.IGNORECASE)
 ASSIGNMENT_RE = re.compile(
     r"(?P<key>[A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|authorization|password|passwd|credential)[A-Za-z0-9_.-]*)"
@@ -74,7 +74,7 @@ def write_run_log(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Write a redacted webnovel run log entry")
+    parser = argparse.ArgumentParser(description="写入已脱敏的 CanonLedger 运行日志")
     parser.add_argument("--project-root", required=True, help="书项目根目录")
     parser.add_argument("--event", required=True, help="事件名")
     parser.add_argument("--payload-json", default="{}", help="要写入日志的 JSON 对象")

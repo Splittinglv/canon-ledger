@@ -8,8 +8,8 @@ from data_modules.runtime_contract_builder import RuntimeContractBuilder
 
 def test_runtime_contract_builder_creates_volume_and_review_contracts(tmp_path):
     project_root = tmp_path
-    (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (project_root / ".webnovel" / "state.json").write_text(
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text(
         json.dumps(
             {
                 "progress": {"volumes_planned": [{"volume": 1, "chapters_range": "1-20"}]},
@@ -60,8 +60,8 @@ def test_runtime_contract_builder_creates_volume_and_review_contracts(tmp_path):
 
 def test_runtime_contract_builder_surfaces_review_extracted_anti_patterns(tmp_path):
     project_root = tmp_path
-    (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (project_root / ".webnovel" / "state.json").write_text(
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text(
         json.dumps({"progress": {"volumes_planned": []}}, ensure_ascii=False),
         encoding="utf-8",
     )

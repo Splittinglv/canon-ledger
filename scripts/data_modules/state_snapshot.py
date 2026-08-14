@@ -98,9 +98,6 @@ def has_projected_state_content(state: Any) -> bool:
         "disambiguation_pending",
         "review_checkpoints",
         "relationships",
-        "structured_relationships",
-        "entities_v3",
-        "alias_index",
     ):
         if state.get(key):
             return True

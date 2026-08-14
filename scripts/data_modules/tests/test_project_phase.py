@@ -111,7 +111,7 @@ def _bound_commit(
 
 
 def test_project_phase_reports_init_scaffolded_when_core_files_missing(tmp_path):
-    _write_json(tmp_path / ".webnovel" / "state.json", {"project_info": {}, "progress": {}})
+    _write_json(tmp_path / ".canon-ledger" / "state.json", {"project_info": {}, "progress": {}})
 
     snapshot = resolve_project_phase(tmp_path)
 

@@ -1,1 +1,1 @@
-# Webnovel Dashboard - 可视化小说管理面板
+# CanonLedger Dashboard - 可视化小说一致性面板

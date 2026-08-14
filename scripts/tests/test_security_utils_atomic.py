@@ -39,7 +39,7 @@ def test_atomic_write_retries_transient_permission_error(tmp_path, monkeypatch):
 
 def test_atomic_write_raises_when_target_stays_locked(tmp_path, monkeypatch):
     """持续占用：重试穷尽后如实抛 AtomicWriteError（生产模式），原文件不被破坏。"""
-    monkeypatch.delenv("WEBNOVEL_TEST_RELAX_ATOMIC_REPLACE", raising=False)
+    monkeypatch.delenv("CANON_LEDGER_TEST_RELAX_ATOMIC_REPLACE", raising=False)
     target = tmp_path / "state.json"
     target.write_text("{}", encoding="utf-8")
 
@@ -57,8 +57,8 @@ def test_atomic_write_raises_when_target_stays_locked(tmp_path, monkeypatch):
 
 
 def test_atomic_write_relaxed_fallback_still_writes(tmp_path, monkeypatch):
-    """测试沙箱降级分支（WEBNOVEL_TEST_RELAX_ATOMIC_REPLACE=1）行为保持：穷尽后覆写成功。"""
-    monkeypatch.setenv("WEBNOVEL_TEST_RELAX_ATOMIC_REPLACE", "1")
+    """测试沙箱降级分支（CANON_LEDGER_TEST_RELAX_ATOMIC_REPLACE=1）行为保持：穷尽后覆写成功。"""
+    monkeypatch.setenv("CANON_LEDGER_TEST_RELAX_ATOMIC_REPLACE", "1")
     target = tmp_path / "state.json"
     target.write_text("{}", encoding="utf-8")
 

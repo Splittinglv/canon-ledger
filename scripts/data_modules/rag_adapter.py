@@ -11,6 +11,7 @@ RAG Adapter - RAG 检索适配模块
 """
 
 import asyncio
+import inspect
 import sqlite3
 import json
 import math
@@ -114,11 +115,28 @@ class RAGAdapter:
 
     def __init__(self, config=None):
         self.config = config or get_config()
-        self.api_client = get_client(config)
+        # 每个适配器拥有独立客户端并负责关闭。投影和命令行中的适配器通常
+        # 生命周期很短；借用进程单例会让 aiohttp 会话活得比事件循环更久。
+        self.api_client = get_client(self.config)
         self.index_manager = IndexManager(self.config)
         self.query_router = QueryRouter()
         self._degraded_mode_reason: Optional[str] = None
         self._init_db()
+
+    async def close(self) -> None:
+        """关闭此适配器拥有的异步 API 客户端。"""
+        closer = getattr(self.api_client, "close", None)
+        if not callable(closer):
+            return
+        result = closer()
+        if inspect.isawaitable(result):
+            await result
+
+    async def __aenter__(self) -> "RAGAdapter":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.close()
 
     @property
     def degraded_mode_reason(self) -> Optional[str]:
@@ -202,7 +220,7 @@ class RAGAdapter:
         db_path = Path(self.config.vector_db)
         if not db_path.exists():
             raise FileNotFoundError(f"vectors.db 不存在: {db_path}")
-        backup_dir = self.config.webnovel_dir / "backups"
+        backup_dir = self.config.canon_ledger_dir / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = backup_dir / f"vectors.db.{reason}.v{RAG_SCHEMA_VERSION}.{timestamp}.bak"
@@ -1674,7 +1692,7 @@ def main():
     # 初始化
     config = None
     if args.project_root:
-        # 允许传入“工作区根目录”，统一解析到真正的 book project_root（必须包含 .webnovel/state.json）
+        # 允许传入“工作区根目录”，统一解析到真正的 book project_root（必须包含 .canon-ledger/state.json）
         from project_locator import resolve_project_root
         from .config import DataModulesConfig
 
@@ -1683,6 +1701,16 @@ def main():
 
     adapter = RAGAdapter(config)
     tool_name = f"rag_adapter:{args.command or 'unknown'}"
+
+    def run_adapter(awaitable):
+        """在同一个事件循环里执行命令并释放适配器客户端。"""
+        async def run_and_close():
+            try:
+                return await awaitable
+            finally:
+                await adapter.close()
+
+        return asyncio.run(run_and_close())
 
     def _append_timing(success: bool, *, error_code: str | None = None, error_message: str | None = None, chapter: int | None = None):
         elapsed_ms = int((time.perf_counter() - command_started_at) * 1000)
@@ -1723,7 +1751,7 @@ def main():
         # summary chunk
         summary_text = args.summary
         if not summary_text and config:
-            summary_path = config.webnovel_dir / "summaries" / f"ch{args.chapter:04d}.md"
+            summary_path = config.canon_ledger_dir / "summaries" / f"ch{args.chapter:04d}.md"
             if summary_path.exists():
                 summary_text = summary_path.read_text(encoding="utf-8")
 
@@ -1756,7 +1784,7 @@ def main():
                 }
             )
 
-        outcome = asyncio.run(adapter.store_chunks(chunks))
+        outcome = run_adapter(adapter.store_chunks(chunks))
         stored = int(outcome)
         skipped = len(chunks) - stored
         result = {
@@ -1793,13 +1821,13 @@ def main():
                     center_entities = [x.strip() for x in re.split(r"[，,;；\s]+", raw) if x.strip()]
 
         if args.mode == "vector":
-            results = asyncio.run(adapter.vector_search(args.query, args.top_k, chunk_type=args.chunk_type))
+            results = run_adapter(adapter.vector_search(args.query, args.top_k, chunk_type=args.chunk_type))
         elif args.mode == "bm25":
             results = adapter.bm25_search(args.query, args.top_k, chunk_type=args.chunk_type)
         elif args.mode == "backtrack":
-            results = asyncio.run(adapter.search_with_backtrack(args.query, args.top_k))
+            results = run_adapter(adapter.search_with_backtrack(args.query, args.top_k))
         elif args.mode == "graph_hybrid":
-            results = asyncio.run(
+            results = run_adapter(
                 adapter.graph_hybrid_search(
                     args.query,
                     args.top_k,
@@ -1808,7 +1836,7 @@ def main():
                 )
             )
         elif args.mode == "auto":
-            results = asyncio.run(
+            results = run_adapter(
                 adapter.search(
                     args.query,
                     args.top_k,
@@ -1818,7 +1846,7 @@ def main():
                 )
             )
         else:
-            results = asyncio.run(adapter.hybrid_search(args.query, args.top_k, args.top_k, args.top_k, chunk_type=args.chunk_type))
+            results = run_adapter(adapter.hybrid_search(args.query, args.top_k, args.top_k, args.top_k, chunk_type=args.chunk_type))
 
         payload = [r.__dict__ for r in results]
         degraded_reason = adapter.degraded_mode_reason

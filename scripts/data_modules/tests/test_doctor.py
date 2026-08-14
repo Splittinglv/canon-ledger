@@ -84,8 +84,8 @@ def test_doctor_treats_missing_rag_keys_as_optional_bm25_mode(tmp_path, monkeypa
     assert by_id["rag.rerank.api_key"]["severity"] == "info"
 
 
-def test_doctor_warns_about_legacy_unbound_retrieval_rows(tmp_path):
-    vector_db = tmp_path / ".webnovel" / "vectors.db"
+def test_doctor_blocks_unbound_retrieval_rows(tmp_path):
+    vector_db = tmp_path / ".canon-ledger" / "vectors.db"
     vector_db.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(vector_db) as conn:
         conn.execute(
@@ -104,12 +104,12 @@ def test_doctor_warns_about_legacy_unbound_retrieval_rows(tmp_path):
     checks = doctor_module._rag_checks(tmp_path)
 
     provenance = next(item for item in checks if item["id"] == "rag.retrieval_provenance")
-    assert provenance["status"] == "warning"
+    assert provenance["status"] == "error"
     assert "projections replay" in provenance["repair"]
 
 
-def test_doctor_warns_when_legacy_retrieval_schema_lacks_provenance_column(tmp_path):
-    vector_db = tmp_path / ".webnovel" / "vectors.db"
+def test_doctor_blocks_retrieval_schema_without_provenance_column(tmp_path):
+    vector_db = tmp_path / ".canon-ledger" / "vectors.db"
     vector_db.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(vector_db) as conn:
         conn.execute(
@@ -119,12 +119,12 @@ def test_doctor_warns_when_legacy_retrieval_schema_lacks_provenance_column(tmp_p
     checks = doctor_module._rag_checks(tmp_path)
 
     provenance = next(item for item in checks if item["id"] == "rag.retrieval_provenance")
-    assert provenance["status"] == "warning"
-    assert "legacy_schema_missing_source_file" in provenance["actual"]
+    assert provenance["status"] == "error"
+    assert "unsupported_schema_missing_source_file" in provenance["actual"]
     assert "projections replay" in provenance["repair"]
 
 
-def test_doctor_warns_when_old_project_has_commit_without_projection_log(tmp_path, monkeypatch):
+def test_doctor_blocks_commit_without_projection_log(tmp_path, monkeypatch):
     _make_init_ready(tmp_path)
     _write_json(
         tmp_path / ".story-system" / "commits" / "chapter_001.commit.json",
@@ -137,10 +137,10 @@ def test_doctor_warns_when_old_project_has_commit_without_projection_log(tmp_pat
 
     report = doctor_module.build_doctor_report(tmp_path)
 
-    assert report["ok"] is True
+    assert report["ok"] is False
     matches = [item for item in report["checks"] if item["id"] == "projection_log.present"]
     assert matches
-    assert matches[0]["status"] == "warning"
+    assert matches[0]["status"] == "error"
 
 
 def test_doctor_blocks_pending_projection_log_run(tmp_path, monkeypatch):

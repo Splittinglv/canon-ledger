@@ -31,7 +31,7 @@ from .projection_log import (
 from .story_runtime_health import build_story_runtime_health
 
 
-SCHEMA_VERSION = "webnovel-doctor/v1"
+SCHEMA_VERSION = "canon-ledger-doctor/v1"
 CHECK_OK = "ok"
 CHECK_WARNING = "warning"
 CHECK_ERROR = "error"
@@ -141,7 +141,7 @@ def _file_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -> list[dic
                 expected="directory exists",
                 actual="exists" if exists else "missing",
                 impact="" if exists else "项目骨架不完整，后续写作/备份/报告可能写入失败。",
-                repair="" if exists else "重新运行 /webnovel-init，或手动创建该目录后再运行 doctor。",
+                repair="" if exists else "重新运行 /canon-ledger-init，或手动创建该目录后再运行 doctor。",
             )
         )
     for rel in INIT_REQUIRED_FILES:
@@ -157,7 +157,7 @@ def _file_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -> list[dic
                 expected="file exists",
                 actual="exists" if exists else "missing",
                 impact="" if exists else "项目初始化产物缺失，当前阶段判断和后续流程会不可靠。",
-                repair="" if exists else "使用 /webnovel-init 补齐项目骨架，或按 init_project.py 模板补齐文件。",
+                repair="" if exists else "使用 /canon-ledger-init 补齐项目骨架，或按 init_project.py 模板补齐文件。",
             )
         )
 
@@ -173,8 +173,8 @@ def _file_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -> list[dic
                     path=str(path),
                     expected="file exists",
                     actual="exists" if exists else "missing",
-                    impact="" if exists else "写章上下文缺少主链合同，容易用旧 state 或旧大纲写偏。",
-                    repair="" if exists else "运行 webnovel.py story-system ... --persist --emit-runtime-contracts --chapter N。",
+                    impact="" if exists else "写章上下文缺少当前主链合同，无法可靠绑定设定、时间线和章纲目标。",
+                    repair="" if exists else "运行 canon_ledger.py story-system ... --persist --emit-runtime-contracts --chapter N。",
                 )
             )
     return checks
@@ -183,7 +183,7 @@ def _file_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -> list[dic
 def _json_checks(project_root: Path) -> list[dict[str, Any]]:
     checks: list[dict[str, Any]] = []
     json_files = [
-        project_root / ".webnovel" / "state.json",
+        project_root / ".canon-ledger" / "state.json",
         project_root / ".story-system" / "MASTER_SETTING.json",
     ]
     for path in json_files:
@@ -219,14 +219,14 @@ def _json_checks(project_root: Path) -> list[dict[str, Any]]:
                 checks.append(
                     _check(
                         f"json.state.{key}",
-                        status=CHECK_OK if isinstance(payload.get(key), dict) else CHECK_WARNING,
-                        severity="info" if isinstance(payload.get(key), dict) else "warning",
+                        status=CHECK_OK if isinstance(payload.get(key), dict) else CHECK_ERROR,
+                        severity="info" if isinstance(payload.get(key), dict) else "blocker",
                         message=f"state.json contains {key}",
                         path=str(path),
                         expected="object field",
                         actual=type(payload.get(key)).__name__,
-                        impact="" if isinstance(payload.get(key), dict) else "旧项目或手改 state 可能缺少运行时字段。",
-                        repair="" if isinstance(payload.get(key), dict) else "运行 webnovel.py init 到同一目录可增量补齐 schema。",
+                        impact="" if isinstance(payload.get(key), dict) else "当前项目状态投影不符合 CanonLedger 7 schema。",
+                        repair="" if isinstance(payload.get(key), dict) else "从当前项目备份恢复 state.json，或新建 CanonLedger 项目。",
                     )
                 )
     return checks
@@ -325,7 +325,7 @@ def _rag_checks(project_root: Path) -> list[dict[str, Any]]:
             )
         )
     if cfg.vector_db.is_file():
-        legacy_rows = 0
+        unsupported_rows = 0
         provenance_error = ""
         try:
             uri = f"{cfg.vector_db.resolve().as_uri()}?mode=ro"
@@ -342,7 +342,7 @@ def _rag_checks(project_root: Path) -> list[dict[str, Any]]:
                         for row in conn.execute("PRAGMA table_info(vectors)").fetchall()
                     }
                     if "source_file" not in columns:
-                        provenance_error = "legacy_schema_missing_source_file"
+                        provenance_error = "unsupported_schema_missing_source_file"
                     else:
                         row = conn.execute(
                             """
@@ -352,26 +352,26 @@ def _rag_checks(project_root: Path) -> list[dict[str, Any]]:
                                OR source_file NOT LIKE 'commit:chapter_%:%'
                             """
                         ).fetchone()
-                        legacy_rows = int(row[0] or 0) if row else 0
+                        unsupported_rows = int(row[0] or 0) if row else 0
                 else:
                     provenance_error = "vectors_table_missing"
         except sqlite3.Error as exc:
             provenance_error = f"sqlite_error:{exc.__class__.__name__}"
-        needs_rebuild = bool(legacy_rows or provenance_error)
+        needs_rebuild = bool(unsupported_rows or provenance_error)
         checks.append(
             _check(
                 "rag.retrieval_provenance",
-                status=CHECK_WARNING if needs_rebuild else CHECK_OK,
-                severity="warning" if needs_rebuild else "info",
+                status=CHECK_ERROR if needs_rebuild else CHECK_OK,
+                severity="blocker" if needs_rebuild else "info",
                 message="retrieval rows bound to accepted commit snapshots",
                 expected="all default-context rows carry a commit snapshot marker",
                 actual=(
-                    f"legacy_or_unbound_rows={legacy_rows}; schema={provenance_error}"
+                    f"unsupported_or_unbound_rows={unsupported_rows}; schema={provenance_error}"
                     if provenance_error
-                    else f"legacy_or_unbound_rows={legacy_rows}"
+                    else f"unsupported_or_unbound_rows={unsupported_rows}"
                 ),
                 impact=(
-                    "未绑定的旧向量行会被默认写作上下文忽略，避免召回已拒绝或过期事实。"
+                    "向量投影含未绑定行或不受支持的结构，写作上下文不能信任该读模型。"
                     if needs_rebuild
                     else ""
                 ),
@@ -404,14 +404,14 @@ def _projection_log_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -
         return [
             _check(
                 "projection_log.present",
-                status=CHECK_WARNING,
-                severity="warning",
+                status=CHECK_ERROR,
+                severity="blocker",
                 message="projection log missing for project with commits",
                 path=str(log_path),
                 expected="projection_log.jsonl exists after projection run",
                 actual="missing",
-                impact="无法从独立执行日志定位历史 projection run；仍可兼容读取 commit 内 projection_status。",
-                repair="后续 chapter-commit 会自动双写 projection_log；旧项目可暂时忽略。",
+                impact="当前提交缺少可审计的投影执行记录，不能确认读模型已与事实源同步。",
+                repair="运行 projections replay，按当前提交重建投影并生成执行日志。",
             )
         ]
     latest = latest_projection_run(project_root, chapter=latest_commit.chapter)
@@ -419,14 +419,14 @@ def _projection_log_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -
         return [
             _check(
                 "projection_log.latest_run",
-                status=CHECK_WARNING,
-                severity="warning",
+                status=CHECK_ERROR,
+                severity="blocker",
                 message="projection log has no run for latest commit",
                 path=str(log_path),
                 expected=f"run for chapter {latest_commit.chapter}",
                 actual="missing",
                 impact="最新 commit 的投影执行历史不可见。",
-                repair="后续 projection retry/replay 可补齐；当前仍兼容 commit 内 projection_status。",
+                repair="运行 projections replay，为最新提交补齐当前投影执行记录。",
             )
         ]
     failed = projection_run_failed(latest)
@@ -541,10 +541,10 @@ def build_doctor_report(
                 severity="blocker",
                 message="project root not resolved",
                 path=str(project_root or ""),
-                expected=".webnovel/state.json",
+                expected=".canon-ledger/state.json",
                 actual="missing",
                 impact="无法判断项目状态，也不能安全运行写作链路。",
-                repair="先运行 /webnovel-init，或运行 webnovel.py use <project_root> 绑定已有项目。",
+                repair="先运行 /canon-ledger-init，或运行 canon_ledger.py use <project_root> 绑定已有项目。",
             )
         )
     else:
@@ -609,7 +609,7 @@ def format_doctor_report(report: dict[str, Any], output_format: str = "text") ->
         return json.dumps(report, ensure_ascii=False, indent=2)
     status = "OK" if report.get("ok") else "ERROR"
     lines = [
-        f"{status} webnovel-doctor",
+        f"{status} canon-ledger-doctor",
         f"project_root: {report.get('project_root') or '(未解析)'}",
         f"phase: {report.get('phase')}",
         f"blocking: {report.get('blocking_count')} warnings: {report.get('warning_count')}",
@@ -634,7 +634,7 @@ def format_doctor_report(report: dict[str, Any], output_format: str = "text") ->
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run read-only webnovel project doctor")
+    parser = argparse.ArgumentParser(description="运行 CanonLedger 项目只读诊断")
     parser.add_argument("--project-root", default="", help="书项目根目录")
     parser.add_argument("--chapter", type=int, default=None, help="目标章节号")
     parser.add_argument("--deep", action="store_true", help="包含 dashboard 等较深检查")

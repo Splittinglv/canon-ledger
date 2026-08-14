@@ -17,7 +17,7 @@ from .chapter_commit_schema import (
 )
 
 
-SCHEMA_VERSION = "webnovel-artifact-validator/v1"
+SCHEMA_VERSION = "canon-ledger-artifact-validator/v1"
 
 ERROR_SCHEMA = "schema_error"
 ERROR_MISSING = "missing_artifact"

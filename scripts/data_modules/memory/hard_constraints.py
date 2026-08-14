@@ -9,50 +9,15 @@ from .schema import HARD_CONSTRAINT_CATEGORIES
 
 
 def normalize_hard_constraints(memory_pack: Any) -> Tuple[List[Dict[str, Any]], str]:
-    """Return ``(items, error)`` for canonical and documented legacy shapes.
-
-    An empty list is a valid authoritative answer. A malformed producer value
-    is not equivalent to an empty memory store and must block context use.
-    """
+    """校验当前 ``hard_constraints`` 平铺列表，返回条目和错误码。"""
     if not isinstance(memory_pack, dict):
         return [], "memory_pack_must_be_object"
 
-    if "hard_constraints" in memory_pack:
-        raw = memory_pack.get("hard_constraints")
-    elif "active_constraints" in memory_pack:
-        raw = memory_pack.get("active_constraints")
-    else:
-        # Older producers legitimately omitted both keys when the store was
-        # empty. Keep that narrow compatibility behavior.
-        return [], ""
+    if "hard_constraints" not in memory_pack:
+        return [], "hard_constraints_missing"
+    raw = memory_pack.get("hard_constraints")
 
     normalized: List[Dict[str, Any]] = []
-    if isinstance(raw, dict):
-        if "items" in raw:
-            raw = raw.get("items")
-        else:
-            category_aliases = {
-                "world_rules": "world_rule",
-                "open_loops": "open_loop",
-                "reader_promises": "reader_promise",
-                "relationships": "relationship",
-            }
-            unknown = set(raw) - set(category_aliases)
-            if unknown:
-                return [], "hard_constraints_unknown_group"
-            grouped: List[Any] = []
-            for key, category in category_aliases.items():
-                rows = raw.get(key, [])
-                if not isinstance(rows, list):
-                    return [], f"hard_constraints_group_must_be_list:{key}"
-                for row in rows:
-                    if not isinstance(row, dict):
-                        return [], f"hard_constraint_must_be_object:{key}"
-                    item = dict(row)
-                    item.setdefault("category", category)
-                    grouped.append(item)
-            raw = grouped
-
     if not isinstance(raw, list):
         return [], "hard_constraints_must_be_list"
 

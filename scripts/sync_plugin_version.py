@@ -11,7 +11,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parent.parent
-PLUGIN_NAME = "webnovel-writer"
+PLUGIN_NAME = "canon-ledger"
 VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 README_ROW_PATTERN = re.compile(
     r"^\| \*\*v(?P<version>[^\s*]+)(?P<current> \(当前\))?\*\* \| (?P<notes>.*) \|$"
@@ -32,37 +32,31 @@ class ReleaseLayout:
 def _layout_candidates(root: Path) -> list[ReleaseLayout]:
     """Return supported release layouts in preferred order.
 
-    Cursor's flat plugin layout is canonical. The remaining candidates keep
-    compatibility with the upstream/legacy Claude marketplace repository.
+    Cursor's flat plugin layout is canonical. A nested Cursor package layout
+    is also supported for repository packaging.
     """
 
     root = root.resolve()
-    return [
+    candidates = [
         ReleaseLayout(
             root=root,
             plugin_json=root / ".cursor-plugin" / "plugin.json",
             marketplace_json=root / ".cursor-plugin" / "marketplace.json",
             readme=root / "README.md",
         ),
-        ReleaseLayout(
-            root=root,
-            plugin_json=root / ".claude-plugin" / "plugin.json",
-            marketplace_json=root / ".claude-plugin" / "marketplace.json",
-            readme=root / "README.md",
-        ),
-        ReleaseLayout(
-            root=root,
-            plugin_json=root / PLUGIN_NAME / ".cursor-plugin" / "plugin.json",
-            marketplace_json=root / ".cursor-plugin" / "marketplace.json",
-            readme=root / "README.md",
-        ),
-        ReleaseLayout(
-            root=root,
-            plugin_json=root / PLUGIN_NAME / ".claude-plugin" / "plugin.json",
-            marketplace_json=root / ".claude-plugin" / "marketplace.json",
-            readme=root / "README.md",
-        ),
     ]
+    for directory in (PLUGIN_NAME,):
+        candidates.extend(
+            [
+                ReleaseLayout(
+                    root=root,
+                    plugin_json=root / directory / ".cursor-plugin" / "plugin.json",
+                    marketplace_json=root / ".cursor-plugin" / "marketplace.json",
+                    readme=root / "README.md",
+                ),
+            ]
+        )
+    return candidates
 
 
 def resolve_plugin_manifest(root: str | Path | None = None) -> Path:
@@ -138,7 +132,7 @@ def get_marketplace_plugin(payload: dict[str, Any]) -> dict[str, Any]:
     for plugin in plugins:
         if isinstance(plugin, dict) and plugin.get("name") == PLUGIN_NAME:
             return plugin
-    raise ValueError(f"Plugin {PLUGIN_NAME} not found in marketplace.json")
+    raise ValueError(f"marketplace.json 未找到插件条目：{PLUGIN_NAME}")
 
 
 def parse_readme_rows(lines: list[str]) -> list[dict[str, Any]]:
@@ -308,7 +302,7 @@ def check_versions(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Sync Cursor/Claude plugin release metadata")
+    parser = argparse.ArgumentParser(description="同步 CanonLedger Cursor 插件发行元数据")
     parser.add_argument("--root", default="", help="Repository root; defaults to the script's repository")
     parser.add_argument(
         "--check",

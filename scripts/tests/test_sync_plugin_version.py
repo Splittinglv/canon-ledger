@@ -30,7 +30,7 @@ def _write_readme(root: Path, version: str) -> None:
                 "",
                 "| 版本 | 说明 |",
                 "|------|------|",
-                f"| **v{version} (当前)** | current |",
+                f"| **v{version} (当前)** | 当前版本 |",
                 "",
             ]
         ),
@@ -41,7 +41,7 @@ def _write_readme(root: Path, version: str) -> None:
 def _write_cursor_layout(root: Path, version: str = "1.2.3") -> None:
     _write_json(
         root / ".cursor-plugin" / "plugin.json",
-        {"name": "webnovel-writer", "version": version, "description": "desc"},
+        {"name": "canon-ledger", "version": version, "description": "长篇小说一致性引擎"},
     )
     _write_json(
         root / ".cursor-plugin" / "marketplace.json",
@@ -49,7 +49,7 @@ def _write_cursor_layout(root: Path, version: str = "1.2.3") -> None:
             "metadata": {"version": version},
             "plugins": [
                 {
-                    "name": "webnovel-writer",
+                    "name": "canon-ledger",
                     "version": version,
                     "source": ".",
                 }
@@ -73,7 +73,7 @@ def test_sync_versions_updates_every_cursor_version_surface(tmp_path):
 
     previous, target, changed = sync_plugin_version.sync_versions(
         version="1.2.4",
-        release_notes="safer release tooling",
+        release_notes="发版工具更稳健",
         root=tmp_path,
     )
 
@@ -85,33 +85,19 @@ def test_sync_versions_updates_every_cursor_version_surface(tmp_path):
     assert marketplace["metadata"]["version"] == "1.2.4"
     assert marketplace["plugins"][0]["version"] == "1.2.4"
     assert "version-1.2.4-brightgreen" in readme
-    assert "| **v1.2.4 (当前)** | safer release tooling |" in readme
+    assert "| **v1.2.4 (当前)** | 发版工具更稳健 |" in readme
     assert sync_plugin_version.check_versions("1.2.4", root=tmp_path) == 0
 
 
-def test_release_layout_keeps_legacy_marketplace_compatibility(tmp_path):
+def test_release_layout_rejects_incomplete_cursor_layout(tmp_path):
     _write_json(
-        tmp_path / "webnovel-writer" / ".claude-plugin" / "plugin.json",
-        {"name": "webnovel-writer", "version": "1.2.3", "description": "desc"},
-    )
-    _write_json(
-        tmp_path / ".claude-plugin" / "marketplace.json",
-        {
-            "plugins": [
-                {
-                    "name": "webnovel-writer",
-                    "version": "1.2.3",
-                    "source": "./webnovel-writer",
-                }
-            ]
-        },
+        tmp_path / ".cursor-plugin" / "plugin.json",
+        {"name": "canon-ledger", "version": "1.2.3", "description": "长篇小说一致性引擎"},
     )
     _write_readme(tmp_path, "1.2.3")
 
-    layout = sync_plugin_version.resolve_release_layout(tmp_path)
-
-    assert layout.plugin_json == tmp_path / "webnovel-writer" / ".claude-plugin" / "plugin.json"
-    assert sync_plugin_version.check_versions(root=tmp_path) == 0
+    with pytest.raises(FileNotFoundError):
+        sync_plugin_version.resolve_release_layout(tmp_path)
 
 
 def test_release_layout_missing_error_lists_checked_cursor_path(tmp_path):
@@ -125,5 +111,5 @@ def test_windows_runner_uses_flat_cursor_repository_paths():
     runner = (SCRIPTS_DIR / "run_tests.ps1").read_text(encoding="utf-8")
 
     assert '$env:PYTHONPATH = "scripts"' in runner
-    assert ".claude/scripts" not in runner
+    assert '$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path' in runner
     assert 'Join-Path $PSScriptRoot "..\\.."' not in runner

@@ -19,17 +19,19 @@ KNOWN_AGENTS = (
 
 INHERIT_ALIASES = {"", "inherit", "default", "parent"}
 CONFIG_FILENAME = "subagent-models.json"
+GLOBAL_CONFIG_DIR_NAMES = ("canon-ledger",)
 _SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+\[\]=,*-]*$")
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 
 
 def default_user_config_path() -> Path:
     cursor_home = Path(os.environ.get("CURSOR_HOME") or (Path.home() / ".cursor"))
-    return cursor_home / "webnovel-writer" / CONFIG_FILENAME
+    candidates = tuple(cursor_home / directory / CONFIG_FILENAME for directory in GLOBAL_CONFIG_DIR_NAMES)
+    return next((path for path in candidates if path.is_file()), candidates[0])
 
 
 def project_config_path(project_root: Path) -> Path:
-    return Path(project_root) / ".webnovel" / CONFIG_FILENAME
+    return Path(project_root) / ".canon-ledger" / CONFIG_FILENAME
 
 
 def default_config_payload() -> dict[str, Any]:
@@ -37,7 +39,7 @@ def default_config_payload() -> dict[str, Any]:
         "_comment": (
             "可选。留 inherit 则子代理跟当前聊天用同一个模型。"
             "要单独指定时填 Cursor Task 允许的模型 id（不要用展示名或中文）。"
-            "优先级：本轮对话点名 > 本书此文件 > ~/.cursor/webnovel-writer/subagent-models.json > inherit。"
+            "优先级：本轮对话点名 > 本书此文件 > ~/.cursor/canon-ledger/subagent-models.json > inherit。"
         ),
         "default": "inherit",
         "agents": {name: "inherit" for name in KNOWN_AGENTS},

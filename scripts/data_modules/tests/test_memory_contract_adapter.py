@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,15 +29,130 @@ from data_modules.memory_contract import (
     TimelineEvent,
 )
 from data_modules.memory_contract_adapter import MemoryContractAdapter
+from data_modules.chapter_commit_service import ChapterCommitService
+from data_modules.chapter_content_binding import build_chapter_binding
 
 
 def _make_project(tmp_path: Path) -> DataModulesConfig:
     """创建最小项目结构并返回配置。"""
-    webnovel_dir = tmp_path / ".webnovel"
-    webnovel_dir.mkdir(parents=True, exist_ok=True)
-    (webnovel_dir / "state.json").write_text("{}", encoding="utf-8")
-    (webnovel_dir / "summaries").mkdir(exist_ok=True)
+    canon_ledger_dir = tmp_path / ".canon-ledger"
+    canon_ledger_dir.mkdir(parents=True, exist_ok=True)
+    (canon_ledger_dir / "state.json").write_text("{}", encoding="utf-8")
+    (canon_ledger_dir / "summaries").mkdir(exist_ok=True)
     return DataModulesConfig.from_project_root(tmp_path)
+
+
+def _write_contracts(project_root: Path, *chapters: int) -> None:
+    """写入当前 CanonLedger 合同，不创建任何旧状态入口。"""
+    story_root = project_root / ".story-system"
+    (story_root / "chapters").mkdir(parents=True, exist_ok=True)
+    (story_root / "reviews").mkdir(parents=True, exist_ok=True)
+    (story_root / "commits").mkdir(parents=True, exist_ok=True)
+    (story_root / "MASTER_SETTING.json").write_text(
+        json.dumps(
+            {
+                "meta": {"contract_type": "MASTER_SETTING"},
+                "initial_canon": {
+                    "protagonist": {
+                        "name": "萧炎",
+                        "location": "迦南学院",
+                        "power": {"realm": "斗师"},
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    for chapter in chapters:
+        (story_root / "chapters" / f"chapter_{chapter:03d}.json").write_text(
+            json.dumps(
+                {
+                    "meta": {"contract_type": "CHAPTER_BRIEF", "chapter": chapter},
+                    "chapter_directive": {
+                        "goal": f"推进第{chapter}章剧情",
+                        "must_cover_nodes": [],
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+
+def _accepted_commit(project_root: Path, chapter: int, extraction: dict) -> dict:
+    """通过当前四工件主链生成并投影一个已接受提交。"""
+    extraction = copy.deepcopy(extraction)
+    evidence_lines: list[str] = []
+    for event in extraction.get("accepted_events") or []:
+        if not isinstance(event, dict) or event.get("event_type") != "world_rule_revealed":
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        quote = str(payload.get("evidence_quote") or payload.get("rule_content") or "").strip()
+        if quote:
+            payload["evidence_quote"] = quote
+            evidence_lines.append(quote)
+    chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text(
+        "\n".join([f"第{chapter}章中文正文。", *evidence_lines]),
+        encoding="utf-8",
+    )
+    binding = build_chapter_binding(project_root, chapter)
+    payload = ChapterCommitService(project_root).build_commit(
+        chapter=chapter,
+        review_result=standard_review(binding),
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        disambiguation_result={"pending": [], "chapter_binding": binding},
+        extraction_result={
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [],
+            **extraction,
+            "chapter_binding": binding,
+        },
+    )
+    service = ChapterCommitService(project_root)
+    service.persist_commit(payload)
+    return service.apply_projections(payload)
+
+
+def _world_rule(event_id: str, domain: str, field: str, content: str) -> dict:
+    return {
+        "event_id": event_id,
+        "chapter": 1,
+        "event_type": "world_rule_revealed",
+        "subject": domain,
+        "payload": {
+            "domain": domain,
+            "field": field,
+            "rule_content": content,
+            "rule_category": "力量",
+            "scope": "global",
+            "evidence_quote": f"{domain}：{content}",
+        },
+    }
+
+
+def _open_loop(event_id: str, content: str, urgency: object) -> dict:
+    return {
+        "event_id": event_id,
+        "chapter": 1,
+        "event_type": "open_loop_created",
+        "subject": content,
+        "payload": {
+            "loop_id": event_id,
+            "content": content,
+            "expected_payoff": "大比",
+            "urgency": urgency,
+        },
+    }
 
 
 class TestAdapterSatisfiesProtocol:
@@ -49,7 +165,7 @@ class TestAdapterSatisfiesProtocol:
 class TestReadSummary:
     def test_read_existing_summary(self, tmp_path):
         cfg = _make_project(tmp_path)
-        summary_dir = cfg.webnovel_dir / "summaries"
+        summary_dir = cfg.canon_ledger_dir / "summaries"
         summary_dir.mkdir(parents=True, exist_ok=True)
         (summary_dir / "ch0010.md").write_text("第10章摘要", encoding="utf-8")
 
@@ -71,25 +187,25 @@ class TestQueryEntity:
 
     def test_query_existing_entity(self, tmp_path):
         cfg = _make_project(tmp_path)
-        # 写入包含实体的 state.json
-        state = {
-            "entities_v3": {
-                "角色": {
-                    "xiaoyan": {
-                        "name": "萧炎",
+        _write_contracts(tmp_path, 1)
+        _accepted_commit(
+            tmp_path,
+            1,
+            {
+                "entity_deltas": [
+                    {
+                        "entity_id": "xiaoyan",
+                        "canonical_name": "萧炎",
+                        "entity_type": "角色",
                         "tier": "核心",
                         "aliases": ["他"],
-                        "realm": "斗帝",
-                        "first_appearance": 1,
-                        "last_appearance": 100,
                     }
-                }
+                ],
+                "state_deltas": [
+                    {"entity_id": "xiaoyan", "field": "realm", "new": "斗帝"}
+                ],
             },
-            "state_changes": [
-                {"entity_id": "xiaoyan", "field": "realm", "old": "斗圣", "new": "斗帝", "chapter": 100}
-            ],
-        }
-        (cfg.state_file).write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        )
 
         adapter = MemoryContractAdapter(cfg)
         snap = adapter.query_entity("xiaoyan")
@@ -97,8 +213,7 @@ class TestQueryEntity:
         assert snap.name == "萧炎"
         assert snap.type == "角色"
         assert snap.tier == "核心"
-        assert "他" in snap.aliases
-        assert len(snap.recent_state_changes) == 1
+        assert len(snap.recent_state_changes) == 1, "实体状态必须来自已绑定提交"
 
 
 class TestQueryRules:
@@ -109,39 +224,26 @@ class TestQueryRules:
 
     def test_query_rules_with_data(self, tmp_path):
         cfg = _make_project(tmp_path)
-        # 写入 scratchpad 数据
-        from data_modules.memory.schema import MemoryItem
-        from data_modules.memory.store import ScratchpadManager
-
-        store = ScratchpadManager(cfg)
-        store.upsert_item(MemoryItem(
-            id="rule-1", layer="semantic", category="world_rule",
-            subject="力量体系", field="异火数量", value="23种",
-            status="active", source_chapter=1,
-        ))
+        _write_contracts(tmp_path, 1)
+        _accepted_commit(tmp_path, 1, {"accepted_events": [_world_rule("rule-1", "力量体系", "异火数量", "异火数量为23种")]})
 
         adapter = MemoryContractAdapter(cfg)
         rules = adapter.query_rules()
         assert len(rules) == 1
-        assert rules[0].value == "23种"
+        assert rules[0].value == "异火数量为23种"
         assert rules[0].domain == "力量体系"
 
     def test_query_rules_filter_by_domain(self, tmp_path):
         cfg = _make_project(tmp_path)
-        from data_modules.memory.schema import MemoryItem
-        from data_modules.memory.store import ScratchpadManager
-
-        store = ScratchpadManager(cfg)
-        store.upsert_item(MemoryItem(
-            id="rule-1", layer="semantic", category="world_rule",
-            subject="力量体系", field="异火数量", value="23种",
-            status="active", source_chapter=1,
-        ))
-        store.upsert_item(MemoryItem(
-            id="rule-2", layer="semantic", category="world_rule",
-            subject="社会结构", field="帝国数量", value="4个",
-            status="active", source_chapter=2,
-        ))
+        _write_contracts(tmp_path, 1)
+        _accepted_commit(
+            tmp_path,
+            1,
+            {"accepted_events": [
+                _world_rule("rule-1", "力量体系", "异火数量", "异火数量为23种"),
+                _world_rule("rule-2", "社会结构", "帝国数量", "帝国数量为4个"),
+            ]},
+        )
 
         adapter = MemoryContractAdapter(cfg)
         rules = adapter.query_rules(domain="力量体系")
@@ -157,16 +259,8 @@ class TestGetOpenLoops:
 
     def test_get_open_loops_with_data(self, tmp_path):
         cfg = _make_project(tmp_path)
-        from data_modules.memory.schema import MemoryItem
-        from data_modules.memory.store import ScratchpadManager
-
-        store = ScratchpadManager(cfg)
-        store.upsert_item(MemoryItem(
-            id="ol-1", layer="semantic", category="open_loop",
-            subject="三年之约", field="", value="萧炎与纳兰嫣然三年之约",
-            status="active", source_chapter=1,
-            payload={"expected_payoff": "大比", "urgency": 0.9},
-        ))
+        _write_contracts(tmp_path, 1)
+        _accepted_commit(tmp_path, 1, {"accepted_events": [_open_loop("ol-1", "萧炎与纳兰嫣然三年之约", 0.9)]})
 
         adapter = MemoryContractAdapter(cfg)
         loops = adapter.get_open_loops()
@@ -181,23 +275,15 @@ class TestGetOpenLoops:
         ``ValueError``，外层 ``except`` 兜底返回 ``[]``，所有伏笔同时丢失。
         """
         cfg = _make_project(tmp_path)
-        from data_modules.memory.schema import MemoryItem
-        from data_modules.memory.store import ScratchpadManager
-
-        store = ScratchpadManager(cfg)
-        # 模拟 LLM 写入的三种典型字符串值，外加一条正常数值
-        for idx, urgency in enumerate(["high", "medium", "low", 75]):
-            store.upsert_item(MemoryItem(
-                id=f"ol-str-{idx}",
-                layer="semantic",
-                category="open_loop",
-                subject=f"loop-{idx}",
-                field="",
-                value=f"伏笔 {idx}",
-                status="active",
-                source_chapter=idx + 1,
-                payload={"urgency": urgency, "expected_payoff": ""},
-            ))
+        _write_contracts(tmp_path, 1)
+        _accepted_commit(
+            tmp_path,
+            1,
+            {"accepted_events": [
+                _open_loop(f"ol-str-{idx}", f"伏笔 {idx}", urgency)
+                for idx, urgency in enumerate(["high", "medium", "low", 75])
+            ]},
+        )
 
         adapter = MemoryContractAdapter(cfg)
         loops = adapter.get_open_loops()
@@ -216,16 +302,14 @@ class TestGetTimeline:
 
     def test_get_timeline_filters_by_range(self, tmp_path):
         cfg = _make_project(tmp_path)
-        from data_modules.memory.schema import MemoryItem
-        from data_modules.memory.store import ScratchpadManager
-
-        store = ScratchpadManager(cfg)
-        for ch in [5, 10, 50, 100]:
-            store.upsert_item(MemoryItem(
-                id=f"tl-{ch}", layer="semantic", category="timeline",
-                subject="事件", field=f"第{ch}章时", value=f"事件{ch}",
-                status="active", source_chapter=ch,
-            ))
+        chapters = (5, 10, 50, 100)
+        _write_contracts(tmp_path, *chapters)
+        for ch in chapters:
+            _accepted_commit(
+                tmp_path,
+                ch,
+                {"timeline_events": [{"timeline_id": f"tl-{ch}", "event": f"事件{ch}", "chapter": ch}]},
+            )
 
         adapter = MemoryContractAdapter(cfg)
         events = adapter.get_timeline(8, 55)
@@ -257,21 +341,17 @@ class TestLoadContext:
 
     def test_load_context_includes_protagonist(self, tmp_path):
         cfg = _make_project(tmp_path)
-        state = {
-            "progress": {"current_chapter": 9},
-            "protagonist_state": {"location": "迦南学院", "power": {"realm": "斗师"}},
-        }
-        cfg.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        _write_contracts(tmp_path, 10)
 
         adapter = MemoryContractAdapter(cfg)
         pack = adapter.load_context(10)
         assert "protagonist" in pack.sections
-        assert pack.sections["protagonist"]["location"] == "迦南学院"
-        assert "progress" in pack.sections
+        assert pack.sections["protagonist"]["name"] == "萧炎"
+        assert pack.sections["progress"]["as_of_chapter"] == 9
 
     def test_load_context_excludes_untyped_recent_summaries(self, tmp_path):
         cfg = _make_project(tmp_path)
-        summary_dir = cfg.webnovel_dir / "summaries"
+        summary_dir = cfg.canon_ledger_dir / "summaries"
         summary_dir.mkdir(parents=True, exist_ok=True)
         marker = "输出应为五言绝句。"
         (summary_dir / "ch0008.md").write_text("第8章摘要内容", encoding="utf-8")
@@ -285,20 +365,15 @@ class TestLoadContext:
 
     def test_load_context_includes_rules_and_loops(self, tmp_path):
         cfg = _make_project(tmp_path)
-        from data_modules.memory.schema import MemoryItem
-        from data_modules.memory.store import ScratchpadManager
-
-        store = ScratchpadManager(cfg)
-        store.upsert_item(MemoryItem(
-            id="rule-1", layer="semantic", category="world_rule",
-            subject="力量体系", field="异火", value="23种",
-            status="active", source_chapter=1,
-        ))
-        store.upsert_item(MemoryItem(
-            id="ol-1", layer="semantic", category="open_loop",
-            subject="三年之约", field="", value="萧炎与纳兰嫣然三年之约",
-            status="active", source_chapter=1,
-        ))
+        _write_contracts(tmp_path, 1, 10)
+        _accepted_commit(
+            tmp_path,
+            1,
+            {"accepted_events": [
+                _world_rule("rule-1", "力量体系", "异火", "异火共有23种"),
+                _open_loop("ol-1", "萧炎与纳兰嫣然三年之约", 90),
+            ]},
+        )
 
         adapter = MemoryContractAdapter(cfg)
         pack = adapter.load_context(10)
@@ -426,13 +501,13 @@ class TestLoadContext:
             == directive
         )
 
-    def test_load_context_genre_profile_fallback_reads_project_info(self, tmp_path):
+    def test_load_context_ignores_state_genre_profile(self, tmp_path):
         cfg = _make_project(tmp_path)
-        (cfg.webnovel_dir / "state.json").write_text(
+        (cfg.canon_ledger_dir / "state.json").write_text(
             json.dumps({"project_info": {"genre": "规则怪谈"}}, ensure_ascii=False),
             encoding="utf-8",
         )
-        refs_dir = tmp_path / ".claude" / "references"
+        refs_dir = tmp_path / ".cursor" / "references"
         refs_dir.mkdir(parents=True, exist_ok=True)
         (refs_dir / "genre-profiles.md").write_text("## 规则怪谈\n- 规则优先", encoding="utf-8")
 
@@ -440,6 +515,7 @@ class TestLoadContext:
         pack = adapter.load_context(1)
 
         assert "genre_profile_excerpt" not in pack.sections
+        assert "规则优先" not in json.dumps(pack.to_dict(), ensure_ascii=False)
 
     def test_load_context_prefers_actual_latest_commit_status(self, tmp_path):
         cfg = _make_project(tmp_path)
@@ -481,19 +557,18 @@ class TestCommitChapter:
     def test_commit_chapter_basic(self, tmp_path):
         cfg = _make_project(tmp_path)
         adapter = MemoryContractAdapter(cfg)
-        result = adapter.commit_chapter(1, {
-            "entities_appeared": [{"id": "xiaoyan", "type": "角色"}],
-            "entities_new": [],
-            "state_changes": [],
-            "relationships_new": [],
-        })
-        assert isinstance(result, CommitResult)
-        assert result.chapter == 1
-        assert result.entities_updated == 1
+        with pytest.raises(ValueError, match="四个绑定工件"):
+            adapter.commit_chapter(1, {
+                "entities_appeared": [{"id": "xiaoyan", "type": "角色"}],
+                "entities_new": [],
+                "state_changes": [],
+                "relationships_new": [],
+            })
 
     def test_commit_chapter_delegates_to_chapter_commit_mainline(self, tmp_path):
         cfg = _make_project(tmp_path)
         adapter = MemoryContractAdapter(cfg)
+        _write_contracts(tmp_path, 3)
         chapter_path = tmp_path / "正文" / "第0003章.md"
         chapter_path.parent.mkdir(parents=True, exist_ok=True)
         chapter_path.write_text("第3章最终正文\n", encoding="utf-8")
@@ -506,8 +581,8 @@ class TestCommitChapter:
             {
                 "review_result": standard_review(binding),
                 "fulfillment_result": {
-                    "planned_nodes": ["发现陷阱"],
-                    "covered_nodes": ["发现陷阱"],
+                    "planned_nodes": [],
+                    "covered_nodes": [],
                     "missed_nodes": [],
                     "extra_nodes": [],
                     "chapter_binding": binding,
@@ -533,61 +608,45 @@ class TestCommitChapter:
 
 def test_load_context_keeps_all_hard_constraints_under_tiny_budget(tmp_path):
     cfg = _make_project(tmp_path)
-    from data_modules.memory.schema import MemoryItem
-    from data_modules.memory.store import ScratchpadManager
-
-    store = ScratchpadManager(cfg)
-    for index in range(6):
-        store.upsert_item(
-            MemoryItem(
-                id=f"rule-{index}", layer="semantic", category="world_rule",
-                subject="global", field=f"rule_{index}", value=f"规则{index}",
-                source_chapter=1,
-            )
-        )
-    for index, urgency in enumerate((1, 99, 20, 80)):
-        store.upsert_item(
-            MemoryItem(
-                id=f"loop-{index}", layer="semantic", category="open_loop",
-                subject=f"伏笔{index}", field="status", value=f"伏笔{index}尚未回收",
-                payload={"lifecycle_id": f"loop-{index}", "urgency": urgency},
-                source_chapter=1,
-            )
-        )
-    for index in range(2):
-        store.upsert_item(
-            MemoryItem(
-                id=f"promise-{index}", layer="semantic", category="reader_promise",
-                subject=f"承诺{index}", field="promise", value=f"承诺{index}未兑现",
-                payload={"lifecycle_id": f"promise-{index}"}, source_chapter=1,
-            )
-        )
-        store.upsert_item(
-            MemoryItem(
-                id=f"rel-{index}", layer="semantic", category="relationship",
-                subject=f"hero-{index}", field=f"ally-{index}", value="盟友",
-                source_chapter=1,
-            )
-        )
-    (cfg.webnovel_dir / "summaries" / "ch0099.md").write_text(
+    _write_contracts(tmp_path, 1, 100)
+    events = [
+        _world_rule(f"rule-{index}", "灵气体系", f"规则编号{index}", f"灵气规则{index}")
+        for index in range(6)
+    ]
+    events.extend(
+        _open_loop(f"loop-{index}", f"伏笔{index}尚未回收", urgency)
+        for index, urgency in enumerate((1, 99, 20, 80))
+    )
+    events.extend(
+        {
+            "event_id": f"promise-{index}",
+            "chapter": 1,
+            "event_type": "promise_created",
+            "subject": f"承诺{index}",
+            "payload": {"promise_id": f"promise-{index}", "content": f"承诺{index}未兑现"},
+        }
+        for index in range(2)
+    )
+    _accepted_commit(tmp_path, 1, {"accepted_events": events})
+    (cfg.canon_ledger_dir / "summaries" / "ch0099.md").write_text(
         "这是一段会被预算裁剪的软摘要" * 20, encoding="utf-8"
     )
 
     pack = MemoryContractAdapter(cfg).load_context(100, budget_tokens=1)
 
-    assert len(pack.sections["hard_constraints"]) == 14
+    assert len(pack.sections["hard_constraints"]) == 12
     categories = [item["category"] for item in pack.sections["hard_constraints"]]
     assert categories.count("world_rule") == 6
     assert categories.count("open_loop") == 4
     assert categories.count("reader_promise") == 2
-    assert categories.count("relationship") == 2
     loops = [
         item for item in pack.sections["hard_constraints"]
         if item["category"] == "open_loop"
     ]
-    assert [item["payload"]["urgency"] for item in loops] == [
-        99.0, 80.0, 20.0, 1.0
-    ]
+    assert sorted(
+        (float(item["payload"]["urgency"]) for item in loops),
+        reverse=True,
+    ) == [99.0, 80.0, 20.0, 1.0]
     assert "recent_summaries" not in pack.sections
     assert pack.budget_used_tokens > 0
     assert pack.budget["used_tokens"] == pack.budget_used_tokens
@@ -722,8 +781,9 @@ def test_load_context_blocks_projected_progress_without_as_of_marker(tmp_path):
     pack = MemoryContractAdapter(cfg).load_context(2)
 
     assert pack.completeness["status"] == "blocked"
-    assert "progress" not in pack.sections
-    assert "state_as_of_chapter" in pack.completeness["missing_sources"]
+    assert pack.sections["progress"]["canonical_chapters"] == []
+    assert pack.completeness["source_status"]["state"]["status"] == "excluded_projection"
+    assert "volumes_completed" not in json.dumps(pack.to_dict(), ensure_ascii=False)
 
 
 @pytest.mark.parametrize(

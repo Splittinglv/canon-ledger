@@ -18,7 +18,7 @@ from data_modules.review_schema import (
 def _binding(chapter: int) -> dict:
     raw = "待审正文".encode("utf-8")
     return {
-        "schema_version": "webnovel-chapter-content-binding/v1",
+        "schema_version": "canon-ledger-chapter-content-binding/v1",
         "chapter": chapter,
         "path": f"正文/第{chapter:04d}章.md",
         "sha256": hashlib.sha256(raw).hexdigest(),

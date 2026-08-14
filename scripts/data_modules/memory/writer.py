@@ -64,7 +64,7 @@ class MemoryWriter:
     def _coerce_loop_content(payload: Dict[str, Any], event: Dict[str, Any]) -> str:
         """从 open_loop 事件 payload 多个候选字段里取出有意义的悬念内容。
 
-        优先级：content（旧 schema）→ unanswered_question（信息悬疑）
+        优先级：content → unanswered_question（信息悬疑）
         → loop_type + description（结构化）→ description → subject 兜底。
         若兜底到 subject（通常是角色 ID），加上 loop_type 前缀避免变成纯 ID。
         """
@@ -223,15 +223,18 @@ class MemoryWriter:
             )
             self._upsert(item, stats)
 
-        # Stage 4: Data Agent 深度提取扩展
-        memory_facts = result.get("memory_facts") or {}
-        if isinstance(memory_facts, dict):
-            self._apply_memory_facts(chapter, memory_facts, stats)
+        self._apply_consistency_facts(chapter, result, stats)
 
         return stats
 
-    def _apply_memory_facts(self, chapter: int, memory_facts: Dict[str, Any], stats: Dict[str, Any]) -> None:
-        timeline_events = memory_facts.get("timeline_events") or []
+    def _apply_consistency_facts(
+        self,
+        chapter: int,
+        facts: Dict[str, Any],
+        stats: Dict[str, Any],
+    ) -> None:
+        """把当前提交的一等时间线与世界规则写入可重建暂存投影。"""
+        timeline_events = facts.get("timeline_events") or []
         for row in timeline_events:
             if not isinstance(row, dict):
                 continue
@@ -244,9 +247,8 @@ class MemoryWriter:
                 source_chapter = int(chapter)
             timeline_id = str(row.get("timeline_id") or "").strip()
             if not timeline_id:
-                # Compatibility for the pre-commit timeline schema. New mainline
-                # rows are normalized before reaching this point.
-                timeline_id = f"legacy-{source_chapter}-{hashlib.sha1(event.encode('utf-8')).hexdigest()[:10]}"
+                stats["warnings"].append("时间线事件缺少 timeline_id，已拒绝写入")
+                continue
             item = MemoryItem(
                 id=self._stable_item_id("timeline", timeline_id),
                 layer="semantic",
@@ -265,7 +267,7 @@ class MemoryWriter:
             )
             self._upsert(item, stats)
 
-        world_rules = memory_facts.get("world_rules") or []
+        world_rules = facts.get("world_rules") or []
         for row in world_rules:
             if not isinstance(row, dict):
                 continue
@@ -298,52 +300,7 @@ class MemoryWriter:
                     "rule_text": rule,
                 },
                 source_chapter=int(chapter),
-                evidence=[f"memory_facts:world_rule:{chapter}"],
-            )
-            self._upsert(item, stats)
-
-        open_loops = memory_facts.get("open_loops") or []
-        for row in open_loops:
-            if not isinstance(row, dict):
-                continue
-            content = str(row.get("content", "") or "").strip()
-            if not content:
-                continue
-            item = MemoryItem(
-                id=self._item_id("open_loop", content, "status", chapter),
-                layer="semantic",
-                category="open_loop",
-                subject=content,
-                field="status",
-                value=content,
-                payload={
-                    "urgency": coerce_urgency(row.get("urgency")),
-                    "planted_chapter": row.get("planted_chapter"),
-                    "expected_payoff": row.get("expected_payoff"),
-                    "status": row.get("status"),
-                },
-                source_chapter=int(chapter),
-                evidence=[f"memory_facts:open_loop:{chapter}"],
-            )
-            self._upsert(item, stats)
-
-        reader_promises = memory_facts.get("reader_promises") or []
-        for row in reader_promises:
-            if not isinstance(row, dict):
-                continue
-            content = str(row.get("content", "") or "").strip()
-            if not content:
-                continue
-            item = MemoryItem(
-                id=self._item_id("reader_promise", content, "promise", chapter),
-                layer="semantic",
-                category="reader_promise",
-                subject=content,
-                field="promise",
-                value=content,
-                payload={"promise_type": row.get("type"), "target": row.get("target")},
-                source_chapter=int(chapter),
-                evidence=[f"memory_facts:reader_promise:{chapter}"],
+                evidence=[f"chapter_commit:world_rule:{chapter}"],
             )
             self._upsert(item, stats)
 
@@ -384,9 +341,6 @@ class MemoryWriter:
                         value=content,
                         payload={
                             "lifecycle_id": lifecycle_id,
-                            "legacy_item_id": self._item_id(
-                                "open_loop", content, "status", chapter
-                            ),
                             "lifecycle_status": "active",
                             "urgency": coerce_urgency(payload.get("urgency")),
                             "planted_chapter": payload.get("planted_chapter") or source_chapter,
@@ -418,9 +372,6 @@ class MemoryWriter:
                         value=content,
                         payload={
                             "lifecycle_id": lifecycle_id,
-                            "legacy_item_id": self._item_id(
-                                "reader_promise", content, "promise", chapter
-                            ),
                             "lifecycle_status": "active",
                             "promise_type": payload.get("type") or "promise_created",
                             "target": payload.get("target") or event.get("subject") or "",
@@ -550,14 +501,9 @@ class MemoryWriter:
             }
         creations, resolutions, _ = self._lifecycle_events(accepted_events, chapter)
 
-        legacy_memory_facts = commit_payload.get("extraction_result", {}).get("memory_facts")
-        if not isinstance(legacy_memory_facts, dict):
-            legacy_memory_facts = {}
-        memory_facts: Dict[str, Any] = {
+        consistency_facts: Dict[str, Any] = {
             "timeline_events": list(extraction_list(commit_payload, "timeline_events")),
-            "world_rules": list(legacy_memory_facts.get("world_rules") or []),
-            "open_loops": list(legacy_memory_facts.get("open_loops") or []),
-            "reader_promises": list(legacy_memory_facts.get("reader_promises") or []),
+            "world_rules": [],
         }
         for event in accepted_events:
             if not isinstance(event, dict):
@@ -574,7 +520,7 @@ class MemoryWriter:
                     event.get("subject"),
                 )
                 if normalized_rule is not None:
-                    memory_facts["world_rules"].append(
+                    consistency_facts["world_rules"].append(
                         {
                             "rule": normalized_rule["rule_content"],
                             "rule_category": normalized_rule["rule_category"],
@@ -625,7 +571,7 @@ class MemoryWriter:
             ],
             "state_changes": list(extraction_list(commit_payload, "state_deltas")),
             "relationships_new": relationship_rows,
-            "memory_facts": memory_facts,
+            **consistency_facts,
         }
         stats = self.update_from_chapter_result(chapter, result)
         stats["items_resolved"] = 0
@@ -633,7 +579,7 @@ class MemoryWriter:
 
         # Apply all creations before closures so a deliberately same-chapter
         # create/resolve pair is deterministic.  Existing items are preserved,
-        # which makes old creation retries unable to reopen later resolutions.
+        # 因而延迟到达的创建重放也不能重新打开已关闭义务。
         for item in creations:
             outcome = self.store.upsert_lifecycle_item(item)
             stats["items_added"] += int(outcome.get("added", 0))

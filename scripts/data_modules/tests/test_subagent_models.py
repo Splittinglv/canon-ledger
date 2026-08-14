@@ -53,7 +53,7 @@ def test_project_overrides_user_and_default(tmp_path):
     )
     project_root = tmp_path / "book"
     _write_json(
-        project_root / ".webnovel" / "subagent-models.json",
+        project_root / ".canon-ledger" / "subagent-models.json",
         {
             "default": "inherit",
             "agents": {"data-agent": "kimi-k3-max"},
@@ -73,7 +73,7 @@ def test_project_overrides_user_and_default(tmp_path):
 def test_project_default_applies_when_agent_omitted(tmp_path):
     project_root = tmp_path / "book"
     _write_json(
-        project_root / ".webnovel" / "subagent-models.json",
+        project_root / ".canon-ledger" / "subagent-models.json",
         {"default": "kimi-k3-max", "agents": {}},
     )
     report = resolve_subagent_models(
@@ -88,7 +88,7 @@ def test_project_default_applies_when_agent_omitted(tmp_path):
 
 def test_corrupt_project_file_warns_and_inherits(tmp_path):
     project_root = tmp_path / "book"
-    config = project_root / ".webnovel" / "subagent-models.json"
+    config = project_root / ".canon-ledger" / "subagent-models.json"
     config.parent.mkdir(parents=True)
     config.write_text("{not json", encoding="utf-8")
     report = resolve_subagent_models(
@@ -102,7 +102,7 @@ def test_corrupt_project_file_warns_and_inherits(tmp_path):
 def test_text_format_includes_pass_flag(tmp_path):
     project_root = tmp_path / "book"
     _write_json(
-        project_root / ".webnovel" / "subagent-models.json",
+        project_root / ".canon-ledger" / "subagent-models.json",
         {"agents": {"data-agent": "kimi-k3-max"}},
     )
     report = resolve_subagent_models(

@@ -23,7 +23,7 @@ class EventLogStore:
     @contextmanager
     def _connect(self, *, row_factory: bool = False) -> Iterator[sqlite3.Connection]:
         """统一 SQLite 连接管理，确保连接始终关闭。"""
-        db_path = self.project_root / ".webnovel" / "index.db"
+        db_path = self.project_root / ".canon-ledger" / "index.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(db_path))
         if row_factory:
@@ -58,7 +58,7 @@ class EventLogStore:
         return list(read_json_if_exists(self.paths.event_json(chapter)) or [])
 
     def list_recent(self, chapter: int | None = None, limit: int = 200) -> List[Dict[str, Any]]:
-        db_path = self.project_root / ".webnovel" / "index.db"
+        db_path = self.project_root / ".canon-ledger" / "index.db"
         if not db_path.is_file():
             return []
         with self._connect(row_factory=True) as conn:
@@ -106,7 +106,7 @@ class EventLogStore:
         return result
 
     def health(self) -> Dict[str, Any]:
-        db_path = self.project_root / ".webnovel" / "index.db"
+        db_path = self.project_root / ".canon-ledger" / "index.db"
         file_count = len(list(self.paths.events_dir.glob("chapter_*.events.json")))
         sqlite_rows = 0
         if db_path.is_file():

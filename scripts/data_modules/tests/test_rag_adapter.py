@@ -61,6 +61,14 @@ class StubClientRerankFailure(StubClient):
         return []
 
 
+class CloseTrackingClient(StubClient):
+    def __init__(self):
+        self.closed = False
+
+    async def close(self):
+        self.closed = True
+
+
 @pytest.fixture
 def temp_project(tmp_path, monkeypatch):
     cfg = DataModulesConfig.from_project_root(tmp_path)
@@ -69,6 +77,21 @@ def temp_project(tmp_path, monkeypatch):
         cfg.state_file.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(rag_module, "get_client", lambda config: StubClient())
     return cfg
+
+
+@pytest.mark.asyncio
+async def test_adapter_context_closes_owned_client(tmp_path, monkeypatch):
+    """适配器退出异步上下文时必须释放自己拥有的客户端。"""
+    cfg = DataModulesConfig.from_project_root(tmp_path)
+    cfg.ensure_dirs()
+    client = CloseTrackingClient()
+    monkeypatch.setattr(rag_module, "get_client", lambda config: client)
+
+    async with RAGAdapter(cfg) as adapter:
+        assert adapter.api_client is client
+        assert client.closed is False
+
+    assert client.closed is True
 
 
 @pytest.mark.asyncio
@@ -579,7 +602,7 @@ def test_init_db_migrates_legacy_vectors_schema(tmp_path, monkeypatch):
         assert row is not None
         assert row[0] == "scene"
 
-    backup_dir = cfg.webnovel_dir / "backups"
+    backup_dir = cfg.canon_ledger_dir / "backups"
     backups = list(backup_dir.glob("vectors.db.schema_migration.v*.bak"))
     assert backups
 

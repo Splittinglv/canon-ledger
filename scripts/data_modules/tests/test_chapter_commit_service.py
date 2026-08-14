@@ -39,6 +39,25 @@ def _chapter_binding(project_root, chapter, content=None):
 def _build_commit(service, project_root, **kwargs):
     binding = _chapter_binding(project_root, int(kwargs["chapter"]))
     bound = dict(kwargs)
+    story_root = project_root / ".story-system"
+    outline_root = project_root / "大纲"
+    contract_path = story_root / "chapters" / f"chapter_{int(kwargs['chapter']):03d}.json"
+    if not story_root.exists() and not outline_root.exists():
+        contract_path.parent.mkdir(parents=True, exist_ok=True)
+        planned = list((kwargs.get("fulfillment_result") or {}).get("planned_nodes") or [])
+        contract_path.write_text(
+            json.dumps(
+                {
+                    "meta": {"chapter": int(kwargs["chapter"])},
+                    "chapter_directive": {
+                        "goal": "验证当前章节提交主链",
+                        "must_cover_nodes": planned,
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
     for key in _ARTIFACT_KEYS:
         artifact = bound.get(key)
         if isinstance(artifact, dict):
@@ -284,6 +303,18 @@ def test_accepted_commit_persists_authoritative_goal_in_outline_snapshot(tmp_pat
 
 
 def test_commit_service_rejects_outline_nodes_missing_from_contract(tmp_path):
+    contract_path = tmp_path / ".story-system" / "chapters" / "chapter_003.json"
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(
+        json.dumps(
+            {
+                "meta": {"chapter": 3},
+                "chapter_directive": {"goal": "识别封蜡缺口"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     outline_path = tmp_path / "大纲" / "第3章-账簿.md"
     outline_path.parent.mkdir(parents=True, exist_ok=True)
     outline_path.write_text(
@@ -631,8 +662,8 @@ def test_apply_projections_normalizes_events_before_router_inspection(
 def test_apply_projections_updates_state_for_rejected_commit(tmp_path):
     import json
 
-    (tmp_path / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (tmp_path / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
 
     service = ChapterCommitService(tmp_path)
     payload = _build_commit(service, tmp_path,
@@ -650,7 +681,7 @@ def test_apply_projections_updates_state_for_rejected_commit(tmp_path):
 
     projected = service.apply_projections(payload)
 
-    state = json.loads((tmp_path / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    state = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     assert projected["projection_status"]["state"] == "done"
     assert state["progress"]["chapter_status"]["7"] == "chapter_rejected"
 
@@ -661,6 +692,21 @@ def test_chapter_commit_cli_builds_and_persists_commit(tmp_path, monkeypatch):
     disambiguation_path = tmp_path / "disambiguation.json"
     extraction_path = tmp_path / "extraction.json"
     binding = _chapter_binding(tmp_path, 3)
+    contract_path = tmp_path / ".story-system" / "chapters" / "chapter_003.json"
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(
+        json.dumps(
+            {
+                "meta": {"chapter": 3},
+                "chapter_directive": {
+                    "goal": "确认陷阱的来源",
+                    "must_cover_nodes": ["发现陷阱"],
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     _write_artifact = lambda path, payload: path.write_text(
         json.dumps({**payload, "chapter_binding": binding}, ensure_ascii=False),
         encoding="utf-8",

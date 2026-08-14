@@ -17,19 +17,23 @@ from runtime_compat import normalize_windows_path
 
 from .context_weights import TEMPLATE_WEIGHTS_DYNAMIC_DEFAULT
 
-def _get_user_claude_root() -> Path:
-    raw = os.environ.get("WEBNOVEL_CLAUDE_HOME") or os.environ.get("CLAUDE_HOME")
-    if raw:
-        try:
-            return normalize_windows_path(raw).expanduser().resolve()
-        except Exception:
-            return normalize_windows_path(raw).expanduser()
-    return (Path.home() / ".claude").resolve()
+GLOBAL_CONFIG_DIR_NAMES = ("canon-ledger",)
+
+_PROJECT_ENV_FIELDS = {
+    "EMBED_BASE_URL": "embed_base_url",
+    "EMBED_MODEL": "embed_model",
+    "EMBED_API_KEY": "embed_api_key",
+    "RERANK_BASE_URL": "rerank_base_url",
+    "RERANK_MODEL": "rerank_model",
+    "RERANK_API_KEY": "rerank_api_key",
+}
 
 
-def _load_dotenv_file(env_path: Path, *, override: bool = False) -> bool:
+def _read_dotenv_file(env_path: Path) -> dict[str, str]:
+    """读取简单的 KEY=VALUE 文件，不修改进程环境。"""
+    values: dict[str, str] = {}
     if not env_path.exists():
-        return False
+        return values
     try:
         with open(env_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -37,12 +41,21 @@ def _load_dotenv_file(env_path: Path, *, override: bool = False) -> bool:
                 if line and not line.startswith("#") and "=" in line:
                     key, _, value = line.partition("=")
                     key = key.strip()
-                    value = value.strip()
-                    if not key:
-                        continue
-                    # 默认不覆盖已有环境变量（保持“显式 > .env”优先级）
-                    if override or key not in os.environ:
-                        os.environ[key] = value
+                    if key:
+                        values[key] = value.strip()
+    except Exception:
+        return {}
+    return values
+
+
+def _load_dotenv_file(env_path: Path, *, override: bool = False) -> bool:
+    if not env_path.exists():
+        return False
+    try:
+        for key, value in _read_dotenv_file(env_path).items():
+            # 默认不覆盖已有环境变量（保持“显式 > .env”优先级）
+            if override or key not in os.environ:
+                os.environ[key] = value
         return True
     except Exception:
         return False
@@ -54,27 +67,16 @@ def _load_dotenv():
 
     约定：
     - 项目级 `.env`（当前工作目录下）优先；
-    - 全局 `.env` 作为兜底：`~/.cursor/webnovel-writer/.env`，其次 `~/.claude/webnovel-writer/.env`
+    - 全局 `.env` 仅从 `~/.cursor/canon-ledger/.env` 读取。
     """
     # 1) 当前目录（常见：用户从项目根目录执行）
     _load_dotenv_file(Path.cwd() / ".env", override=False)
 
     # 2) 用户级全局（常见：skills/agents 全局安装，API key 放这里最省心）
     cursor_home = Path(os.environ.get("CURSOR_HOME") or (Path.home() / ".cursor"))
-    _load_dotenv_file(cursor_home / "webnovel-writer" / ".env", override=False)
-    global_env = _get_user_claude_root() / "webnovel-writer" / ".env"
-    _load_dotenv_file(global_env, override=False)
+    for directory in GLOBAL_CONFIG_DIR_NAMES:
+        _load_dotenv_file(cursor_home / directory / ".env", override=False)
 
-
-def _load_project_dotenv(project_root: Path) -> None:
-    """
-    加载某个项目根目录下的 `.env`（best-effort）。
-    注意：不覆盖已存在环境变量，避免意外串台。
-    """
-    try:
-        _load_dotenv_file(Path(project_root) / ".env", override=False)
-    except Exception:
-        return
 
 _load_dotenv()
 
@@ -97,20 +99,20 @@ class DataModulesConfig:
     project_root: Path = field(default_factory=lambda: Path.cwd())
 
     @property
-    def webnovel_dir(self) -> Path:
-        return self.project_root / ".webnovel"
+    def canon_ledger_dir(self) -> Path:
+        return self.project_root / ".canon-ledger"
 
     @property
     def state_file(self) -> Path:
-        return self.webnovel_dir / "state.json"
+        return self.canon_ledger_dir / "state.json"
 
     @property
     def scratchpad_file(self) -> Path:
-        return self.webnovel_dir / "memory_scratchpad.json"
+        return self.canon_ledger_dir / "memory_scratchpad.json"
 
     @property
     def index_db(self) -> Path:
-        return self.webnovel_dir / "index.db"
+        return self.canon_ledger_dir / "index.db"
 
     # v5.1 引入: alias_index_file 已废弃，别名存储在 index.db aliases 表
 
@@ -351,21 +353,26 @@ class DataModulesConfig:
     # ================= RAG 存储 =================
     @property
     def rag_db(self) -> Path:
-        return self.webnovel_dir / "rag.db"
+        return self.canon_ledger_dir / "rag.db"
 
     @property
     def vector_db(self) -> Path:
-        return self.webnovel_dir / "vectors.db"
+        return self.canon_ledger_dir / "vectors.db"
 
     def ensure_dirs(self):
-        self.webnovel_dir.mkdir(parents=True, exist_ok=True)
+        self.canon_ledger_dir.mkdir(parents=True, exist_ok=True)
 
     @classmethod
     def from_project_root(cls, project_root: str | Path) -> "DataModulesConfig":
         root = normalize_windows_path(project_root).expanduser().resolve()
-        # 在构造配置前加载项目级 `.env`，以确保 EMBED_*/RERANK_* 等字段可生效
-        _load_project_dotenv(root)
-        return cls(project_root=root)
+        config = cls(project_root=root)
+        # 项目配置只注入当前实例，不污染进程环境。否则先打开项目甲后再打开
+        # 项目乙时，项目乙会继承项目甲的密钥和端点，甚至向错误服务发请求。
+        project_values = _read_dotenv_file(root / ".env")
+        for env_name, field_name in _PROJECT_ENV_FIELDS.items():
+            if env_name not in os.environ and env_name in project_values:
+                setattr(config, field_name, project_values[env_name])
+        return config
 
 
 _default_config: Optional[DataModulesConfig] = None
@@ -378,9 +385,9 @@ def get_config(project_root: Optional[Path] = None) -> DataModulesConfig:
     if _default_config is None:
         # 默认不要盲目以 CWD 作为 project_root（很容易写到错误目录）。
         # 使用统一的 project_locator 自动探测：
-        # - 支持 WEBNOVEL_PROJECT_ROOT
-        # - 支持 `.cursor/webnovel-current-project` 与 `.claude/.webnovel-current-project` 指针文件
-        # - 支持从当前目录/父目录寻找 `.webnovel/state.json`
+        # - 支持 CANON_LEDGER_PROJECT_ROOT
+        # - 支持 `.cursor/canon-ledger-current-project` 指针文件
+        # - 支持从当前目录/父目录寻找 `.canon-ledger/state.json`
         from project_locator import resolve_project_root
 
         root = resolve_project_root()

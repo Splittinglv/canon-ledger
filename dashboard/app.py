@@ -1,5 +1,5 @@
 """
-Webnovel Dashboard - FastAPI 主应用
+CanonLedger Dashboard - FastAPI 主应用
 
 仅提供 GET 接口（严格只读）；所有文件读取经过 path_guard 防穿越校验。
 """
@@ -44,8 +44,8 @@ def _get_project_root() -> Path:
     return _project_root
 
 
-def _webnovel_dir() -> Path:
-    return _get_project_root() / ".webnovel"
+def _canon_ledger_dir() -> Path:
+    return _get_project_root() / ".canon-ledger"
 
 
 def _story_system_dir() -> Path:
@@ -66,7 +66,7 @@ def _ensure_scripts_dir_on_path() -> None:
 
 
 def _load_state_payload(*, required: bool = False) -> dict:
-    state_path = _webnovel_dir() / "state.json"
+    state_path = _canon_ledger_dir() / "state.json"
     if not state_path.is_file():
         if required:
             raise HTTPException(404, "state.json 不存在")
@@ -263,11 +263,11 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def _lifespan(_: FastAPI):
-        webnovel = _webnovel_dir()
+        canon_ledger = _canon_ledger_dir()
         story_system = _story_system_dir()
-        if webnovel.is_dir() or story_system.is_dir():
+        if canon_ledger.is_dir() or story_system.is_dir():
             _watcher.start(
-                watch_webnovel_dir=webnovel if webnovel.is_dir() else None,
+                watch_canon_ledger_dir=canon_ledger if canon_ledger.is_dir() else None,
                 watch_story_system_dir=story_system if story_system.is_dir() else None,
                 loop=asyncio.get_running_loop(),
             )
@@ -276,7 +276,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         finally:
             _watcher.stop()
 
-    app = FastAPI(title="Webnovel Dashboard", version="0.1.0", lifespan=_lifespan)
+    app = FastAPI(title="CanonLedger Dashboard", version="0.1.0", lifespan=_lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -303,7 +303,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
     # ===========================================================
 
     def _get_db() -> sqlite3.Connection:
-        db_path = _webnovel_dir() / "index.db"
+        db_path = _canon_ledger_dir() / "index.db"
         if not db_path.is_file():
             raise HTTPException(404, "index.db 不存在")
         conn = sqlite3.connect(str(db_path))
@@ -868,7 +868,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
 
     @app.get("/api/events")
     async def sse():
-        """Server-Sent Events 端点，推送 .webnovel/.story-system 的文件变更。"""
+        """Server-Sent Events 端点，推送 .canon-ledger/.story-system 的文件变更。"""
         q = _watcher.subscribe()
 
         async def _gen():
@@ -903,7 +903,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         @app.get("/")
         def no_frontend():
             return HTMLResponse(
-                "<h2>Webnovel Dashboard API is running</h2>"
+                "<h2>CanonLedger Dashboard API is running</h2>"
                 "<p>前端尚未构建。请先在 <code>dashboard/frontend</code> 目录执行 <code>npm run build</code>。</p>"
                 '<p>API 文档：<a href="/docs">/docs</a></p>'
             )

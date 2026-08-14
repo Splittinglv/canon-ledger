@@ -123,7 +123,7 @@ def test_hard_constraints_ignore_outline_window_and_soft_item_budget(tmp_path):
     pack = MemoryOrchestrator(cfg).build_memory_pack(100)
 
     assert len(pack["hard_constraints"]) == 14
-    assert pack["active_constraints"] == pack["hard_constraints"]
+    assert "active_constraints" not in pack, "已废弃别名不得出现在当前记忆包"
     assert {item["category"] for item in pack["hard_constraints"]} == {
         "world_rule", "open_loop", "reader_promise", "relationship"
     }
@@ -145,7 +145,7 @@ def test_hard_only_read_is_side_effect_free_and_filters_creative_directives(tmp_
             source_chapter=1,
         )
     )
-    index_path = cfg.webnovel_dir / "index.db"
+    index_path = cfg.canon_ledger_dir / "index.db"
     if index_path.exists():
         index_path.unlink()
 

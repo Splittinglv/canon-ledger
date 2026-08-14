@@ -39,6 +39,21 @@ def _enable_craft_context(manager):
     manager.config.context_writing_score_persist_enabled = True
 
 
+def _write_master_contract(config, genre: str) -> None:
+    """写入当前体裁唯一来源：主设定合同。"""
+    config.story_system_dir.mkdir(parents=True, exist_ok=True)
+    (config.story_system_dir / "MASTER_SETTING.json").write_text(
+        json.dumps(
+            {
+                "meta": {"contract_type": "MASTER_SETTING"},
+                "route": {"primary_genre": genre},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_context_manager_build_and_filter(temp_project):
     state = {
         "progress": {"current_chapter": 1},
@@ -48,9 +63,9 @@ def test_context_manager_build_and_filter(temp_project):
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
     # preferences and memory
-    (temp_project.webnovel_dir / "preferences.json").write_text(json.dumps({"tone": "热血"}, ensure_ascii=False), encoding="utf-8")
+    (temp_project.canon_ledger_dir / "preferences.json").write_text(json.dumps({"tone": "热血"}, ensure_ascii=False), encoding="utf-8")
     marker = "AUDIT_UNTYPED_SOFT_MEMORY_MARKER"
-    (temp_project.webnovel_dir / "project_memory.json").write_text(
+    (temp_project.canon_ledger_dir / "project_memory.json").write_text(
         json.dumps({"notes": marker}, ensure_ascii=False), encoding="utf-8"
     )
 
@@ -129,7 +144,6 @@ def test_context_manager_uses_memory_orchestrator_for_working_when_enabled(temp_
                     "value": "能力不得超过既有境界",
                 }
             ],
-            "active_constraints": [],
             "recent_changes": [],
             "warnings": [],
             "stats": {"total": 0, "injected": 0, "filtered": 0, "conflicts": 0},
@@ -212,7 +226,7 @@ def test_context_manager_reads_only_hard_orchestrator_memory_when_soft_disabled(
     assert "semantic_memory" not in payload["long_term_memory"]
 
 
-def test_context_manager_accepts_legacy_active_constraints_key(temp_project, monkeypatch):
+def test_context_manager_rejects_retired_active_constraints_key(temp_project, monkeypatch):
     temp_project.state_file.write_text("{}", encoding="utf-8")
     temp_project.context_use_memory_orchestrator = False
 
@@ -221,7 +235,7 @@ def test_context_manager_accepts_legacy_active_constraints_key(temp_project, mon
         return {
             "active_constraints": [
                 {
-                    "id": "legacy-relationship",
+                    "id": "retired-relationship",
                     "category": "relationship",
                     "subject": "阿青",
                     "field": "掌柜",
@@ -237,18 +251,10 @@ def test_context_manager_accepts_legacy_active_constraints_key(temp_project, mon
 
     payload = ContextManager(temp_project).build_context(8)
 
-    assert payload["hard_constraints"] == [
-        {
-            "id": "legacy-relationship",
-            "category": "relationship",
-            "subject": "阿青",
-            "field": "掌柜",
-            "value": "互不信任",
-        }
-    ]
+    assert payload["hard_constraints"] == [], "已废弃字段不得恢复为硬约束"
 
 
-def test_context_manager_flattens_grouped_hard_constraints(temp_project, monkeypatch):
+def test_context_manager_rejects_grouped_hard_constraints(temp_project, monkeypatch):
     temp_project.state_file.write_text("{}", encoding="utf-8")
 
     def _fake_pack(self, chapter, task_type="write", *, include_soft=True):
@@ -269,12 +275,8 @@ def test_context_manager_flattens_grouped_hard_constraints(temp_project, monkeyp
 
     payload = ContextManager(temp_project).build_context(8)
 
-    assert [item["category"] for item in payload["hard_constraints"]] == [
-        "world_rule",
-        "open_loop",
-        "reader_promise",
-        "relationship",
-    ]
+    assert payload["hard_constraints"] == [], "当前接口只接受平铺的硬约束列表"
+    assert payload["context_completeness"]["status"] == "blocked"
 
 
 def test_context_manager_hard_only_empty_project_does_not_create_index_db(
@@ -604,7 +606,6 @@ def test_context_manager_loads_volume_outline_file(temp_project):
         "### 第2章：测试标题\n测试大纲\n\n### 第3章：下一章",
         encoding="utf-8",
     )
-
     manager = ContextManager(temp_project)
     payload = manager.build_context(2)
 
@@ -644,9 +645,14 @@ def test_context_manager_includes_story_contract_and_prewrite_validation(temp_pr
     (story_root / "chapters").mkdir(parents=True, exist_ok=True)
     (story_root / "chapters" / "chapter_003.json").write_text(
         json.dumps(
-            {
-                "meta": {"schema_version": "story-system/v1", "contract_type": "CHAPTER_BRIEF", "chapter": 3},
-                "override_allowed": {"chapter_focus": "发现陷阱"},
+                {
+                    "meta": {"schema_version": "story-system/v1", "contract_type": "CHAPTER_BRIEF", "chapter": 3},
+                        "chapter_directive": {
+                            "goal": "发现陷阱",
+                            "must_cover_nodes": ["发现陷阱"],
+                            "forbidden_zones": ["不可提前摊牌"],
+                        },
+                    "override_allowed": {"chapter_focus": "发现陷阱"},
                 "dynamic_context": [],
                 "source_trace": [],
             },
@@ -700,15 +706,15 @@ def test_context_manager_includes_story_contract_and_prewrite_validation(temp_pr
     assert "story_contract" in payload
     assert "prewrite_validation" in payload
     assert payload["story_contract"]["review_contract"]["meta"]["contract_type"] == "REVIEW_CONTRACT"
-    assert payload["prewrite_validation"]["fulfillment_seed"]["planned_nodes"] == ["发现陷阱"]
+    assert payload["story_contract"]["chapter_brief"]["chapter_directive"]["must_cover_nodes"] == ["发现陷阱"]
     assert payload["prewrite_validation"]["forbidden_zones"] == ["不可提前摊牌"]
     assert craft_marker not in json.dumps(payload, ensure_ascii=False)
     payload_keys = list(payload.keys())
     assert payload_keys.index("story_contract") < payload_keys.index("scene")
 
 
-def test_context_manager_prefers_contract_route_over_legacy_genre_profile(temp_project):
-    refs_dir = temp_project.project_root / ".claude" / "references"
+def test_context_manager_uses_contract_route_and_ignores_state_genre(temp_project):
+    refs_dir = temp_project.project_root / ".cursor" / "references"
     refs_dir.mkdir(parents=True, exist_ok=True)
     (refs_dir / "genre-profiles.md").write_text("## 都市\n- 旧画像提示", encoding="utf-8")
     (refs_dir / "reading-power-taxonomy.md").write_text("## 都市\n- 旧分类", encoding="utf-8")
@@ -779,7 +785,10 @@ def test_context_manager_exposes_latest_rejected_commit_not_last_accepted(temp_p
         json.dumps(
             {
                 "meta": {"schema_version": "story-system/v1", "contract_type": "CHAPTER_BRIEF", "chapter": 2},
-                "chapter_directive": {"goal": "韩立确认第二章的关键线索"},
+                "chapter_directive": {
+                    "goal": "韩立确认第二章的关键线索",
+                    "must_cover_nodes": [],
+                },
             },
             ensure_ascii=False,
         ),
@@ -789,7 +798,10 @@ def test_context_manager_exposes_latest_rejected_commit_not_last_accepted(temp_p
         json.dumps(
             {
                 "meta": {"schema_version": "story-system/v1", "contract_type": "CHAPTER_BRIEF", "chapter": 3},
-                "chapter_directive": {"goal": "韩立追查第三章的新线索"},
+                "chapter_directive": {
+                    "goal": "韩立追查第三章的新线索",
+                    "must_cover_nodes": [],
+                },
             },
             ensure_ascii=False,
         ),
@@ -916,6 +928,7 @@ def test_context_manager_includes_reader_signal_and_genre_profile(temp_project):
         "disambiguation_pending": [],
     }
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    _write_master_contract(temp_project, "xuanhuan")
 
     idx = IndexManager(temp_project)
     idx.save_chapter_reading_power(
@@ -955,7 +968,7 @@ def test_context_manager_includes_reader_signal_and_genre_profile(temp_project):
 
 
 def test_context_manager_genre_section_and_refs_extraction(temp_project):
-    refs_dir = temp_project.project_root / ".claude" / "references"
+    refs_dir = temp_project.project_root / ".cursor" / "references"
     refs_dir.mkdir(parents=True, exist_ok=True)
 
     (refs_dir / "genre-profiles.md").write_text(
@@ -982,7 +995,7 @@ def test_context_manager_genre_section_and_refs_extraction(temp_project):
     manager = ContextManager(temp_project)
     _enable_craft_context(manager)
 
-    profile = manager._load_genre_profile({"project": {"genre": "xuanhuan"}})
+    profile = manager._load_genre_profile("xuanhuan")
     assert profile["genre"] == "xuanhuan"
     assert "升级线清晰" in profile["profile_excerpt"]
     assert "钩子强度" in profile["taxonomy_excerpt"]
@@ -1005,7 +1018,7 @@ def test_context_manager_reader_signal_with_debt_and_disable_switch(temp_project
     assert manager._load_reader_signal(chapter=5) == {}
 
     manager.config.context_genre_profile_enabled = False
-    assert manager._load_genre_profile({"project": {"genre": "xuanhuan"}}) == {}
+    assert manager._load_genre_profile("xuanhuan") == {}
 
 
 def test_context_manager_includes_writing_guidance(temp_project):
@@ -1017,6 +1030,7 @@ def test_context_manager_includes_writing_guidance(temp_project):
         "disambiguation_pending": [],
     }
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    _write_master_contract(temp_project, "xuanhuan")
 
     idx = IndexManager(temp_project)
     idx.save_chapter_reading_power(
@@ -1066,7 +1080,7 @@ def test_context_manager_includes_writing_guidance(temp_project):
 
 
 def test_context_manager_dynamic_weights_and_composite_genre(temp_project):
-    refs_dir = temp_project.project_root / ".claude" / "references"
+    refs_dir = temp_project.project_root / ".cursor" / "references"
     refs_dir.mkdir(parents=True, exist_ok=True)
     (refs_dir / "genre-profiles.md").write_text(
         """
@@ -1097,6 +1111,7 @@ def test_context_manager_dynamic_weights_and_composite_genre(temp_project):
         "disambiguation_pending": [],
     }
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    _write_master_contract(temp_project, "xuanhuan")
 
     manager = ContextManager(temp_project)
     _enable_craft_context(manager)
@@ -1106,7 +1121,7 @@ def test_context_manager_dynamic_weights_and_composite_genre(temp_project):
     assert payload_early.get("meta", {}).get("context_weight_stage") == "early"
     assert payload_late.get("meta", {}).get("context_weight_stage") == "late"
 
-    profile = payload_early["genre_profile"]
+    profile = manager._load_genre_profile("xuanhuan+realistic")
     assert profile.get("composite") is True
     assert profile.get("genre") == "xuanhuan"
     assert isinstance(profile.get("genres"), list)
@@ -1116,7 +1131,7 @@ def test_context_manager_dynamic_weights_and_composite_genre(temp_project):
 
 
 def test_context_manager_genre_alias_guidance_and_heading_extraction(temp_project):
-    refs_dir = temp_project.project_root / ".claude" / "references"
+    refs_dir = temp_project.project_root / ".cursor" / "references"
     refs_dir.mkdir(parents=True, exist_ok=True)
     (refs_dir / "genre-profiles.md").write_text(
         """
@@ -1147,6 +1162,7 @@ def test_context_manager_genre_alias_guidance_and_heading_extraction(temp_projec
         "disambiguation_pending": [],
     }
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    _write_master_contract(temp_project, "电竞")
 
     manager = ContextManager(temp_project)
     _enable_craft_context(manager)
@@ -1160,7 +1176,7 @@ def test_context_manager_genre_alias_guidance_and_heading_extraction(temp_projec
 
 
 def test_context_manager_genre_aliases_normalized_for_profile_lookup(temp_project):
-    refs_dir = temp_project.project_root / ".claude" / "references"
+    refs_dir = temp_project.project_root / ".cursor" / "references"
     refs_dir.mkdir(parents=True, exist_ok=True)
     (refs_dir / "genre-profiles.md").write_text(
         """
@@ -1207,9 +1223,10 @@ def test_context_manager_genre_aliases_normalized_for_profile_lookup(temp_projec
         "disambiguation_pending": [],
     }
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    _write_master_contract(temp_project, "电竞文")
 
     payload = manager.build_context(20, template="plot")
-    profile = payload["genre_profile"]
+    profile = manager._load_genre_profile("电竞文+直播")
 
     assert profile.get("genre") == "电竞"
     assert "直播文" in (profile.get("genres") or [])
@@ -1224,6 +1241,7 @@ def test_context_manager_enables_methodology_for_xianxia(temp_project):
         "disambiguation_pending": [],
     }
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    _write_master_contract(temp_project, "修仙")
 
     manager = ContextManager(temp_project)
     _enable_craft_context(manager)
@@ -1248,6 +1266,7 @@ def test_context_manager_enables_methodology_for_non_xianxia_by_default(temp_pro
         "disambiguation_pending": [],
     }
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    _write_master_contract(temp_project, "xuanhuan")
 
     manager = ContextManager(temp_project)
     _enable_craft_context(manager)
@@ -1269,6 +1288,7 @@ def test_context_manager_allows_methodology_whitelist_restriction(temp_project):
         "disambiguation_pending": [],
     }
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    _write_master_contract(temp_project, "直播文")
 
     manager = ContextManager(temp_project)
     _enable_craft_context(manager)
@@ -1327,12 +1347,12 @@ def test_context_manager_composite_genre_boundary_three_plus(temp_project):
         "disambiguation_pending": [],
     }
 
-    profile = manager._load_genre_profile(state)
+    profile = manager._load_genre_profile(genre_raw)
     assert profile.get("composite") is True
     assert profile.get("genres") == ["电竞", "直播文", "克苏鲁"]
     assert profile.get("secondary_genres") == ["直播文", "克苏鲁"]
 
-    profile_again = manager._load_genre_profile(state)
+    profile_again = manager._load_genre_profile(genre_raw)
     assert profile_again.get("genres") == profile.get("genres")
 
 
@@ -1349,29 +1369,26 @@ def test_context_manager_dynamic_weights_from_config_override(temp_project):
     assert weights == {"core": 0.60, "scene": 0.20, "global": 0.20}
 
 
-def test_context_manager_genre_profile_fallbacks_to_project_info(temp_project):
+def test_context_manager_genre_profile_accepts_current_contract_label(temp_project):
     manager = ContextManager(temp_project)
     _enable_craft_context(manager)
 
-    profile = manager._load_genre_profile({"project_info": {"genre": "xuanhuan"}})
+    profile = manager._load_genre_profile("xuanhuan")
 
     assert profile.get("genre_raw") == "xuanhuan"
     assert profile.get("genre") == "xuanhuan"
 
 
-def test_context_manager_genre_profile_prefers_project_info_over_project(temp_project):
+def test_context_manager_runtime_genre_does_not_fallback_to_state(temp_project):
     manager = ContextManager(temp_project)
     _enable_craft_context(manager)
 
-    profile = manager._load_genre_profile(
-        {
-            "project": {"genre": "xuanhuan"},
-            "project_info": {"genre": "dushi"},
-        }
+    profile = manager._build_runtime_genre_profile(
+        {"project_info": {"genre": "dushi"}},
+        {"master_setting": {}},
     )
 
-    assert profile.get("genre_raw") == "dushi"
-    assert profile.get("genre") == "dushi"
+    assert profile == {}, "状态对象不得被当成体裁回退来源"
 
 
 def test_context_manager_includes_plot_structure_when_outline_has_nodes(temp_project):
@@ -1396,6 +1413,30 @@ CEN：决定将计就计
 """,
         encoding="utf-8",
     )
+    chapter_contract = temp_project.story_system_dir / "chapters" / "chapter_004.json"
+    chapter_contract.parent.mkdir(parents=True, exist_ok=True)
+    chapter_contract.write_text(
+        json.dumps(
+            {
+                "meta": {
+                    "schema_version": "story-system/v1",
+                    "contract_type": "CHAPTER_BRIEF",
+                    "chapter": 4,
+                },
+                "chapter_directive": {
+                    "goal": "在试炼中识别陷阱",
+                    "cbn": "进入试炼场",
+                    "cpns": ["观察规则", "发现陷阱"],
+                    "cen": "决定将计就计",
+                    "must_cover_nodes": ["发现陷阱"],
+                    "forbidden_zones": ["不能直接翻脸"],
+                    "source": "chapter_outline",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
     manager = ContextManager(temp_project)
     payload = manager.build_context(4)
@@ -1404,5 +1445,7 @@ CEN：决定将计就计
     assert plot_structure.get("cbn") == "进入试炼场"
     assert plot_structure.get("cpns") == ["观察规则", "发现陷阱"]
     assert plot_structure.get("cen") == "决定将计就计"
-    assert plot_structure.get("mandatory_nodes") == ["发现陷阱"]
-    assert plot_structure.get("prohibitions") == ["不能直接翻脸"]
+    assert plot_structure.get("must_cover_nodes") == ["发现陷阱"]
+    assert plot_structure.get("forbidden_zones") == ["不能直接翻脸"]
+    assert "mandatory_nodes" not in plot_structure
+    assert "prohibitions" not in plot_structure

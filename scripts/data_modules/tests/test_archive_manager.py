@@ -21,9 +21,9 @@ def _load_archive_module():
 
 @pytest.fixture
 def archive_env(tmp_path):
-    webnovel = tmp_path / ".webnovel"
-    webnovel.mkdir(parents=True, exist_ok=True)
-    state_path = webnovel / "state.json"
+    canon_ledger = tmp_path / ".canon-ledger"
+    canon_ledger.mkdir(parents=True, exist_ok=True)
+    state_path = canon_ledger / "state.json"
     state_path.write_text(
         '{"progress":{"current_chapter":10},"plot_threads":{},"review_checkpoints":[]}',
         encoding="utf-8",

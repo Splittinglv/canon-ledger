@@ -47,7 +47,7 @@ def _resolve_chapter(project_root: Path, chapter: int | None) -> int:
             return 0
 
     latest_story_system_chapter = _latest_story_system_chapter(project_root)
-    state_path = project_root / ".webnovel" / "state.json"
+    state_path = project_root / ".canon-ledger" / "state.json"
     if not state_path.is_file():
         return latest_story_system_chapter
 

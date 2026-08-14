@@ -37,7 +37,7 @@ from pathlib import Path
 import sys
 
 try:
-    d = Path(tempfile.mkdtemp(prefix="webnovel_writer_pytest_"))
+    d = Path(tempfile.mkdtemp(prefix="canon_ledger_pytest_"))
     # 既要能列目录，也要能写文件；否则 pytest 必挂。
     list(d.iterdir())
     (d / "probe.txt").write_text("ok", encoding="utf-8")

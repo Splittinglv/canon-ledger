@@ -16,7 +16,7 @@ def _emit_bootstrap_failure(hook_name: str, message: str) -> int:
                 {
                     "additional_context": json.dumps(
                         {
-                            "schema_version": "webnovel-session-runtime/v1",
+                            "schema_version": "canon-ledger-session-runtime/v1",
                             "status": "unavailable",
                             "reason": "python_runtime_unavailable",
                         },
@@ -48,7 +48,7 @@ def main() -> int:
     }
     script_name = hook_files.get(hook_name)
     if not script_name:
-        return _emit_bootstrap_failure(hook_name, "未知的 webnovel-writer hook。")
+        return _emit_bootstrap_failure(hook_name, "未知的 CanonLedger hook。")
 
     plugin_root = Path(__file__).resolve().parents[1]
     scripts_dir = plugin_root / "scripts"
@@ -61,7 +61,7 @@ def main() -> int:
     except Exception as exc:
         return _emit_bootstrap_failure(
             hook_name,
-            f"webnovel-writer 无法启动：{exc}",
+            f"CanonLedger 无法启动：{exc}",
         )
 
     target = Path(__file__).resolve().parent / script_name

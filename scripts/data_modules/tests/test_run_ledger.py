@@ -29,10 +29,10 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def _make_project(project_root: Path) -> None:
-    (project_root / ".webnovel" / "tmp").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "tmp").mkdir(parents=True, exist_ok=True)
     (project_root / ".story-system" / "commits").mkdir(parents=True, exist_ok=True)
     (project_root / "正文").mkdir(parents=True, exist_ok=True)
-    _write_json(project_root / ".webnovel" / "state.json", {"project_info": {"title": "测试书"}, "progress": {}})
+    _write_json(project_root / ".canon-ledger" / "state.json", {"project_info": {"title": "测试书"}, "progress": {}})
 
 
 def _commit_payload(project_root: Path, status: str = "accepted") -> dict:
@@ -95,7 +95,7 @@ def _write_bound_artifacts(project_root: Path) -> dict[str, Path]:
     paths: dict[str, Path] = {}
     for name, payload in payloads.items():
         filename = "review_results.json" if name == "review_result" else f"{name}.json"
-        path = project_root / ".webnovel" / "tmp" / filename
+        path = project_root / ".canon-ledger" / "tmp" / filename
         _write_json(path, payload)
         paths[name] = path
     return paths
@@ -116,14 +116,14 @@ def test_run_ledger_records_write_step_status(tmp_path: Path) -> None:
 
     assert entry["status"] == "completed"
     assert entry["outputs"]["chapter_file"]["exists"] is True
-    assert (tmp_path / ".webnovel" / "run_ledger.json").is_file()
+    assert (tmp_path / ".canon-ledger" / "run_ledger.json").is_file()
 
 
 def test_write_resume_skips_completed_draft_and_review(tmp_path: Path) -> None:
     _make_project(tmp_path)
     chapter_file = tmp_path / "正文" / "第0001章.md"
     chapter_file.write_text("正文\n", encoding="utf-8")
-    review_path = tmp_path / ".webnovel" / "tmp" / "review_results.json"
+    review_path = tmp_path / ".canon-ledger" / "tmp" / "review_results.json"
     _write_json(
         review_path,
         standard_review(build_chapter_binding(tmp_path, 1)),
@@ -190,12 +190,12 @@ def test_write_resume_reruns_commit_after_rejected_commit(tmp_path: Path) -> Non
     _make_project(tmp_path)
     chapter_file = tmp_path / "正文" / "第0001章.md"
     chapter_file.write_text("正文\n", encoding="utf-8")
-    review_path = tmp_path / ".webnovel" / "tmp" / "review_results.json"
+    review_path = tmp_path / ".canon-ledger" / "tmp" / "review_results.json"
     binding = build_chapter_binding(tmp_path, 1)
     _write_json(review_path, standard_review(binding, blocking_count=1))
-    fulfillment_path = tmp_path / ".webnovel" / "tmp" / "fulfillment_result.json"
-    disambiguation_path = tmp_path / ".webnovel" / "tmp" / "disambiguation_result.json"
-    extraction_path = tmp_path / ".webnovel" / "tmp" / "extraction_result.json"
+    fulfillment_path = tmp_path / ".canon-ledger" / "tmp" / "fulfillment_result.json"
+    disambiguation_path = tmp_path / ".canon-ledger" / "tmp" / "disambiguation_result.json"
+    extraction_path = tmp_path / ".canon-ledger" / "tmp" / "extraction_result.json"
     _write_json(fulfillment_path, {"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": [], "chapter_binding": binding})
     _write_json(disambiguation_path, {"pending": [], "chapter_binding": binding})
     _write_json(extraction_path, {"accepted_events": [], "state_deltas": [], "entity_deltas": [], "chapter_binding": binding})
@@ -254,7 +254,7 @@ def test_write_resume_does_not_skip_critical_steps_for_unbound_accepted_commit(t
             },
         },
     )
-    (tmp_path / ".webnovel" / "backups" / "snapshot_ch0001_old").mkdir(
+    (tmp_path / ".canon-ledger" / "backups" / "snapshot_ch0001_old").mkdir(
         parents=True,
     )
 
@@ -314,12 +314,12 @@ def test_write_resume_rejects_stale_backup_receipt(tmp_path: Path) -> None:
         tmp_path / ".story-system" / "commits" / "chapter_001.commit.json",
         commit_payload,
     )
-    backup_dir = tmp_path / ".webnovel" / "backups"
+    backup_dir = tmp_path / ".canon-ledger" / "backups"
     (backup_dir / "snapshot_ch0001_old").mkdir(parents=True)
     _write_json(
         backup_dir / "ch0001.receipt.json",
         {
-            "schema_version": "webnovel-backup-receipt/v1",
+            "schema_version": "canon-ledger-backup-receipt/v1",
             "chapter": 1,
             "chapter_binding": commit_payload["chapter_binding"],
             "chapter_commit_path": ".story-system/commits/chapter_001.commit.json",
@@ -354,12 +354,12 @@ def test_write_resume_rejects_empty_local_snapshot_even_with_matching_receipt(
         tmp_path / ".story-system" / "commits" / "chapter_001.commit.json",
         commit_payload,
     )
-    backup_dir = tmp_path / ".webnovel" / "backups"
+    backup_dir = tmp_path / ".canon-ledger" / "backups"
     (backup_dir / "snapshot_ch0001_empty").mkdir(parents=True)
     _write_json(
         backup_dir / "ch0001.receipt.json",
         {
-            "schema_version": "webnovel-backup-receipt/v2",
+            "schema_version": "canon-ledger-backup-receipt/v2",
             "chapter": 1,
             "chapter_binding": commit_payload["chapter_binding"],
             "chapter_commit_path": ".story-system/commits/chapter_001.commit.json",
@@ -399,7 +399,7 @@ def test_write_resume_rejects_git_receipt_when_tag_does_not_contain_it(
         commit_payload,
     )
     receipt = {
-        "schema_version": "webnovel-backup-receipt/v1",
+        "schema_version": "canon-ledger-backup-receipt/v1",
         "chapter": 1,
         "chapter_binding": commit_payload["chapter_binding"],
         "chapter_commit_path": ".story-system/commits/chapter_001.commit.json",
@@ -408,19 +408,19 @@ def test_write_resume_rejects_git_receipt_when_tag_does_not_contain_it(
         "tag": "ch0001",
     }
     _write_json(
-        tmp_path / ".webnovel" / "backups" / "ch0001.receipt.json",
+        tmp_path / ".canon-ledger" / "backups" / "ch0001.receipt.json",
         receipt,
     )
     subprocess.run(["git", "init", "-b", "main"], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Test Author"], cwd=tmp_path, check=True)
     subprocess.run(["git", "config", "user.email", "author@example.com"], cwd=tmp_path, check=True)
     # 先给不含 receipt 的旧提交打标签；仅在工作区补一份 JSON 不能证明标签内有备份。
-    (tmp_path / ".webnovel" / "backups" / "ch0001.receipt.json").unlink()
+    (tmp_path / ".canon-ledger" / "backups" / "ch0001.receipt.json").unlink()
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(["git", "commit", "-m", "pre-receipt"], cwd=tmp_path, check=True, capture_output=True)
     subprocess.run(["git", "tag", "ch0001"], cwd=tmp_path, check=True)
     _write_json(
-        tmp_path / ".webnovel" / "backups" / "ch0001.receipt.json",
+        tmp_path / ".canon-ledger" / "backups" / "ch0001.receipt.json",
         receipt,
     )
     record_write_step(

@@ -23,7 +23,11 @@ from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E4
 from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
 from data_modules.run_ledger import record_write_step  # noqa: E402
 from data_modules.user_report import build_user_report, render_user_report_text  # noqa: E402
-from .review_test_helpers import minimal_review, standard_review  # noqa: E402
+from .review_test_helpers import (  # noqa: E402
+    minimal_review,
+    standard_review,
+    write_current_chapter_contract,
+)
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -33,9 +37,9 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def _make_project(project_root: Path) -> None:
     for rel in (
-        ".webnovel/backups",
-        ".webnovel/archive",
-        ".webnovel/summaries",
+        ".canon-ledger/backups",
+        ".canon-ledger/archive",
+        ".canon-ledger/summaries",
         "设定集",
         "大纲",
         "正文",
@@ -43,7 +47,7 @@ def _make_project(project_root: Path) -> None:
     ):
         (project_root / rel).mkdir(parents=True, exist_ok=True)
     _write_json(
-        project_root / ".webnovel" / "state.json",
+        project_root / ".canon-ledger" / "state.json",
         {
             "project_info": {"title": "测试书", "genre": "玄幻"},
             "progress": {"current_chapter": 0},
@@ -77,9 +81,9 @@ def _write_review(
         if review_skipped
         else standard_review(chapter_binding, blocking_count=blocking_count)
     )
-    _write_json(project_root / ".webnovel" / "tmp" / "review_results.json", review)
+    _write_json(project_root / ".canon-ledger" / "tmp" / "review_results.json", review)
     _write_json(
-        project_root / ".webnovel" / "tmp" / "review_audit.json",
+        project_root / ".canon-ledger" / "tmp" / "review_audit.json",
         {
             "chapter": chapter,
             "start_chapter": chapter,
@@ -110,7 +114,7 @@ def _write_data_artifacts(
         return payload
 
     _write_json(
-        project_root / ".webnovel" / "tmp" / "fulfillment_result.json",
+        project_root / ".canon-ledger" / "tmp" / "fulfillment_result.json",
         _bound(
             {
                 "planned_nodes": [],
@@ -121,11 +125,11 @@ def _write_data_artifacts(
         ),
     )
     _write_json(
-        project_root / ".webnovel" / "tmp" / "disambiguation_result.json",
+        project_root / ".canon-ledger" / "tmp" / "disambiguation_result.json",
         _bound({"pending": []}),
     )
     _write_json(
-        project_root / ".webnovel" / "tmp" / "extraction_result.json",
+        project_root / ".canon-ledger" / "tmp" / "extraction_result.json",
         _bound(
             {
                 "accepted_events": [],
@@ -146,6 +150,7 @@ def _commit_payload(
 ) -> dict:
     """构造绑定当前正文的真实提交，不使用旧版占位数据。"""
     binding = build_chapter_binding(project_root, chapter)
+    write_current_chapter_contract(project_root, chapter)
     payload = ChapterCommitService(project_root).build_commit(
         chapter=chapter,
         review_result=standard_review(binding, blocking_count=blocking_count),
@@ -189,7 +194,7 @@ def _write_strict_local_backup(project_root: Path, *, chapter: int) -> Path:
     with patch.object(backup_manager, "is_git_available", return_value=False):
         manager = backup_manager.GitBackupManager(str(project_root))
         assert manager.backup(chapter, require_accepted_binding=True)
-    return project_root / ".webnovel" / "backups" / f"ch{chapter:04d}.receipt.json"
+    return project_root / ".canon-ledger" / "backups" / f"ch{chapter:04d}.receipt.json"
 
 
 def _write_success_case(project_root: Path, *, chapter: int = 1) -> dict:
@@ -221,12 +226,12 @@ def test_render_write_report_success(tmp_path: Path) -> None:
     report = build_user_report(tmp_path, stage="write", chapter=1)
     text = render_user_report_text(report)
 
-    assert report["schema_version"] == "webnovel-user-report/v1"
+    assert report["schema_version"] == "canon-ledger-user-report/v1"
     assert report["overall_status"] == "completed"
     assert report["stage"] == "write"
     assert any(item["label"] == "正文" and item["status"] == "completed" for item in report["files"])
     assert not report["issues"]["must_handle"]
-    assert "/webnovel-write 2" in text
+    assert "/canon-ledger-write 2" in text
     assert "总状态：已完成。" in text
     assert "一、产生的文件与完成情况" in text
     assert "二、过程中遇到的问题与异常耗时" in text
@@ -235,7 +240,7 @@ def test_render_write_report_success(tmp_path: Path) -> None:
 
 def test_render_write_report_uses_commit_snapshots_when_tmp_artifacts_are_cleaned(tmp_path: Path) -> None:
     _write_success_case(tmp_path, chapter=1)
-    for path in (tmp_path / ".webnovel" / "tmp").glob("*_result.json"):
+    for path in (tmp_path / ".canon-ledger" / "tmp").glob("*_result.json"):
         path.unlink()
 
     report = build_user_report(tmp_path, stage="write", chapter=1)
@@ -369,13 +374,13 @@ def test_user_report_includes_log_path_only_on_failure(tmp_path: Path) -> None:
     failed = build_user_report(tmp_path, stage="write", chapter=1)
     failed_text = render_user_report_text(failed)
     assert failed["overall_status"] == "failed"
-    assert ".webnovel/logs/run_last.log" in failed_text
+    assert ".canon-ledger/logs/run_last.log" in failed_text
 
     _write_success_case(tmp_path, chapter=1)
     completed = build_user_report(tmp_path, stage="write", chapter=1)
     completed_text = render_user_report_text(completed)
     assert completed["overall_status"] == "completed"
-    assert ".webnovel/logs/run_last.log" not in completed_text
+    assert ".canon-ledger/logs/run_last.log" not in completed_text
 
 
 def test_write_report_rejects_accepted_commit_after_manuscript_edit(tmp_path: Path) -> None:
@@ -393,7 +398,7 @@ def test_write_report_rejects_accepted_commit_after_manuscript_edit(tmp_path: Pa
 
 def test_write_report_does_not_accept_backup_name_glob_without_receipt(tmp_path: Path) -> None:
     _write_success_case(tmp_path, chapter=1)
-    backup_dir = tmp_path / ".webnovel" / "backups"
+    backup_dir = tmp_path / ".canon-ledger" / "backups"
     (backup_dir / "ch0001.receipt.json").unlink()
     for snapshot in backup_dir.glob("snapshot_ch0001_*"):
         shutil.rmtree(snapshot)

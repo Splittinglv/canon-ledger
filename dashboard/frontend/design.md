@@ -1,4 +1,4 @@
-# PIXEL WRITER HUB 设计规范
+# 叙典 CanonLedger 仪表盘设计规范
 
 > Dashboard 前端设计规范，所有页面必须遵守。
 > 原型预览：`docs/archive/architecture/dashboard-prototype.html`

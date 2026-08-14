@@ -16,9 +16,9 @@ from status_reporter import StatusReporter
 
 
 def _write_state(project_root, state: dict):
-    webnovel_dir = project_root / ".webnovel"
-    webnovel_dir.mkdir(parents=True, exist_ok=True)
-    (webnovel_dir / "state.json").write_text(
+    canon_ledger_dir = project_root / ".canon-ledger"
+    canon_ledger_dir.mkdir(parents=True, exist_ok=True)
+    (canon_ledger_dir / "state.json").write_text(
         json.dumps(state, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

@@ -14,9 +14,9 @@ def test_story_runtime_health_reports_missing_commit_as_not_ready(tmp_path):
 
 
 def test_story_runtime_health_prefers_latest_story_system_chapter_over_state_projection(tmp_path):
-    webnovel_dir = tmp_path / ".webnovel"
-    webnovel_dir.mkdir(parents=True, exist_ok=True)
-    (webnovel_dir / "state.json").write_text(
+    canon_ledger_dir = tmp_path / ".canon-ledger"
+    canon_ledger_dir.mkdir(parents=True, exist_ok=True)
+    (canon_ledger_dir / "state.json").write_text(
         json.dumps({"progress": {"current_chapter": 2}}, ensure_ascii=False),
         encoding="utf-8",
     )

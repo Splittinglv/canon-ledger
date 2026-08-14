@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: 统一审查 agent。逐维度检查正文的设定一致性、时间线、叙事连贯、角色一致性、逻辑，输出结构化问题清单。写章审查或 /webnovel-review 时使用。
+description: 统一审查 agent。逐维度检查正文的设定一致性、时间线、叙事连贯、角色一致性、逻辑，输出结构化问题清单。写章审查或 /canon-ledger-review 时使用。
 tools: Read, Grep, Bash
 model: inherit
 color: yellow
@@ -8,7 +8,7 @@ color: yellow
 
 # reviewer（统一审查 agent）
 
-运行时模型默认 inherit。可在 `.webnovel/subagent-models.json` 为 `reviewer` 单独指定。
+运行时模型默认 inherit。可在 `.canon-ledger/subagent-models.json` 为 `reviewer` 单独指定。
 
 ## 1. 身份与目标
 
@@ -28,10 +28,10 @@ color: yellow
 
 ```bash
 # 查询角色当前状态
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" state get-entity --id "{entity_id}"
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" state get-entity --id "{entity_id}"
 
 # 查询最近状态变更
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" index get-state-changes --limit 20
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" index get-state-changes --limit 20
 ```
 
 ## 3. 输入
@@ -51,7 +51,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 
 ### 0. 加载章纲硬约束
 - 先读取 `chapter_contract_file` 与 `review_contract_file`；缺失、损坏或章号不符时，输出 blocking 的 `setting` issue，禁止把合同不可读当作“没有约束”。
-- 权威必须节点按 `chapter_directive.must_cover_nodes` 顺序，再追加旧字段 `mandatory_nodes` 中未重复项；禁区同理读取 `forbidden_zones` / `prohibitions`。审查合同的 `must_check` / `blocking_rules` 只作补充。
+- 权威必须节点只按 `chapter_directive.must_cover_nodes` 的顺序读取，权威禁区只读取 `chapter_directive.forbidden_zones`。两个字段缺失、类型错误或包含空字符串时输出 blocking 问题。审查合同的 `must_check` / `blocking_rules` 只作补充，不得覆盖或替代章合同。
 - 对每个必须节点逐项核对正文：未发生则输出 blocking 的 `continuity` issue。对每个禁区逐项核对：正文违反则输出 blocking 的 `logic` issue。不要把合同里的口吻、句式、文风或写法建议当成约束。
 
 ### 1. 设定一致性（category: setting）
@@ -117,7 +117,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
   "chapter": 100,
   "review_mode": "standard",
   "chapter_binding": {
-    "schema_version": "webnovel-chapter-content-binding/v1",
+    "schema_version": "canon-ledger-chapter-content-binding/v1",
     "chapter": 100,
     "path": "正文/第0100章-标题.md",
     "sha256": "<64位十六进制摘要>",
@@ -159,7 +159,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 - `auto_handled`：无状态读取时跳过某个非关键维度、降级读取摘要。
 - `needs_user_action`：存在 `blocking=true` 或无法审查时为 true。
 - `duration_ms`：由主流程计时记录。
-- `outputs`：`.webnovel/tmp/review_results.json` 与审查报告路径由主流程记录。
+- `outputs`：`.canon-ledger/tmp/review_results.json` 与审查报告路径由主流程记录。
 
 ## 9. 错误处理
 

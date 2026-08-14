@@ -18,7 +18,7 @@ from data_modules.rag_context import empty_rag_assist, load_rag_assist
 from data_modules.vector_projection_writer import VectorProjectionWriter
 import data_modules.memory_contract_adapter as memory_contract_adapter_module
 import data_modules.rag_context as rag_context_module
-from .review_test_helpers import standard_review
+from .review_test_helpers import standard_review, write_current_chapter_contract
 
 
 _RAG_ASSIST_KEYS = {
@@ -97,6 +97,7 @@ def _write_trusted_commit(project_root: Path, chapter: int = 3) -> dict:
     if not chapter_file.exists():
         chapter_file.write_text("阿青把药箱交给掌柜。", encoding="utf-8")
     binding = build_chapter_binding(project_root, chapter)
+    write_current_chapter_contract(project_root, chapter)
     service = ChapterCommitService(project_root)
     payload = service.build_commit(
         chapter=chapter,
@@ -632,7 +633,8 @@ def test_load_context_exposes_rag_assist_and_uses_runtime_directive_goal(monkeyp
 
 
 def test_extract_context_delegates_to_the_same_helper_and_goal_key(monkeypatch, tmp_path):
-    """旧版 extract-context 路径不得形成第二套 RAG 策略。"""
+    """正文上下文包装器不得形成第二套事实检索策略。"""
+    import importlib
     import extract_chapter_context as extract_context_module
 
     captured = {}
@@ -643,10 +645,8 @@ def test_extract_context_delegates_to_the_same_helper_and_goal_key(monkeypatch, 
 
     # 某些集成测试会重新加载 data_modules；应修补包装器调用时解析到的模块对象，
     # 避免使用可能过期的别名。
-    import sys
-
     monkeypatch.setattr(
-        sys.modules["data_modules.rag_context"],
+        importlib.import_module("data_modules.rag_context"),
         "load_rag_assist",
         fake_load_rag_assist,
     )

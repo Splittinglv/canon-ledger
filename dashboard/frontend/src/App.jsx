@@ -61,7 +61,7 @@ export default function App() {
         <div className="app-layout">
             <aside className="sidebar">
                 <div className="sidebar-header">
-                    <h1>PIXEL WRITER HUB</h1>
+                    <h1>叙典 CANONLEDGER</h1>
                     <div className="subtitle" title={title}>{title}</div>
                 </div>
                 <nav className="sidebar-nav">

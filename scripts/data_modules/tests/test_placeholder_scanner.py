@@ -28,19 +28,19 @@ def test_placeholder_scanner_finds_pending_marks(tmp_path):
     assert any(item["pattern"] == "{占位}" for item in results)
 
 
-def test_webnovel_placeholder_scan_cli_forwards_project_root(monkeypatch, tmp_path, capsys):
-    import data_modules.webnovel as webnovel_module
+def test_canon_ledger_placeholder_scan_cli_forwards_project_root(monkeypatch, tmp_path, capsys):
+    import data_modules.canon_ledger as canon_ledger_module
 
     project_root = tmp_path / "book"
-    (project_root / ".webnovel").mkdir(parents=True)
-    (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (project_root / ".canon-ledger").mkdir(parents=True)
+    (project_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
     (project_root / "大纲").mkdir()
     (project_root / "大纲" / "总纲.md").write_text("[待补充]\n", encoding="utf-8")
 
-    monkeypatch.setattr(sys, "argv", ["webnovel", "--project-root", str(project_root), "placeholder-scan"])
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", "--project-root", str(project_root), "placeholder-scan"])
 
     with pytest.raises(SystemExit) as exc:
-        webnovel_module.main()
+        canon_ledger_module.main()
 
     assert int(exc.value.code or 0) == 0
     payload = json.loads(capsys.readouterr().out)

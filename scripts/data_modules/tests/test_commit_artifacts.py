@@ -28,7 +28,7 @@ def test_extraction_result_prefers_canonical_nested_payload():
     assert extraction_text(payload, "summary_text") == "规范摘要"
 
 
-def test_extraction_result_keeps_read_compatibility_for_legacy_commit_payload():
+def test_extraction_result_ignores_removed_top_level_shape():
     payload = {
         "accepted_events": [{"event_id": "legacy"}],
         "summary_text": "旧版摘要",
@@ -36,8 +36,7 @@ def test_extraction_result_keeps_read_compatibility_for_legacy_commit_payload():
 
     extraction = extraction_result_from_commit(payload)
 
-    assert extraction["accepted_events"] == [{"event_id": "legacy"}]
-    assert extraction["summary_text"] == "旧版摘要"
+    assert extraction == {}, "提交顶层的旧提取字段不得进入当前事实主链"
 
 
 def test_retrieval_marker_tracks_fact_snapshot_not_projection_status():

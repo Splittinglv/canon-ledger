@@ -5,7 +5,7 @@ extract_chapter_context.py - extract chapter writing context
 
 Features:
 - chapter outline snippet
-- previous chapter summaries (prefers .webnovel/summaries)
+- previous chapter summaries (prefers .canon-ledger/summaries)
 - compact state summary
 - ContextManager contract sections (reader_signal / genre_profile / writing_guidance)
 """
@@ -36,7 +36,7 @@ def _ensure_scripts_path():
 
 
 def find_project_root(start_path: Path | None = None) -> Path:
-    """解析真实书项目根（包含 `.webnovel/state.json` 的目录）。"""
+    """解析真实书项目根（包含 `.canon-ledger/state.json` 的目录）。"""
     from project_locator import resolve_project_root
 
     if start_path is None:
@@ -50,8 +50,8 @@ def extract_chapter_outline(project_root: Path, chapter_num: int) -> str:
 
 
 def _load_summary_file(project_root: Path, chapter_num: int) -> str:
-    """Load summary section from `.webnovel/summaries/chNNNN.md`."""
-    summary_path = project_root / ".webnovel" / "summaries" / f"ch{chapter_num:04d}.md"
+    """Load summary section from `.canon-ledger/summaries/chNNNN.md`."""
+    summary_path = project_root / ".canon-ledger" / "summaries" / f"ch{chapter_num:04d}.md"
     if not summary_path.exists():
         return ""
 
@@ -89,8 +89,8 @@ def extract_chapter_summary(project_root: Path, chapter_num: int) -> str:
 
 
 def extract_state_summary(project_root: Path, chapter_num: int | None = None) -> str:
-    """Extract key fields from `.webnovel/state.json`."""
-    state_file = project_root / ".webnovel" / "state.json"
+    """Extract key fields from `.canon-ledger/state.json`."""
+    state_file = project_root / ".canon-ledger" / "state.json"
     if not state_file.exists():
         return "⚠️ state.json 不存在"
 

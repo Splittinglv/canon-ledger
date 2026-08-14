@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 class KnowledgeQuery:
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
-        self._db_path = self.project_root / ".webnovel" / "index.db"
+        self._db_path = self.project_root / ".canon-ledger" / "index.db"
 
     def entity_state_at_chapter(self, entity_id: str, chapter: int) -> Dict[str, Any]:
         """查询实体在指定章节时的状态（从 state_changes 反推）。"""

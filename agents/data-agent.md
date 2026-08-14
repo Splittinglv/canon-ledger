@@ -8,7 +8,7 @@ color: green
 
 # data-agent
 
-运行时模型默认 inherit（跟当前聊天）。可在书项目 `.webnovel/subagent-models.json` 为 `data-agent` 单独指定 Cursor Task 模型 id。
+运行时模型默认 inherit（跟当前聊天）。可在书项目 `.canon-ledger/subagent-models.json` 为 `data-agent` 单独指定 Cursor Task 模型 id。
 
 ## 1. 身份
 
@@ -17,22 +17,22 @@ color: green
 ## 2. 工具
 
 ```bash
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" index get-core-entities
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" index recent-appearances --limit 20
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" index get-aliases --entity "{entity_id}"
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" index get-by-alias --alias "{alias}"
-python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "{project_root}" memory-contract get-obligations
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" index get-core-entities
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" index recent-appearances --limit 20
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" index get-aliases --entity "{entity_id}"
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" index get-by-alias --alias "{alias}"
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" memory-contract get-obligations
 ```
 
 chapter-commit 由写章主流程运行，data-agent 不在此执行（见 §5 边界）。
 
 ## 3. 流程
 
-**A 加载**：project_root 由调用方传入（已过 preflight），Read 正文和 `chapter_contract_file` + 查实体索引和别名；调用 `memory-contract get-obligations` 取得当前可闭合伏笔/承诺的稳定 ID。将章合同 `chapter_directive.must_cover_nodes` 按原顺序复制，再追加旧字段 `mandatory_nodes` 中尚未出现的节点，合并结果完整写为 `planned_nodes`；两个字段都不存在时才使用空数组。
+**A 加载**：project_root 由调用方传入（已过 preflight），Read 正文和 `chapter_contract_file` + 查实体索引和别名；调用 `memory-contract get-obligations` 取得当前可闭合伏笔/承诺的稳定 ID。将章合同 `chapter_directive.must_cover_nodes` 按原顺序完整复制为 `planned_nodes`；字段缺失、类型错误或包含空字符串时停止并报告章合同错误，不得改读其他字段。
 
 **B 提取与消歧**：同一轮完成，不额外调 LLM。置信度>0.8 自动采用，0.5-0.8 采用+warning，<0.5 标记待人工。
 
-**C 生成 artifacts**：读取调用方传入的 `chapter_binding_file`，将其完整对象原样写入三份 JSON 的顶层 `chapter_binding`，再产出到 `.webnovel/tmp/`；顶层结构见 §7。禁止自行重算或改写 binding。
+**C 生成 artifacts**：读取调用方传入的 `chapter_binding_file`，将其完整对象原样写入三份 JSON 的顶层 `chapter_binding`，再产出到 `.canon-ledger/tmp/`；顶层结构见 §7。禁止自行重算或改写 binding。
 
 **D 摘要与场景切片**：写入 `extraction_result.json` 的 `summary_text` 与 `scenes` 字段。摘要 100-150 字，场景切片 50-100 字/场景，字段为 `index/start_line/end_line/location/summary/characters/content`。
 
@@ -59,7 +59,7 @@ hook_strength: "strong"
 ## 4. 输入
 
 ```json
-{"chapter": 100, "chapter_file": "正文/第0100章-标题.md", "chapter_contract_file": ".story-system/chapters/chapter_100.json", "chapter_binding_file": ".webnovel/tmp/chapter_binding.json", "project_root": "D:/wk/斗破苍穹"}
+{"chapter": 100, "chapter_file": "正文/第0100章-标题.md", "chapter_contract_file": ".story-system/chapters/chapter_100.json", "chapter_binding_file": ".canon-ledger/tmp/chapter_binding.json", "project_root": "D:/wk/斗破苍穹"}
 ```
 
 ## 5. 边界
@@ -102,7 +102,7 @@ hook_strength: "strong"
 
 ```json
 {
-  "accepted_events": [{"event_id": "evt-ch100-001", "chapter": 100, "event_type": "open_loop_created", "subject": "three_year_promise", "payload": {"content": "三年之约提及"}}],
+  "accepted_events": [{"event_id": "evt-ch100-001", "chapter": 100, "event_type": "open_loop_created", "subject": "three_year_promise", "payload": {"loop_id": "loop-three-year-promise", "content": "三年之约提及"}}],
   "state_deltas": [{"entity_id": "xiaoyan", "field": "realm", "old": "斗者", "new": "斗师"}],
   "entity_deltas": [{"entity_id": "hongyi_girl", "action": "upsert", "entity_type": "角色", "payload": {"name": "红衣女子"}}],
   "entities_appeared": [{"id": "xiaoyan", "type": "角色", "mentions": ["萧炎"], "confidence": 0.95}],
@@ -111,7 +111,7 @@ hook_strength: "strong"
 }
 ```
 
-旧字段名（`field_path`、`new_value`、`type`、`description` 等）作为兼容输入仍可被投影，但首选上述规范名。
+只能输出上述规范字段名；未知字段或错误类型必须作为产物错误处理。
 
 闭合/兑现只能复制 `memory-contract get-obligations` 返回的对应 `id`；没有匹配目标时不要生成 close/payoff 事件，禁止按正文相似度猜 ID。
 

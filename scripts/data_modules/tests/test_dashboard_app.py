@@ -112,9 +112,9 @@ def _write_state(project_root: Path) -> None:
             "0003": {"summary": "第三章概要"},
         },
     }
-    webnovel_dir = project_root / ".webnovel"
-    webnovel_dir.mkdir(parents=True, exist_ok=True)
-    (webnovel_dir / "state.json").write_text(
+    canon_ledger_dir = project_root / ".canon-ledger"
+    canon_ledger_dir.mkdir(parents=True, exist_ok=True)
+    (canon_ledger_dir / "state.json").write_text(
         json.dumps(state, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
@@ -236,7 +236,11 @@ def _build_project_data(project_root: Path) -> None:
         json.dumps(
             {
                 "meta": {"contract_type": "CHAPTER_BRIEF", "chapter": 2},
-                "chapter_directive": {"goal": "确认黑市线索的来源"},
+                "chapter_directive": {
+                    "goal": "确认黑市线索的来源",
+                    "must_cover_nodes": [],
+                    "forbidden_zones": [],
+                },
             },
             ensure_ascii=False,
         ),
@@ -246,7 +250,11 @@ def _build_project_data(project_root: Path) -> None:
         json.dumps(
             {
                 "meta": {"contract_type": "CHAPTER_BRIEF", "chapter": 3},
-                "chapter_directive": {"goal": "夜探黑市"},
+                "chapter_directive": {
+                    "goal": "夜探黑市",
+                    "must_cover_nodes": [],
+                    "forbidden_zones": [],
+                },
                 "override_allowed": {"chapter_focus": "夜探黑市"},
             },
             ensure_ascii=False,
@@ -356,8 +364,8 @@ def test_dashboard_app_imports_without_scripts_path(monkeypatch, tmp_path):
     scripts_dir = plugin_root / "scripts"
 
     project_root = tmp_path / "book"
-    (project_root / ".webnovel").mkdir(parents=True, exist_ok=True)
-    (project_root / ".webnovel" / "state.json").write_text("{}", encoding="utf-8")
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
 
     clean_path = []
     scripts_resolved = scripts_dir.resolve()

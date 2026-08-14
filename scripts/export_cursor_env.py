@@ -17,15 +17,14 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from cursor_paths import resolve_workspace_root  # noqa: E402
+from cursor_paths import PLUGIN_NAME, resolve_workspace_root  # noqa: E402
 from python_runtime import resolve_python_executable  # noqa: E402
 
 
-SCHEMA_VERSION = "webnovel-cursor-env/v1"
+SCHEMA_VERSION = "canon-ledger-cursor-env/v1"
 ENVIRONMENT_KEYS = (
-    "WEBNOVEL_PLUGIN_ROOT",
+    "CANON_LEDGER_PLUGIN_ROOT",
     "CURSOR_PLUGIN_ROOT",
-    "CLAUDE_PLUGIN_ROOT",
     "SCRIPTS_DIR",
     "WORKSPACE_ROOT",
     "CURSOR_PROJECT_DIR",
@@ -40,18 +39,18 @@ def _trusted_plugin_root() -> Path:
     already trusts.
     """
     root = Path(__file__).resolve().parent.parent
-    marker = root / "scripts" / "webnovel.py"
+    marker = root / "scripts" / "canon_ledger.py"
     manifest = root / ".cursor-plugin" / "plugin.json"
     if not marker.is_file() or not manifest.is_file():
         raise FileNotFoundError(
-            "export_cursor_env.py is not inside a complete webnovel-writer plugin"
+            "export_cursor_env.py 不在完整的叙典 CanonLedger 插件中"
         )
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise ValueError("invalid webnovel-writer plugin manifest") from exc
-    if not isinstance(payload, dict) or payload.get("name") != "webnovel-writer":
-        raise ValueError("unexpected plugin manifest identity")
+        raise ValueError("叙典 CanonLedger 插件清单无效") from exc
+    if not isinstance(payload, dict) or payload.get("name") != PLUGIN_NAME:
+        raise ValueError("插件清单身份不是 canon-ledger")
     return root
 
 
@@ -60,9 +59,8 @@ def build_payload() -> dict[str, object]:
     workspace = resolve_workspace_root()
     python_executable = resolve_python_executable(plugin_root)
     environment = {
-        "WEBNOVEL_PLUGIN_ROOT": str(plugin_root),
+        "CANON_LEDGER_PLUGIN_ROOT": str(plugin_root),
         "CURSOR_PLUGIN_ROOT": str(plugin_root),
-        "CLAUDE_PLUGIN_ROOT": str(plugin_root),
         "SCRIPTS_DIR": str(plugin_root / "scripts"),
         "WORKSPACE_ROOT": str(workspace),
         "CURSOR_PROJECT_DIR": str(workspace),

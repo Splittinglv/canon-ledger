@@ -6,10 +6,8 @@ Data Modules - 数据链模块包。
 注意：
 - 这里采用延迟导入（lazy import），避免在执行 `python -m data_modules.xxx` 时，
   因包级 __init__ 提前导入子模块而触发 runpy 的 RuntimeWarning。
-- 推荐用法永远安全：
+- 推荐用法：
     from data_modules.index_manager import IndexManager
-  但为了兼容历史代码，也保留：
-    from data_modules import IndexManager
 """
 
 from __future__ import annotations
@@ -31,9 +29,6 @@ __all__ = [
     "DisambiguationResult",
     # State Manager
     "StateManager",
-    "EntityState",
-    "Relationship",
-    "StateChange",
     # Index Manager
     "IndexManager",
     "ChapterMeta",
@@ -73,9 +68,6 @@ _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     "DisambiguationResult": (".entity_linker", "DisambiguationResult"),
     # State Manager
     "StateManager": (".state_manager", "StateManager"),
-    "EntityState": (".state_manager", "EntityState"),
-    "Relationship": (".state_manager", "Relationship"),
-    "StateChange": (".state_manager", "StateChange"),
     # Index Manager
     "IndexManager": (".index_manager", "IndexManager"),
     "ChapterMeta": (".index_manager", "ChapterMeta"),

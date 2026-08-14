@@ -66,8 +66,16 @@ class EmbeddingAPIClient:
         return self._session
 
     async def close(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
+        session = self._session
+        self._session = None
+        if session and not session.closed:
+            await session.close()
+
+    async def __aenter__(self) -> "EmbeddingAPIClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.close()
 
     def _build_headers(self) -> Dict[str, str]:
         """构建请求头"""
@@ -282,8 +290,16 @@ class RerankAPIClient:
         return self._session
 
     async def close(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
+        session = self._session
+        self._session = None
+        if session and not session.closed:
+            await session.close()
+
+    async def __aenter__(self) -> "RerankAPIClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.close()
 
     def _build_headers(self) -> Dict[str, str]:
         """构建请求头"""
@@ -537,6 +553,12 @@ class ModalAPIClient:
         await self._embed_client.close()
         await self._rerank_client.close()
 
+    async def __aenter__(self) -> "ModalAPIClient":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.close()
+
     # ==================== 预热 ====================
 
     async def warmup(self):
@@ -599,12 +621,10 @@ class ModalAPIClient:
                       f"{stats.errors} errors")
 
 
-# 全局客户端
-_client: Optional[ModalAPIClient] = None
-
-
 def get_client(config=None) -> ModalAPIClient:
-    global _client
-    if _client is None or config is not None:
-        _client = ModalAPIClient(config)
-    return _client
+    """返回 API 客户端。
+
+    每次调用都返回由调用方拥有的独立客户端，调用方必须在使用完毕后关闭。
+    不保留隐式进程单例，避免会话跨越项目和事件循环。
+    """
+    return ModalAPIClient(config)

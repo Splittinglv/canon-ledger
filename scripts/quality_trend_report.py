@@ -209,7 +209,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="生成离线质量趋势报告（基于 index.db）")
     parser.add_argument("--project-root", type=str, help="项目根目录（可选，不传则自动探测）")
     parser.add_argument("--limit", type=int, default=20, help="统计最近 N 条记录（默认 20）")
-    parser.add_argument("--output", type=str, help="输出文件路径（默认 .webnovel/reports/quality-trend.md）")
+    parser.add_argument("--output", type=str, help="输出文件路径（默认 .canon-ledger/reports/quality-trend.md）")
     args = parser.parse_args()
 
     if args.project_root:
@@ -225,7 +225,7 @@ def main() -> None:
     output_path = (
         Path(args.output).expanduser().resolve()
         if args.output
-        else (cfg.webnovel_dir / "reports" / "quality-trend.md")
+        else (cfg.canon_ledger_dir / "reports" / "quality-trend.md")
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
 

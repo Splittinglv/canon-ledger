@@ -22,8 +22,8 @@ def test_init_skips_dead_templates_and_empty_libraries_for_single_protagonist(tm
     )
 
     assert (project_root / "设定集" / "主角卡.md").is_file()
-    assert (project_root / ".webnovel" / "subagent-models.json").is_file()
-    models = json.loads((project_root / ".webnovel" / "subagent-models.json").read_text(encoding="utf-8"))
+    assert (project_root / ".canon-ledger" / "subagent-models.json").is_file()
+    models = json.loads((project_root / ".canon-ledger" / "subagent-models.json").read_text(encoding="utf-8"))
     assert models["agents"]["data-agent"] == "inherit"
     assert not (project_root / "设定集" / "主角组.md").exists()
     assert not (project_root / "设定集" / "女主卡.md").exists()
@@ -112,7 +112,7 @@ def test_init_persists_canonical_genre_without_injecting_templates(tmp_path, mon
         target_chapters=50,
     )
 
-    state = json.loads((project_root / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    state = json.loads((project_root / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     project_info = state["project_info"]
     assert project_info["genre"] == "悬疑"
     assert project_info["genre_label"] == "知乎短篇风的规则怪谈"
@@ -141,7 +141,7 @@ def test_init_writes_explicit_genre_templates_to_advisory_file(tmp_path, monkeyp
         include_genre_templates=True,
     )
 
-    state = json.loads((project_root / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    state = json.loads((project_root / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     assert state["project_info"]["genre_tags"]["templates"] == ["规则怪谈", "知乎短篇"]
 
     worldview = (project_root / "设定集" / "世界观.md").read_text(encoding="utf-8")
@@ -168,19 +168,19 @@ def test_init_does_not_manufacture_golden_finger_fact(tmp_path, monkeypatch):
         target_chapters=50,
     )
 
-    state = json.loads((project_root / ".webnovel" / "state.json").read_text(encoding="utf-8"))
+    state = json.loads((project_root / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
     golden_finger = state["protagonist_state"]["golden_finger"]
     assert golden_finger["name"] == ""
     assert golden_finger["level"] == 0
     assert "金手指" not in extract_state_summary(project_root)
 
 
-def test_init_migrates_only_the_legacy_manufactured_golden_finger(tmp_path, monkeypatch):
+def test_init_does_not_migrate_removed_placeholder_shape(tmp_path, monkeypatch):
     import init_project as init_project_module
 
     monkeypatch.setattr(init_project_module, "is_git_available", lambda: False)
     project_root = tmp_path / "book"
-    state_path = project_root / ".webnovel" / "state.json"
+    state_path = project_root / ".canon-ledger" / "state.json"
     state_path.parent.mkdir(parents=True)
     state_path.write_text(
         json.dumps(
@@ -210,8 +210,8 @@ def test_init_migrates_only_the_legacy_manufactured_golden_finger(tmp_path, monk
 
     state = json.loads(state_path.read_text(encoding="utf-8"))
     golden_finger = state["protagonist_state"]["golden_finger"]
-    assert golden_finger["name"] == ""
-    assert golden_finger["level"] == 0
+    assert golden_finger["name"] == "未命名金手指"
+    assert golden_finger["level"] == 1
 
 
 def test_init_rejects_english_profile_key_before_writing_state(tmp_path, monkeypatch):
@@ -232,7 +232,7 @@ def test_init_rejects_english_profile_key_before_writing_state(tmp_path, monkeyp
     message = str(exc.value)
     assert "rules-mystery" in message
     assert "规则怪谈" in message
-    assert not (project_root / ".webnovel" / "state.json").exists()
+    assert not (project_root / ".canon-ledger" / "state.json").exists()
 
 
 def test_init_preserves_corrupt_state_json_before_rebuilding(tmp_path, monkeypatch, capsys):
@@ -240,7 +240,7 @@ def test_init_preserves_corrupt_state_json_before_rebuilding(tmp_path, monkeypat
 
     monkeypatch.setattr(init_project_module, "is_git_available", lambda: False)
     project_root = tmp_path / "book"
-    state_dir = project_root / ".webnovel"
+    state_dir = project_root / ".canon-ledger"
     state_dir.mkdir(parents=True)
     corrupt_text = '{"project_info": '
     (state_dir / "state.json").write_text(corrupt_text, encoding="utf-8")
