@@ -21,7 +21,7 @@ REQUIRED_RELEASE_HEADINGS = (
     "## 给维护者",
     "## 验证",
 )
-AUTHOR_WORDS = ("作者", "写章", "网文", "故事", "正文")
+AUTHOR_WORDS = ("作者", "写章", "故事", "正文", "设定", "伏笔")
 
 
 def _issue(code: str, *, message: str, path: str = "", repair: str = "") -> dict[str, str]:
@@ -273,7 +273,7 @@ def validate_release_notes(
                     "release_note.audience",
                     message="release note does not look author-facing",
                     path=str(release_path),
-                    repair="发布说明顶部必须使用中文网文作者能理解的场景语言。",
+                    repair="发布说明顶部必须使用中文作者能理解的场景语言。",
                 )
             )
 

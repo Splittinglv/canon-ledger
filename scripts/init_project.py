@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-网文项目初始化脚本
+长篇小说项目初始化脚本
 
 目标：
 - 生成可运行的项目结构（canon-ledger-project）
@@ -829,7 +829,7 @@ __pycache__/
                 # 安全修复：清理 title 防止命令注入
                 safe_title = sanitize_commit_message(title)
                 subprocess.run(
-                    ["git", "commit", "-m", f"初始化网文项目：{safe_title}"],
+                    ["git", "commit", "-m", f"初始化长篇小说项目：{safe_title}"],
                     cwd=project_path,
                     check=True,
                     capture_output=True,
@@ -858,7 +858,7 @@ __pycache__/
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="网文项目初始化脚本（生成项目结构 + state.json + 基础模板）")
+    parser = argparse.ArgumentParser(description="长篇小说项目初始化脚本（生成项目结构 + state.json + 基础模板）")
     parser.add_argument("project_dir", help="项目目录（建议 ./canon-ledger-project）")
     parser.add_argument("title", help="小说标题")
     parser.add_argument(

@@ -1,13 +1,13 @@
 ---
 name: canon-ledger-dashboard
-description: 启动只读可视化面板，浏览项目状态、实体图谱、章节与追读力。用户说打开仪表盘、dashboard 或 /canon-ledger-dashboard 时使用。
+description: 启动只读可视化面板，浏览项目状态、实体图谱、章节与伏笔。用户说打开仪表盘、dashboard 或 /canon-ledger-dashboard 时使用。
 ---
 
 # CanonLedger Dashboard
 
 ## 目标
 
-- 在本地启动只读 Web 面板，查看创作进度、设定词典、关系图谱、章节内容与追读力数据。
+- 在本地启动只读 Web 面板，查看创作进度、设定词典、关系图谱、章节内容与伏笔。
 - 暴露 Story Runtime 主链状态：`/api/story-runtime/health`、latest commit、fallback 情况。
 - 可监听 `.canon-ledger/` 变化，但不修改任何项目文件。
 

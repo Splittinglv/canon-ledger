@@ -6,7 +6,6 @@ import {
     ChartBarIcon,
     FolderIcon,
     SlidersIcon,
-    TrendingUpIcon,
     UsersIcon,
     WifiIcon,
     WifiOffIcon,
@@ -15,7 +14,6 @@ import {
 const NAV_ITEMS = [
     { to: '/', label: '总览', icon: ChartBarIcon, end: true },
     { to: '/characters', label: '角色图鉴', icon: UsersIcon },
-    { to: '/pacing', label: '节奏雷达', icon: TrendingUpIcon },
     { to: '/foreshadowing', label: '伏笔追踪', icon: BookmarkIcon },
     { to: '/files', label: '文档浏览', icon: FolderIcon },
     { to: '/system', label: '系统状态', icon: SlidersIcon },

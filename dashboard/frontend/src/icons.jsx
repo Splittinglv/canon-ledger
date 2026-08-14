@@ -34,18 +34,6 @@ export function UsersIcon(props) {
     )
 }
 
-export function TrendingUpIcon(props) {
-    return (
-        <IconBase {...props}>
-            <rect x="3" y="17" width="4" height="4" />
-            <rect x="8" y="13" width="4" height="4" />
-            <rect x="13" y="9" width="4" height="4" />
-            <rect x="18" y="4" width="3" height="3" />
-            <rect x="17" y="4" width="2" height="11" transform="rotate(45 18 9.5)" />
-        </IconBase>
-    )
-}
-
 export function BookmarkIcon(props) {
     return (
         <IconBase {...props}>

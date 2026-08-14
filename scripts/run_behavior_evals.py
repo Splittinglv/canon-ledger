@@ -578,7 +578,7 @@ def format_report(report: dict[str, Any], output_format: str = "text") -> str:
 def main() -> int:
     if sys.platform == "win32":
         enable_windows_utf8_stdio()
-    parser = argparse.ArgumentParser(description="运行可重复的网文写作插件行为评估")
+    parser = argparse.ArgumentParser(description="运行可重复的一致性引擎行为评估")
     parser.add_argument("--root", default="", help="仓库根目录，默认自动推断")
     parser.add_argument("--suite", default="fast", choices=["fast"])
     parser.add_argument("--format", choices=["text", "json"], default="text")

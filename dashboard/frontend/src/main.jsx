@@ -6,7 +6,6 @@ import './index.css'
 
 const OverviewPage = lazy(() => import('./pages/OverviewPage.jsx'))
 const CharactersPage = lazy(() => import('./pages/CharactersPage.jsx'))
-const PacingPage = lazy(() => import('./pages/PacingPage.jsx'))
 const ForeshadowingPage = lazy(() => import('./pages/ForeshadowingPage.jsx'))
 const FilesPage = lazy(() => import('./pages/FilesPage.jsx'))
 const SystemPage = lazy(() => import('./pages/SystemPage.jsx'))
@@ -30,7 +29,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                     <Route path="/" element={<App />}>
                         <Route index element={<OverviewPage />} />
                         <Route path="characters" element={<CharactersPage />} />
-                        <Route path="pacing" element={<PacingPage />} />
+                        <Route path="pacing" element={<Navigate to="/" replace />} />
                         <Route path="foreshadowing" element={<ForeshadowingPage />} />
                         <Route path="files" element={<FilesPage />} />
                         <Route path="system" element={<SystemPage />} />

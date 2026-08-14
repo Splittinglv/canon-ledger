@@ -131,6 +131,17 @@ def test_skill_frontmatter_complete(skill_file: Path):
     assert "description" in fm, f"{skill_file.parent.name}: 缺少 description"
 
 
+def test_user_facing_skills_do_not_self_identify_as_webnovel_plugin():
+    """Skill / command 描述不得再自称网文插件。"""
+    forbidden = ("网文插件", "初始化网文", "网文项目", "网文创作")
+    files = list(SKILL_FILES) + sorted((PLUGIN_ROOT / "commands").glob("*.md"))
+    for path in files:
+        fm = _extract_frontmatter(_read_text(path))
+        description = str(fm.get("description") or "")
+        hits = [token for token in forbidden if token in description]
+        assert not hits, f"{path.relative_to(PLUGIN_ROOT)}: 描述仍自称 {hits}"
+
+
 # ---------------------------------------------------------------------------
 # 2. Agent 模板结构（≥4 段）
 # ---------------------------------------------------------------------------

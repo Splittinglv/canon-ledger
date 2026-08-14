@@ -1,6 +1,6 @@
 ---
 name: canon-ledger-init
-description: 深度初始化网文项目：分阶段收集书名、题材、主角与世界观，生成设定集、总纲和 Story System。用户说初始化网文、开新书、/canon-ledger-init 时使用。
+description: 初始化长篇小说项目：分阶段收集书名、题材、主角与世界观，生成设定集、总纲和一致性合同。用户说开新书、初始化项目、/canon-ledger-init 时使用。
 ---
 
 # Project Initialization (Deep Mode)

@@ -134,7 +134,7 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py"
    3. `.story-system/chapters/*.json` - 章级合同（本章焦点、动态上下文）
    4. latest accepted `.story-system/commits/chapter_XXX.commit.json` - 写后事实（已发布章节的定稿状态）
    5. `memory-contract` 系列查询 - 记忆编排结果（长期记忆、伏笔、时间线）
-   6. `.canon-ledger/state.json` / `index.db` - 只读投影层（类比网文后台的"角色卡"、"章节列表"）
+   6. `.canon-ledger/state.json` / `index.db` - 只读投影层（角色卡、章节列表）
 
    **优先级说明**：
    - 写前真源（1-3）：作者开写前必须遵守的"大纲、设定、禁区"

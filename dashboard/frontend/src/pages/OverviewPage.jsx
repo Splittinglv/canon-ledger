@@ -5,15 +5,8 @@ import Badge from '../components/Badge.jsx'
 import ChartWrapper from '../components/ChartWrapper.jsx'
 import DataTable from '../components/DataTable.jsx'
 import Pager from '../components/Pager.jsx'
-import { STRAND_COLORS } from '../lib/charts.js'
+import { formatChapterLabel, formatNumber, formatPercent, formatShortNumber } from '../lib/format.js'
 import { buildForeshadowingRecords, summarizeForeshadowing } from '../lib/foreshadowing.js'
-import {
-    average,
-    formatChapterLabel,
-    formatNumber,
-    formatPercent,
-    formatShortNumber,
-} from '../lib/format.js'
 import { groupChaptersByVolume } from '../lib/story.js'
 
 const WINDOW_SIZE = 50
@@ -32,11 +25,23 @@ function toneForForeshadowing(level) {
     return 'blue'
 }
 
-function toneForHookStrength(strength) {
-    if (strength === 'strong') return 'green'
-    if (strength === 'medium') return 'amber'
-    if (strength === 'weak') return 'red'
-    return 'blue'
+function countReviewIssues(item) {
+    if (item?.issues_count != null && Number.isFinite(Number(item.issues_count))) {
+        return Number(item.issues_count)
+    }
+    const counts = item?.review_severity_counts || {}
+    return Object.values(counts).reduce((sum, value) => {
+        const n = Number(value)
+        return sum + (Number.isFinite(n) ? n : 0)
+    }, 0)
+}
+
+function countBlockingIssues(item) {
+    if (item?.blocking_count != null && Number.isFinite(Number(item.blocking_count))) {
+        return Number(item.blocking_count)
+    }
+    const counts = item?.review_severity_counts || {}
+    return Number(counts.critical || 0)
 }
 
 function toneForUrgencyBadge(level) {
@@ -55,14 +60,13 @@ function formatRuntimeText(runtimeHealth) {
     return `${runtimeHealth.latest_commit_status || 'missing'} · fallback ${fallback}`
 }
 
-function buildReviewOption(items) {
-    const scores = items
-        .map(item => Number(item.review_score))
-        .filter(score => Number.isFinite(score))
-    const averageScore = average(scores)
+function buildIssueOption(items) {
+    const issueCounts = items.map(item => countReviewIssues(item))
+    const blockingCounts = items.map(item => countBlockingIssues(item))
 
     return {
         tooltip: { trigger: 'axis' },
+        legend: { bottom: 0 },
         grid: { left: 52, right: 24, top: 36, bottom: 46 },
         xAxis: {
             type: 'category',
@@ -72,30 +76,31 @@ function buildReviewOption(items) {
         yAxis: {
             type: 'value',
             min: 0,
-            max: Math.max(100, ...scores, 0),
+            minInterval: 1,
+            max: Math.max(1, ...issueCounts, ...blockingCounts),
         },
         series: [
             {
-                type: 'line',
-                name: '审查得分',
-                data: items.map(item => item.review_score ?? null),
-                symbol: 'rect',
-                symbolSize: 8,
-                lineStyle: { width: 3, color: '#26a8ff' },
+                type: 'bar',
+                name: '问题',
+                data: issueCounts,
+                barWidth: '36%',
                 itemStyle: {
                     color: '#26a8ff',
                     borderColor: '#2a220f',
                     borderWidth: 2,
                 },
-                connectNulls: false,
-                markLine: averageScore
-                    ? {
-                        symbol: 'none',
-                        lineStyle: { color: '#f5a524', width: 2, type: 'dashed' },
-                        label: { formatter: `均值 ${formatShortNumber(averageScore)}` },
-                        data: [{ yAxis: Number(averageScore.toFixed(2)) }],
-                    }
-                    : undefined,
+            },
+            {
+                type: 'bar',
+                name: '阻断',
+                data: blockingCounts,
+                barWidth: '36%',
+                itemStyle: {
+                    color: '#d7263d',
+                    borderColor: '#2a220f',
+                    borderWidth: 2,
+                },
             },
         ],
     }
@@ -136,32 +141,6 @@ function buildVolumeOption(groups) {
     }
 }
 
-function buildStrandOption(entries) {
-    return {
-        tooltip: { trigger: 'item' },
-        legend: { bottom: 0 },
-        series: [
-            {
-                type: 'pie',
-                radius: ['42%', '68%'],
-                avoidLabelOverlap: false,
-                itemStyle: {
-                    borderColor: '#2a220f',
-                    borderWidth: 2,
-                },
-                label: {
-                    show: true,
-                    formatter: '{b}\n{d}%',
-                    color: '#5d5035',
-                    fontSize: 12,
-                    fontWeight: 600,
-                },
-                data: entries,
-            },
-        ],
-    }
-}
-
 function StatCard({ label, value, sub, tone = 'accent', progress }) {
     return (
         <article className="card stat-card">
@@ -182,12 +161,6 @@ function RecentSummaryCard({ item }) {
         <article className="summary-card">
             <div className="summary-card-header">
                 <span className="summary-chapter">{formatChapterLabel(item.chapter)}</span>
-                <div className="summary-badges">
-                    <Badge tone={toneForHookStrength(item.hook_strength)}>
-                        {item.hook_strength || '无钩子'}
-                    </Badge>
-                    {item.review_score ? <Badge tone="purple">{item.review_score} 分</Badge> : null}
-                </div>
             </div>
             <h3>{item.title || '未命名章节'}</h3>
             <p>{item.summary || '暂无章节概要。'}</p>
@@ -303,43 +276,17 @@ export default function OverviewPage() {
             .slice(0, 5)
     }, [foreshadowRecords])
 
-    const latestReviewAverage = useMemo(() => {
-        return average((latestWindow.items || []).map(item => item.review_score))
+    const latestIssueTotals = useMemo(() => {
+        const items = latestWindow.items || []
+        return {
+            issues: items.reduce((sum, item) => sum + countReviewIssues(item), 0),
+            blocking: items.reduce((sum, item) => sum + countBlockingIssues(item), 0),
+        }
     }, [latestWindow.items])
 
     const recentSummaries = useMemo(() => {
         return [...(latestWindow.items || [])].slice(-3).reverse()
     }, [latestWindow.items])
-
-    const strandEntries = useMemo(() => {
-        const history = Array.isArray(projectInfo?.strand_tracker?.history)
-            ? projectInfo.strand_tracker.history
-            : []
-        const counts = new Map([
-            ['quest', 0],
-            ['fire', 0],
-            ['constellation', 0],
-        ])
-
-        history.forEach(item => {
-            const key = String(item?.strand || item?.dominant || '').toLowerCase()
-            if (counts.has(key)) {
-                counts.set(key, counts.get(key) + 1)
-            }
-        })
-
-        return [...counts.entries()]
-            .filter(([, value]) => value > 0)
-            .map(([key, value]) => ({
-                name: key,
-                value,
-                itemStyle: {
-                    color: STRAND_COLORS[key] || '#00b8d4',
-                    borderColor: '#2a220f',
-                    borderWidth: 2,
-                },
-            }))
-    }, [projectInfo?.strand_tracker?.history])
 
     const totalWords = Number(progress.total_words || 0)
     const targetWords = Number(info.target_words || 0)
@@ -371,9 +318,9 @@ export default function OverviewPage() {
                     tone="plain"
                 />
                 <StatCard
-                    label="审查均分"
-                    value={latestReviewAverage ? formatShortNumber(latestReviewAverage) : '—'}
-                    sub="最近 50 章平均"
+                    label="审查问题"
+                    value={formatNumber(latestIssueTotals.issues)}
+                    sub={`阻断 ${formatNumber(latestIssueTotals.blocking)} · 最近 50 章`}
                 />
                 <StatCard
                     label="紧急伏笔"
@@ -386,7 +333,7 @@ export default function OverviewPage() {
                 <div className="card-header">
                     <div>
                         <div className="section-label">REVIEW TREND</div>
-                        <div className="card-title">审查得分趋势</div>
+                        <div className="card-title">审查问题趋势</div>
                     </div>
                     <Badge tone="green">
                         {currentStart && currentEnd ? `${formatChapterLabel(currentStart)} - ${formatChapterLabel(currentEnd)}` : '最近窗口'}
@@ -394,7 +341,7 @@ export default function OverviewPage() {
                 </div>
                 {windowItems.length ? (
                     <>
-                        <ChartWrapper option={buildReviewOption(windowItems)} loading={loadingTrend} />
+                        <ChartWrapper option={buildIssueOption(windowItems)} loading={loadingTrend} />
                         <Pager
                             page={displayPage}
                             totalPages={totalPages}
@@ -414,41 +361,22 @@ export default function OverviewPage() {
                 )}
             </article>
 
-            <div className="content-grid two-columns">
-                <article className="card">
-                    <div className="card-header">
-                        <div>
-                            <div className="section-label">WORD DISTRIBUTION</div>
-                            <div className="card-title">字数分布（按卷）</div>
-                        </div>
-                        <Badge tone="purple">{volumeGroups.length} 卷</Badge>
+            <article className="card">
+                <div className="card-header">
+                    <div>
+                        <div className="section-label">WORD DISTRIBUTION</div>
+                        <div className="card-title">字数分布（按卷）</div>
                     </div>
-                    {volumeGroups.length ? (
-                        <ChartWrapper option={buildVolumeOption(volumeGroups)} />
-                    ) : (
-                        <div className="empty-state">
-                            <p>暂无章节字数数据</p>
-                        </div>
-                    )}
-                </article>
-
-                <article className="card">
-                    <div className="card-header">
-                        <div>
-                            <div className="section-label">STRAND OVERVIEW</div>
-                            <div className="card-title">Strand Weave 整体分布</div>
-                        </div>
-                        <Badge tone="purple">{projectInfo?.strand_tracker?.current_dominant || 'unknown'}</Badge>
+                    <Badge tone="purple">{volumeGroups.length} 卷</Badge>
+                </div>
+                {volumeGroups.length ? (
+                    <ChartWrapper option={buildVolumeOption(volumeGroups)} />
+                ) : (
+                    <div className="empty-state">
+                        <p>暂无章节字数数据</p>
                     </div>
-                    {strandEntries.length ? (
-                        <ChartWrapper option={buildStrandOption(strandEntries)} height={260} />
-                    ) : (
-                        <div className="empty-state">
-                            <p>暂无 Strand 历史</p>
-                        </div>
-                    )}
-                </article>
-            </div>
+                )}
+            </article>
 
             <div className="content-grid two-columns">
                 <article className="card">

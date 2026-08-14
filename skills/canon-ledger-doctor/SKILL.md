@@ -1,6 +1,6 @@
 ---
 name: canon-ledger-doctor
-description: 只读体检网文项目的目录、数据库、RAG、依赖和 Dashboard 产物。用户说项目体检、诊断或 /canon-ledger-doctor 时使用。
+description: 只读体检当前书项目的目录、数据库、RAG、依赖和 Dashboard 产物。用户说项目体检、诊断或 /canon-ledger-doctor 时使用。
 ---
 
 # CanonLedger Doctor
