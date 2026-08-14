@@ -23,10 +23,6 @@ from genre_taxonomy import default_taxonomy_path, load_genre_taxonomy
 
 _CHINESE_COMMA_RE = re.compile(r"，")
 _MULTI_VALUE_COLUMNS = ("适用技能", "关键词", "意图与同义词", "适用题材")
-_ROUTE_TABLE = "题材与调性推理"
-_REASONING_TABLE = "裁决规则"
-_MIN_ROUTE_ROWS = 16
-_MIN_REASONING_ROWS = 14
 _VALID_SKILLS = {"init", "plan", "write", "review", "query", "learn", "dashboard", "story-system"}
 _VALID_LEVELS = {"提醒", "缺陷补偿", "知识补充"}
 
@@ -58,26 +54,9 @@ def _validate_genre_taxonomy(errors: List[str], warnings: List[str]) -> None:
         errors.append(f"[genre-index] 加载失败: {exc}")
         return
 
-    templates_dir = Path(__file__).resolve().parent.parent / "templates" / "genres"
-    template_files = {path.name for path in templates_dir.glob("*.md")}
-    referenced_files = {entry.template_file for entry in taxonomy.entries if entry.template_file}
-
-    missing_templates = sorted(referenced_files - template_files)
-    if missing_templates:
-        errors.append(f"[genre-index] template_file 不存在: {', '.join(missing_templates)}")
-
-    unreferenced_templates = sorted(template_files - referenced_files)
-    if unreferenced_templates:
-        errors.append(f"[genre-index] 模板未被 index 覆盖: {', '.join(unreferenced_templates)}")
-
     for entry in taxonomy.entries:
-        if entry.template_file and not entry.template_file.endswith(".md"):
-            errors.append(f"[genre-index] {entry.label} template_file 应以 .md 结尾: {entry.template_file}")
         if entry.canonical_genre != "全部" and entry.canonical_genre not in GENRE_CANONICAL:
             errors.append(f"[genre-index] {entry.label} canonical_genre 不合法: {entry.canonical_genre}")
-
-    if len(template_files) != 37:
-        warnings.append(f"[genre-index] 当前模板数量为 {len(template_files)}，预期 37")
 
 
 def validate(csv_dir: Path) -> Dict[str, List[str]]:
@@ -154,12 +133,9 @@ def validate(csv_dir: Path) -> Dict[str, List[str]]:
 
             if "层级" in header_set:
                 level = (row.get("层级") or "").strip()
-                allowed_levels = set(_VALID_LEVELS)
-                if table_name == _REASONING_TABLE:
-                    allowed_levels.add("推理层")
                 if not level:
                     errors.append(f"[{table_name}] 行{line_no} ({row_id}) 层级为空")
-                elif level not in allowed_levels:
+                elif level not in _VALID_LEVELS:
                     errors.append(f"[{table_name}] 行{line_no} ({row_id}) 层级值 '{level}' 不合法")
 
             genre_cell = (row.get("适用题材") or "").strip()
@@ -169,60 +145,6 @@ def validate(csv_dir: Path) -> Dict[str, List[str]]:
                         warnings.append(
                             f"[{table_name}] 行{line_no} ({row_id}) 适用题材值 '{genre}' 不在 canonical 枚举中"
                         )
-
-    route_path = csv_dir / f"{_ROUTE_TABLE}.csv"
-    route_canonicals: set[str] = set()
-    route_rows: List[Dict[str, str]] = []
-    if route_path.exists():
-        _, route_rows = _read_csv(route_path)
-        if len(route_rows) < _MIN_ROUTE_ROWS:
-            warnings.append(
-                f"[{_ROUTE_TABLE}] 路由行数 {len(route_rows)} 低于 Phase 2 验收线 {_MIN_ROUTE_ROWS}"
-            )
-        for line_no, row in enumerate(route_rows, start=2):
-            row_id = (row.get("编号") or "").strip()
-            canonical = (row.get("canonical_genre") or "").strip()
-            if not canonical:
-                warnings.append(f"[{_ROUTE_TABLE}] 行{line_no} ({row_id}) canonical_genre 为空")
-                continue
-            if canonical == "全部":
-                continue
-            if canonical not in GENRE_CANONICAL:
-                warnings.append(
-                    f"[{_ROUTE_TABLE}] 行{line_no} ({row_id}) canonical_genre '{canonical}' 不在 canonical 枚举中"
-                )
-                continue
-            route_canonicals.add(canonical)
-
-    reasoning_path = csv_dir / f"{_REASONING_TABLE}.csv"
-    reasoning_rows: List[Dict[str, str]] = []
-    reasoning_genres: set[str] = set()
-    if reasoning_path.exists():
-        _, reasoning_rows = _read_csv(reasoning_path)
-        if len(reasoning_rows) < _MIN_REASONING_ROWS:
-            warnings.append(
-                f"[{_REASONING_TABLE}] 裁决行数 {len(reasoning_rows)} 低于 Phase 2 验收线 {_MIN_REASONING_ROWS}"
-            )
-        for line_no, row in enumerate(reasoning_rows, start=2):
-            row_id = (row.get("编号") or "").strip()
-            genre = (row.get("题材") or "").strip()
-            if not genre:
-                continue
-            if genre not in GENRE_CANONICAL:
-                warnings.append(f"[{_REASONING_TABLE}] 行{line_no} ({row_id}) 题材 '{genre}' 不在 canonical 枚举中")
-                continue
-            reasoning_genres.add(genre)
-
-        for canonical_genre in sorted(GENRE_CANONICAL):
-            if canonical_genre not in reasoning_genres:
-                warnings.append(f"[{_REASONING_TABLE}] canonical genre '{canonical_genre}' 无对应裁决行")
-
-    for canonical_genre in sorted(route_canonicals):
-        if canonical_genre not in reasoning_genres:
-            warnings.append(f"[{_ROUTE_TABLE}] canonical genre '{canonical_genre}' 无对应裁决行")
-    for canonical_genre in sorted(reasoning_genres):
-        if route_rows and canonical_genre not in route_canonicals:
-            warnings.append(f"[{_REASONING_TABLE}] canonical genre '{canonical_genre}' 无对应路由行")
 
     return {"errors": errors, "warnings": warnings}
 

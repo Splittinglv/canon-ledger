@@ -60,7 +60,8 @@ def load_tables(csv_dir: Path, table: Optional[str] = None) -> Dict[str, List[Di
 # ---------------------------------------------------------------------------
 
 _MULTI_VALUE_SPLIT_RE = re.compile(r"[|,，、；;]+")
-_INTERNAL_TABLE_ROLES = {"route", "reasoning"}
+# 插件自身不再随包发布技法/套路表。这里保留表名黑名单，用于挡住作者自行放进
+# references/csv/ 的写法类 CSV：load_tables() 是按 *.csv 通配加载的。
 CRAFT_TABLES = frozenset({"场景写法", "写作技法", "桥段套路", "爽点与节奏"})
 CONSISTENCY_TABLES = frozenset({"命名规则", "人设与关系", "金手指与设定"})
 _WRITE_HIDDEN_CRAFT_SKILLS = {"write", "review"}
@@ -104,15 +105,11 @@ def _genre_matches(row: Dict[str, str], genre: Optional[str]) -> bool:
 
 
 def _table_visible_for_search(table_name: str, skill: str, explicit_table: bool) -> bool:
-    """Keep story-system internals and craft tables out of default write search."""
+    """Keep craft tables out of default write/review search."""
     cfg = CSV_CONFIG.get(table_name) or {}
-    if cfg.get("role") in _INTERNAL_TABLE_ROLES and skill != "story-system" and not explicit_table:
-        return False
     if skill in _WRITE_HIDDEN_CRAFT_SKILLS and not explicit_table:
         if cfg.get("craft") or table_name in CRAFT_TABLES:
             return False
-    if explicit_table or skill == "story-system":
-        return True
     return True
 
 
@@ -147,50 +144,6 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
         "prefix": "NR",
         "required_cols": ["编号", "适用技能", "分类", "层级", "关键词", "适用题材", "核心摘要"],
     },
-    "场景写法": {
-        "file": "场景写法.csv",
-        "search_cols": {"关键词": 3, "意图与同义词": 4, "核心摘要": 2},
-        "output_cols": ["编号", "模式名称", "核心摘要", "详细展开"],
-        "poison_col": "毒点",
-        "role": "base",
-        "craft": True,
-        "contract_inject": "",
-        "prefix": "SP",
-        "required_cols": ["编号", "适用技能", "分类", "层级", "关键词", "适用题材", "核心摘要"],
-    },
-    "写作技法": {
-        "file": "写作技法.csv",
-        "search_cols": {"关键词": 3, "意图与同义词": 4, "核心摘要": 2},
-        "output_cols": ["编号", "技法名称", "核心摘要", "详细展开"],
-        "poison_col": "毒点",
-        "role": "base",
-        "craft": True,
-        "contract_inject": "",
-        "prefix": "WT",
-        "required_cols": ["编号", "适用技能", "分类", "层级", "关键词", "适用题材", "核心摘要"],
-    },
-    "桥段套路": {
-        "file": "桥段套路.csv",
-        "search_cols": {"关键词": 3, "意图与同义词": 4, "核心摘要": 2},
-        "output_cols": ["编号", "桥段名称", "核心摘要", "详细展开"],
-        "poison_col": "毒点",
-        "role": "dynamic",
-        "craft": True,
-        "contract_inject": "",
-        "prefix": "TR",
-        "required_cols": ["编号", "适用技能", "分类", "层级", "关键词", "适用题材", "核心摘要"],
-    },
-    "爽点与节奏": {
-        "file": "爽点与节奏.csv",
-        "search_cols": {"关键词": 3, "意图与同义词": 4, "核心摘要": 2},
-        "output_cols": ["编号", "节奏类型", "核心摘要", "详细展开"],
-        "poison_col": "毒点",
-        "role": "dynamic",
-        "craft": True,
-        "contract_inject": "",
-        "prefix": "PA",
-        "required_cols": ["编号", "适用技能", "分类", "层级", "关键词", "适用题材", "核心摘要"],
-    },
     "人设与关系": {
         "file": "人设与关系.csv",
         "search_cols": {"关键词": 3, "意图与同义词": 4, "核心摘要": 2},
@@ -210,28 +163,6 @@ CSV_CONFIG: Dict[str, Dict[str, Any]] = {
         "contract_inject": "MASTER_SETTING.base_context",
         "prefix": "SY",
         "required_cols": ["编号", "适用技能", "分类", "层级", "关键词", "适用题材", "核心摘要"],
-    },
-    "题材与调性推理": {
-        "file": "题材与调性推理.csv",
-        "search_cols": {"关键词": 3, "意图与同义词": 4, "题材别名": 3},
-        "output_cols": ["编号", "题材/流派", "canonical_genre", "核心调性", "推荐基础检索表", "推荐动态检索表"],
-        "poison_col": "毒点",
-        "role": "route",
-        "contract_inject": "MASTER_SETTING.route",
-        "prefix": "GR",
-        "required_cols": ["编号", "适用技能", "题材/流派", "canonical_genre", "核心调性", "推荐基础检索表", "推荐动态检索表"],
-    },
-    "裁决规则": {
-        "file": "裁决规则.csv",
-        "search_cols": {"题材": 4},
-        "output_cols": ["题材", "风格优先级", "爽点优先级", "节奏默认策略",
-                        "毒点权重", "冲突裁决", "contract注入层", "反模式"],
-        "poison_col": "",
-        "role": "reasoning",
-        "craft": True,
-        "contract_inject": "",
-        "prefix": "RS",
-        "required_cols": ["编号", "题材", "风格优先级", "爽点优先级", "节奏默认策略", "冲突裁决"],
     },
 }
 

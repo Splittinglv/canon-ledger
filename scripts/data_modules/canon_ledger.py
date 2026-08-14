@@ -172,12 +172,10 @@ def _build_preflight_report(explicit_project_root: Optional[str]) -> dict:
     plugin_root = scripts_dir.parent
     skill_root = plugin_root / "skills" / "canon-ledger-write"
     entry_script = scripts_dir / "canon_ledger.py"
-    extract_script = scripts_dir / "extract_chapter_context.py"
 
     checks: list[dict[str, object]] = [
         {"name": "scripts_dir", "ok": scripts_dir.is_dir(), "path": str(scripts_dir)},
         {"name": "entry_script", "ok": entry_script.is_file(), "path": str(entry_script)},
-        {"name": "extract_context_script", "ok": extract_script.is_file(), "path": str(extract_script)},
         {"name": "skill_root", "ok": skill_root.is_dir(), "path": str(skill_root)},
     ]
 
@@ -567,14 +565,8 @@ def main() -> None:
     p_rag = sub.add_parser("rag", help="转发到 rag_adapter")
     p_rag.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_style = sub.add_parser("style", help="转发到 style_sampler")
-    p_style.add_argument("args", nargs=argparse.REMAINDER)
-
     p_entity = sub.add_parser("entity", help="转发到 entity_linker")
     p_entity.add_argument("args", nargs=argparse.REMAINDER)
-
-    p_context = sub.add_parser("context", help="转发到 context_manager")
-    p_context.add_argument("args", nargs=argparse.REMAINDER)
 
     p_memory = sub.add_parser("memory", help="转发到 memory.store")
     p_memory.add_argument("args", nargs=argparse.REMAINDER)
@@ -594,10 +586,6 @@ def main() -> None:
 
     p_init = sub.add_parser("init", help="转发到 init_project.py（初始化项目）")
     p_init.add_argument("args", nargs=argparse.REMAINDER)
-
-    p_extract_context = sub.add_parser("extract-context", help="转发到 extract_chapter_context.py")
-    p_extract_context.add_argument("--chapter", type=int, required=True, help="目标章节号")
-    p_extract_context.add_argument("--format", choices=["json"], default="json", help="输出格式")
 
     p_story_system = sub.add_parser("story-system", help="转发到 story_system.py")
     p_story_system.add_argument("args", nargs=argparse.REMAINDER)
@@ -687,12 +675,8 @@ def main() -> None:
         raise SystemExit(_run_data_module("state_manager", [*forward_args, *rest]))
     if tool == "rag":
         raise SystemExit(_run_data_module("rag_adapter", [*forward_args, *rest]))
-    if tool == "style":
-        raise SystemExit(_run_data_module("style_sampler", [*forward_args, *rest]))
     if tool == "entity":
         raise SystemExit(_run_data_module("entity_linker", [*forward_args, *rest]))
-    if tool == "context":
-        raise SystemExit(_run_data_module("context_manager", [*forward_args, *rest]))
     if tool == "memory":
         raise SystemExit(_run_data_module("memory.store", [*forward_args, *rest]))
     if tool == "status":
@@ -703,9 +687,6 @@ def main() -> None:
         raise SystemExit(_run_script("backup_manager.py", [*forward_args, *rest]))
     if tool == "archive":
         raise SystemExit(_run_script("archive_manager.py", [*forward_args, *rest]))
-    if tool == "extract-context":
-        return_args = [*forward_args, "--chapter", str(args.chapter), "--format", str(args.format)]
-        raise SystemExit(_run_script("extract_chapter_context.py", return_args))
     if tool == "story-system":
         raise SystemExit(_run_script("story_system.py", [*forward_args, *rest]))
     if tool == "story-events":

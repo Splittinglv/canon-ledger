@@ -54,7 +54,7 @@ if ($LASTEXITCODE -ne 0) {
 
 if ($Mode -eq "smoke") {
     python -m pytest -q `
-        scripts/data_modules/tests/test_extract_chapter_context.py `
+        scripts/data_modules/tests/test_memory_contract_adapter.py `
         scripts/data_modules/tests/test_rag_adapter.py `
         --basetemp $baseTemp `
         --no-cov `

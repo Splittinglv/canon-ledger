@@ -82,23 +82,3 @@ def test_project_dotenv_is_scoped_to_its_config(monkeypatch, tmp_path):
     assert config_b.rerank_api_key == ""
     assert os.environ.get("EMBED_API_KEY") is None
     assert os.environ.get("RERANK_API_KEY") is None
-
-
-def test_config_default_context_template_weights_dynamic_is_available(tmp_path):
-    cfg = DataModulesConfig.from_project_root(tmp_path)
-    dynamic = cfg.context_template_weights_dynamic
-
-    assert isinstance(dynamic, dict)
-    assert "early" in dynamic
-    assert "mid" in dynamic
-    assert "late" in dynamic
-    assert "plot" in dynamic["early"]
-
-
-def test_config_dynamic_template_weights_are_independent_instances(tmp_path):
-    cfg1 = DataModulesConfig.from_project_root(tmp_path)
-    cfg2 = DataModulesConfig.from_project_root(tmp_path)
-
-    cfg1.context_template_weights_dynamic["early"]["plot"]["core"] = 0.77
-
-    assert cfg2.context_template_weights_dynamic["early"]["plot"]["core"] != 0.77

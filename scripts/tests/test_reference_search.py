@@ -75,50 +75,6 @@ class TestSkillAndGenreFiltering:
         ids = [r["编号"] for r in out["data"]["results"]]
         assert "NR-001" in ids
 
-    def test_emotion_query_hits_writing_techniques_table(self):
-        """情感与心理查询应命中 写作技法.csv。"""
-        out = run_search(
-            "--skill", "write",
-            "--table", "写作技法",
-            "--query", "情感描写 心理",
-        )
-        assert out["status"] == "success"
-        ids = [r["编号"] for r in out["data"]["results"]]
-        assert "WT-002" in ids
-
-    def test_prompt_derived_dialogue_query_hits_new_writing_technique(self):
-        """基于 prompt 补充的对话技法应可被检索。"""
-        out = run_search(
-            "--skill", "write",
-            "--table", "写作技法",
-            "--query", "去水词对话",
-        )
-        assert out["status"] == "success"
-        ids = [r["编号"] for r in out["data"]["results"]]
-        assert "WT-005" in ids
-
-    def test_prompt_derived_trope_query_hits_bridge_table(self):
-        """桥段套路表应能命中退婚流反击条目。"""
-        out = run_search(
-            "--skill", "write",
-            "--table", "桥段套路",
-            "--query", "退婚流 三年之约",
-        )
-        assert out["status"] == "success"
-        ids = [r["编号"] for r in out["data"]["results"]]
-        assert "TR-001" in ids
-
-    def test_prompt_derived_pacing_query_hits_new_pacing_table(self):
-        """爽点与节奏表应能命中微反转补刀。"""
-        out = run_search(
-            "--skill", "plan",
-            "--table", "爽点与节奏",
-            "--query", "微反转补刀",
-        )
-        assert out["status"] == "success"
-        ids = [r["编号"] for r in out["data"]["results"]]
-        assert "PA-002" in ids
-
     def test_prompt_derived_setting_query_hits_new_system_table(self):
         """金手指与设定表应能命中异能副作用边界。"""
         out = run_search(
@@ -141,26 +97,15 @@ class TestSkillAndGenreFiltering:
         ids = [r["编号"] for r in out["data"]["results"]]
         assert "CH-001" in ids
 
-    def test_internal_story_system_tables_do_not_leak_into_write_search(self):
-        """普通 write 跨表检索不应召回题材路由和裁决层内部表。"""
+    def test_write_search_only_returns_consistency_tables(self):
+        """默认 write 跨表检索只能召回一致性表，不得出现写法/套路/路由/裁决表。"""
         out = run_search(
             "--skill", "write",
-            "--query", "追妻火葬场 规则 裁决",
+            "--query", "追妻火葬场 规则 裁决 爽点 节奏",
             "--max-results", "20",
         )
         tables = {r["表"] for r in out["data"]["results"]}
-        assert "题材与调性推理" not in tables
-        assert "裁决规则" not in tables
-
-    def test_story_system_skill_can_search_route_table(self):
-        """story-system 是内部路由表的实际技能标签。"""
-        out = run_search(
-            "--skill", "story-system",
-            "--table", "题材与调性推理",
-            "--query", "快穿 任务 原主",
-        )
-        ids = [r["编号"] for r in out["data"]["results"]]
-        assert "GR-025" in ids
+        assert tables <= {"命名规则", "人设与关系", "金手指与设定"}
 
     def test_legacy_comma_delimiters_remain_compatible(self, tmp_path):
         """迁移过渡期仍兼容旧的逗号分隔技能与题材字段。"""
@@ -275,7 +220,7 @@ class TestOutputFormat:
 class TestPerTableSearchCols:
     def test_different_tables_use_different_search_weights(self):
         out1 = run_search("--skill", "write", "--table", "命名规则", "--query", "角色命名")
-        out2 = run_search("--skill", "write", "--table", "场景写法", "--query", "战斗描写")
+        out2 = run_search("--skill", "init", "--table", "人设与关系", "--query", "镜像反派")
         assert out1["status"] == "success"
         assert out2["status"] == "success"
         assert out1["data"]["total"] >= 1
@@ -293,17 +238,11 @@ class TestGenreCanonical:
         }
         assert GENRE_CANONICAL == expected
 
-    def test_taxonomy_index_covers_genre_templates(self):
-        from genre_taxonomy import load_genre_taxonomy
-        templates_dir = Path(__file__).resolve().parents[2] / "templates" / "genres"
-        template_files = {path.name for path in templates_dir.glob("*.md")}
-        referenced = {
-            entry.template_file
-            for entry in load_genre_taxonomy().entries
-            if entry.template_file
-        }
-        assert len(template_files) == 37
-        assert template_files <= referenced
+    def test_taxonomy_ships_no_genre_templates(self):
+        """插件不再随包发布题材模板；题材只作分类标签。"""
+        templates_dir = Path(__file__).resolve().parents[2] / "templates"
+        assert not (templates_dir / "genres").exists()
+        assert not (templates_dir / "golden-finger-templates.md").exists()
 
     def test_taxonomy_spot_checks_platform_and_legacy_inputs(self):
         from reference_search import resolve_genre
@@ -334,21 +273,18 @@ class TestGenreCanonical:
         assert resolve_genre("刑侦") == "悬疑"
         assert resolve_genre("网游") == "游戏"
 
-    def test_resolve_genre_keeps_template_namespace_separate(self):
+    def test_resolve_genre_maps_labels_to_canonical_enum(self):
         from genre_taxonomy import resolve_genre_input
         xuanhuan = resolve_genre_input("玄幻")
         assert xuanhuan.canonical_genre == "玄幻"
-        assert xuanhuan.template_files == ["修仙.md"]
 
         xianxia = resolve_genre_input("修仙")
         assert xianxia.canonical_genre == "仙侠"
-        assert xianxia.template_files == ["修仙.md"]
 
     def test_resolve_composite_natural_language_genre(self):
         from genre_taxonomy import resolve_genre_input
         resolved = resolve_genre_input("知乎短篇风的规则怪谈")
         assert resolved.canonical_genre == "悬疑"
-        assert resolved.template_files == ["规则怪谈.md", "知乎短篇.md"]
         assert "规则怪谈" in resolved.route_tags
         assert "知乎短篇" in resolved.format_tags
 

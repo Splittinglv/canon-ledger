@@ -87,50 +87,6 @@ def test_init_does_not_resolve_existing_project_root(monkeypatch):
     assert called["argv"] == ["proj-dir", "测试书", "修仙"]
 
 
-def test_extract_context_forwards_with_resolved_project_root(monkeypatch, tmp_path):
-    module = _load_canon_ledger_module()
-
-    book_root = (tmp_path / "book").resolve()
-    called = {}
-
-    def _fake_resolve(explicit_project_root=None):
-        return book_root
-
-    def _fake_run_script(script_name, argv):
-        called["script_name"] = script_name
-        called["argv"] = list(argv)
-        return 0
-
-    monkeypatch.setattr(module, "_resolve_root", _fake_resolve)
-    monkeypatch.setattr(module, "_run_script", _fake_run_script)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "canon-ledger",
-            "--project-root",
-            str(tmp_path),
-            "extract-context",
-            "--chapter",
-            "12",
-        ],
-    )
-
-    with pytest.raises(SystemExit) as exc:
-        module.main()
-
-    assert int(exc.value.code or 0) == 0
-    assert called["script_name"] == "extract_chapter_context.py"
-    assert called["argv"] == [
-        "--project-root",
-        str(book_root),
-        "--chapter",
-        "12",
-        "--format",
-        "json",
-    ]
-
-
 def test_memory_contract_forwards_context_budget(monkeypatch, tmp_path):
     module = _load_canon_ledger_module()
     book_root = (tmp_path / "book").resolve()
@@ -1346,7 +1302,7 @@ def test_canon_ledger_skill_flow_runs_story_contract_context_and_review_pipeline
 
     script_to_module = {
         "story_system.py": "story_system",
-        "extract_chapter_context.py": "extract_chapter_context",
+        "memory_cli.py": "memory_cli",
         "review_pipeline.py": "review_pipeline",
     }
 
@@ -1402,23 +1358,21 @@ def test_canon_ledger_skill_flow_runs_story_contract_context_and_review_pipeline
             [
                 "--project-root",
                 str(project_root),
-                "extract-context",
+                "memory-contract",
+                "load-context",
                 "--chapter",
                 "3",
-                "--format",
-                "json",
             ]
         )
         == 0
     )
     context_payload = json.loads(capsys.readouterr().out)
     assert (
-        context_payload["story_contract"]["review_contract"]["meta"]["contract_type"]
+        context_payload["sections"]["story_contracts"]["review"]["meta"]["contract_type"]
         == "REVIEW_CONTRACT"
     )
-    assert context_payload["prewrite_validation"]["blocking"] is False
-    assert context_payload["rag_assist"]["invoked"] is True
-    assert context_payload["rag_assist"]["hits"]
+    assert context_payload["sections"]["rag_assist"]["invoked"] is True
+    assert context_payload["sections"]["rag_assist"]["hits"]
     assert calls["embed_batch"] >= 1
     assert calls["embed"] >= 1
     assert calls["rerank"] >= 1

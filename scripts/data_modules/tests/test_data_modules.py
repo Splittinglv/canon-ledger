@@ -17,10 +17,8 @@ from data_modules import (
     StateManager,
     IndexManager,
     RAGAdapter,
-    StyleSampler,
     ChapterMeta,
     SceneMeta,
-    StyleSample,
 )
 import data_modules.index_manager as index_manager_module
 from data_modules.index_manager import (
@@ -1214,61 +1212,6 @@ class TestIndexManager:
 
         with pytest.raises(ValueError, match="outside allowed directory"):
             index_manager_module.main()
-
-
-class TestStyleSampler:
-    """风格样本测试"""
-
-    def test_add_and_get_sample(self, temp_project):
-        sampler = StyleSampler(temp_project)
-
-        sample = StyleSample(
-            id="ch100_s1",
-            chapter=100,
-            scene_type="战斗",
-            content="萧炎一拳轰出...",
-            score=0.85,
-            tags=["战斗", "激烈"]
-        )
-        assert sampler.add_sample(sample)
-
-        results = sampler.get_samples_by_type("战斗")
-        assert len(results) == 1
-        assert results[0].id == "ch100_s1"
-
-    def test_extract_candidates(self, temp_project):
-        sampler = StyleSampler(temp_project)
-
-        scenes = [
-            {"index": 1, "summary": "战斗场景", "content": "萧炎一拳轰出，斗气如虹，直接将对手击退三丈，周围的空气都被震得嗡嗡作响..." + "a" * 200}
-        ]
-
-        # 低分不提取
-        candidates = sampler.extract_candidates(100, "", 70, scenes)
-        assert len(candidates) == 0
-
-        # 高分提取
-        candidates = sampler.extract_candidates(100, "", 85, scenes)
-        assert len(candidates) == 1
-        assert candidates[0].scene_type == "战斗"
-
-    def test_select_samples_for_chapter(self, temp_project):
-        sampler = StyleSampler(temp_project)
-
-        # 添加一些样本
-        for i in range(3):
-            sampler.add_sample(StyleSample(
-                id=f"battle_{i}",
-                chapter=i,
-                scene_type="战斗",
-                content=f"战斗内容 {i}",
-                score=0.9,
-                tags=[]
-            ))
-
-        samples = sampler.select_samples_for_chapter("本章有一场激烈的战斗")
-        assert len(samples) <= 3
-        assert all(s.scene_type == "战斗" for s in samples)
 
 
 class TestRAGAdapter:

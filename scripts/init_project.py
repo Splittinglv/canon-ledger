@@ -269,7 +269,6 @@ def init_project(
     sect_hierarchy: str = "",
     cultivation_chain: str = "",
     cultivation_subtiers: str = "",
-    include_genre_templates: bool = False,
 ) -> None:
     project_path = Path(project_dir).expanduser().resolve()
     if ".cursor" in project_path.parts:
@@ -318,12 +317,6 @@ def init_project(
                 "route": genre_resolution.route_tags,
                 "trope": genre_resolution.trope_tags,
                 "format": genre_resolution.format_tags,
-                # 题材模板属于可选参考材料，不是 canon。只有作者显式选择时才记录。
-                "templates": (
-                    [Path(name).stem for name in genre_resolution.template_files]
-                    if include_genre_templates
-                    else []
-                ),
             },
             "created_at": created_at,
             "target_words": int(target_words),
@@ -482,21 +475,10 @@ def init_project(
         },
     )
 
-    # 读取内置模板（可选）
+    # 读取内置输出模板
     script_dir = Path(__file__).resolve().parent
     templates_dir = script_dir.parent / "templates"
     output_templates_dir = templates_dir / "output"
-    template_files = list(genre_resolution.template_files) if include_genre_templates else []
-    genre_templates = []
-    seen = set()
-    for template_file in template_files:
-        if not template_file or template_file in seen:
-            continue
-        seen.add(template_file)
-        template_text = _read_text_if_exists(templates_dir / "genres" / template_file)
-        if template_text:
-            genre_templates.append(template_text.strip())
-    genre_template = "\n\n---\n\n".join(genre_templates)
     output_worldview = _read_text_if_exists(output_templates_dir / "设定集-世界观.md")
     output_power = _read_text_if_exists(output_templates_dir / "设定集-力量体系.md")
     output_protagonist = _read_text_if_exists(output_templates_dir / "设定集-主角卡.md")
@@ -549,20 +531,6 @@ def init_project(
         project_path / "设定集" / "世界观.md",
         worldview_content,
     )
-    if genre_template:
-        _write_text_if_missing(
-            project_path / "参考" / "题材模板.md",
-            "\n".join(
-                [
-                    "# 题材模板（可选参考）",
-                    "",
-                    "> 本文件不是设定真源，不会自动进入写作合同；仅供作者主动参考。",
-                    "",
-                    genre_template.strip(),
-                    "",
-                ]
-            ),
-        )
 
     power_content = output_power.strip() if output_power else ""
     if not power_content:
@@ -893,11 +861,6 @@ def main() -> None:
     parser.add_argument("--sect-hierarchy", default="", help="宗门/组织层级")
     parser.add_argument("--cultivation-chain", default="", help="典型境界链")
     parser.add_argument("--cultivation-subtiers", default="", help="小境界划分（初/中/后/巅 等）")
-    parser.add_argument(
-        "--include-genre-templates",
-        action="store_true",
-        help="显式生成独立的参考/题材模板.md；不会写入设定集或 Story System canon",
-    )
 
     # 深度模式可选参数（用于预填模板）
     parser.add_argument("--protagonist-desire", default="", help="主角核心欲望（深度模式）")
@@ -945,7 +908,6 @@ def main() -> None:
         sect_hierarchy=args.sect_hierarchy,
         cultivation_chain=args.cultivation_chain,
         cultivation_subtiers=args.cultivation_subtiers,
-        include_genre_templates=args.include_genre_templates,
     )
 
 

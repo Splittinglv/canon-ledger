@@ -632,39 +632,6 @@ def test_load_context_exposes_rag_assist_and_uses_runtime_directive_goal(monkeyp
     )
 
 
-def test_extract_context_delegates_to_the_same_helper_and_goal_key(monkeypatch, tmp_path):
-    """正文上下文包装器不得形成第二套事实检索策略。"""
-    import importlib
-    import extract_chapter_context as extract_context_module
-
-    captured = {}
-
-    def fake_load_rag_assist(_root, **kwargs):
-        captured.update(kwargs)
-        return empty_rag_assist(enabled=True, reason="no_hit")
-
-    # 某些集成测试会重新加载 data_modules；应修补包装器调用时解析到的模块对象，
-    # 避免使用可能过期的别名。
-    monkeypatch.setattr(
-        importlib.import_module("data_modules.rag_context"),
-        "load_rag_assist",
-        fake_load_rag_assist,
-    )
-    payload = extract_context_module._load_rag_assist(
-        tmp_path,
-        8,
-        "傍晚清点库存。",
-        chapter_goal="确认旧账是否结清",
-    )
-
-    assert payload["reason"] == "no_hit"
-    assert captured["chapter"] == 8
-    assert captured["chapter_goal"] == "确认旧账是否结清"
-    assert extract_context_module._chapter_goal(
-        {"story_contract": {"chapter_brief": {"chapter_directive": {"goal": "真实合同目标"}}}}
-    ) == "真实合同目标"
-
-
 def test_context_agent_limits_rag_to_non_blocking_factual_evidence():
     agent_path = Path(__file__).resolve().parents[3] / "agents" / "context-agent.md"
     text = agent_path.read_text(encoding="utf-8")

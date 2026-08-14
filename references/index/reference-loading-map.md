@@ -13,7 +13,6 @@
 | Skill | 阶段 | 触发 | Reference | 读取方式 | 区段锚点（区段读时匹配此真实标题） |
 |-------|------|------|-----------|---------|-----------|
 | canon-ledger-init | Step 1 | always | `skills/canon-ledger-init/references/system-data-flow.md` | 全文 | — |
-| canon-ledger-init | 题材公式 | 用户明确要题材套路参考 | `skills/canon-ledger-init/references/genre-tropes.md` | 区段 | 当前题材段 |
 | canon-ledger-init | Step 2 | 用户人物扁平 | `skills/canon-ledger-init/references/worldbuilding/character-design.md` | 全文 | — |
 | canon-ledger-init | Step 4 | always | `skills/canon-ledger-init/references/worldbuilding/faction-systems.md` | 区段 | 当前世界观所需小节 |
 | canon-ledger-init | Step 4 | 涉及修仙/玄幻/高武/异能 | `skills/canon-ledger-init/references/worldbuilding/power-systems.md` | 区段 | 力量体系对应小节 |
@@ -43,7 +42,7 @@
 
 | 入口 Skill | 阶段 | 触发 | 间接消费 |
 |------------|------|------|----------|
-| canon-ledger-init | Story System 初始化 | init 完成后 `story-system "${GENRE}" --genre "${GENRE}" --persist --format json` | `题材与调性推理.csv` 路由；默认只收集一致性表（命名/人设/金手指），不把技法表或裁决风格写入写章合同 |
+| canon-ledger-init | Story System 初始化 | init 完成后 `story-system "${GENRE}" --genre "${GENRE}" --persist --format json` | 题材只作中性分类标签；只收集一致性表（命名/人设/金手指），插件不再随包发布技法或裁决表 |
 | canon-ledger-plan | runtime 合同刷新 | 规划直接落到具体章节时 `--persist --emit-runtime-contracts --chapter {chapter_num}` | 同上，并由 `RuntimeContractBuilder` 生成 volume/chapter/review 合同 |
 | canon-ledger-write | 准备阶段 | 起草前 `--persist --emit-runtime-contracts --chapter {chapter_num}` | 同上；`chapter_{NNN}.json` 的 `chapter_focus` 仅作 CSV 参考，章节目标仍以章纲为准 |
 | canon-ledger-review | Step 1 | 目标章缺 runtime 合同时补齐 | 同上；review 优先依据 `.story-system/reviews/chapter_{NNN}.review.json` 与 latest accepted commit |
@@ -52,11 +51,9 @@
 
 | 步骤 | 数据源 | 说明 |
 |------|--------|------|
-| `_route()` | `题材与调性推理.csv` | 根据 query、显式 genre、题材别名和 canonical genre 选路由 |
-| `_collect_tables()` | 路由行推荐的基础/动态表 | 内部以 `skill="write"` 调 `reference_search.search()`，因此推荐表中的知识行需要匹配 write 可见性 |
-| `_load_reasoning()` | `裁决规则.csv` | 默认不注入写章合同。显式 `--table` 仍可读取 |
-| `_apply_reasoning()` | 基础/动态检索结果 | 默认只对一致性表排序，不注入风格优先级 |
-| `_rank_anti_patterns()` | 一致性表毒点 | 不把路由毒点、裁决反模式写入写章合同 |
+| `_route()` | 无 CSV | 只做中性题材归类：显式 genre、query 文本推断，或标记 `unclassified`。永不推荐检索表，也不注入调性/节奏预设 |
+| `_collect_tables()` | 路由推荐表（当前恒为空） | 内部以 `skill="write"` 调 `reference_search.search()`；`filter_consistency_tables()` 再收窄到命名/人设/金手指 |
+| `_extract_anti_patterns()` | 一致性表毒点 | 只取人物逻辑类毒点，不含路由毒点或裁决反模式 |
 
 ## 无独立 reference 的 Skill
 
@@ -71,6 +68,7 @@
 
 | 文件 | 现状 |
 |------|------|
-| 原 `optional/canon-ledger-craft/` 下写法/追读力/Anti-AI/润色 md | 已从插件删除；部分条目仍在 CSV `场景写法` / `写作技法` / `桥段套路` / `爽点与节奏`，默认写章不加载 |
+| 原 `optional/canon-ledger-craft/` 下写法/追读力/Anti-AI/润色 md | 已从插件删除 |
+| CSV `场景写法` / `写作技法` / `桥段套路` / `爽点与节奏` / `裁决规则` / `题材与调性推理` | 已从插件删除。`reference_search` 仍保留表名黑名单，用于挡住作者自行放入 `references/csv/` 的写法类表 |
 | `skills/canon-ledger-plan/references/outlining/conflict-design.md` | 文件仍在，但 plan skill 明确不加载冲突设计教程 |
 | `skills/canon-ledger-review/references/common-mistakes.md` | 未在当前 review 流程中直接加载 |

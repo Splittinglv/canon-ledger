@@ -50,16 +50,6 @@ class TestValidateCsvRuns:
         assert data["errors"] == []
         assert data["warnings"] == []
 
-    def test_phase2_row_count_thresholds(self):
-        csv_dir = Path(CSV_DIR)
-        with open(csv_dir / "题材与调性推理.csv", "r", encoding="utf-8-sig", newline="") as f:
-            route_rows = list(csv.DictReader(f))
-        with open(csv_dir / "裁决规则.csv", "r", encoding="utf-8-sig", newline="") as f:
-            reasoning_rows = list(csv.DictReader(f))
-
-        assert len(route_rows) >= 16
-        assert len(reasoning_rows) >= 14
-
     def test_detects_extra_csv_fields(self):
         tmp_path = _make_local_tmp_path()
         (tmp_path / "命名规则.csv").write_text(

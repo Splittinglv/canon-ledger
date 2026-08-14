@@ -125,7 +125,7 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py"
 | Step 5 | 全文 | `${SKILL_ROOT}/../../templates/output/大纲-卷时间线.md` |
 | 章纲拆分 always | 区段 | `${SKILL_ROOT}/../../references/outlining/plot-signal-vs-spoiler.md` |
 
-CSV 检索只用于命名区分，不 `cat` 整表。不要检索场景写法、写作技法、桥段套路或爽点与节奏。
+CSV 检索只用于命名区分，不 `cat` 整表。插件只随包发布命名规则、人设与关系、金手指与设定三张一致性表，不提供写法、桥段或爽点表。
 
 ```bash
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill plan --table 命名规则 --query "角色命名" --genre "${GENRE}"

@@ -2,10 +2,8 @@
 # -*- coding: utf-8 -*-
 """Shared genre taxonomy resolver.
 
-The taxonomy intentionally separates two namespaces:
-
-- canonical_genre: stable 15-value enum for CSV filtering and Story System.
-- template_files: init-only preset templates under templates/genres/.
+题材只作为分类标签使用：canonical_genre 是稳定的 15 值枚举，用于 CSV 过滤与
+Story System 的中性归类。插件不提供题材预设模板或套路处方。
 """
 
 from __future__ import annotations
@@ -44,7 +42,6 @@ class GenreEntry:
     label: str
     canonical_genre: str
     label_type: str
-    template_file: str = ""
     route_tags: tuple[str, ...] = ()
     trope_tags: tuple[str, ...] = ()
     format_tags: tuple[str, ...] = ()
@@ -61,7 +58,6 @@ class GenreResolution:
     raw_label: str
     canonical_genre: str = ""
     matched_labels: list[str] = field(default_factory=list)
-    template_files: list[str] = field(default_factory=list)
     route_tags: list[str] = field(default_factory=list)
     trope_tags: list[str] = field(default_factory=list)
     format_tags: list[str] = field(default_factory=list)
@@ -109,7 +105,6 @@ def _read_taxonomy(path: Path) -> tuple[GenreEntry, ...]:
                 label=label,
                 canonical_genre=canonical,
                 label_type=str(row.get("label_type") or "").strip(),
-                template_file=str(row.get("template_file") or "").strip(),
                 route_tags=_split_list(row.get("route_tags")),
                 trope_tags=_split_list(row.get("trope_tags")),
                 format_tags=_split_list(row.get("format_tags")),
@@ -187,10 +182,10 @@ def resolve_genre_input(raw_label: Optional[str], *, index_path: Optional[str] =
 
     taxonomy = load_genre_taxonomy(index_path)
     matched: list[GenreEntry] = []
-    matched_entry_ids: set[tuple[str, str, str]] = set()
+    matched_entry_ids: set[tuple[str, str]] = set()
 
     def add_match(entry: GenreEntry, matched_label: str) -> None:
-        identity = (entry.label, entry.canonical_genre, entry.template_file)
+        identity = (entry.label, entry.canonical_genre)
         if identity in matched_entry_ids:
             return
         matched_entry_ids.add(identity)
@@ -228,8 +223,6 @@ def resolve_genre_input(raw_label: Optional[str], *, index_path: Optional[str] =
         _append_unique(resolution.route_tags, entry.route_tags)
         _append_unique(resolution.trope_tags, entry.trope_tags)
         _append_unique(resolution.format_tags, entry.format_tags)
-        if entry.template_file:
-            _append_unique(resolution.template_files, [entry.template_file])
     return resolution
 
 
@@ -243,26 +236,11 @@ def resolve_canonical_genre(genre: Optional[str], *, index_path: Optional[str] =
     return resolved.canonical_genre or raw
 
 
-def resolve_template_files(genre: Optional[str], *, index_path: Optional[str] = None) -> list[str]:
-    return resolve_genre_input(genre, index_path=index_path).template_files
-
-
-def resolve_template_stems(genre: Optional[str], *, index_path: Optional[str] = None) -> list[str]:
-    stems: list[str] = []
-    for template_file in resolve_template_files(genre, index_path=index_path):
-        stem = Path(template_file).stem
-        if stem and stem not in stems:
-            stems.append(stem)
-    return stems
-
-
 def normalize_genre_label_for_profile(genre: str, *, index_path: Optional[str] = None) -> str:
     raw = str(genre or "").strip()
     if not raw:
         return ""
     resolved = resolve_genre_input(raw, index_path=index_path)
-    if resolved.template_files:
-        return Path(resolved.template_files[0]).stem
     if resolved.matched_labels:
         return resolved.matched_labels[0]
     return raw

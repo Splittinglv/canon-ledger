@@ -6,13 +6,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from runtime_compat import enable_windows_utf8_stdio
 from data_modules.config import DataModulesConfig
-from data_modules.fact_text import sanitize_fact_text
+from data_modules.fact_text import normalize_author_text, sanitize_fact_text
 from data_modules.memory.schema import MemoryItem, now_iso
 from data_modules.memory.store import ScratchpadManager
 
@@ -23,6 +24,22 @@ PATTERN_LABELS = {
     "setting": "设定执行",
     "character": "人物一致性",
 }
+
+# `/canon-ledger-learn` 是一条很窄的入口：写进来的条目会以 author-consistency-*
+# 前缀进入默认写作上下文的 hard_constraints，所以这里可以用一份专门的写法词表
+# 显式拒绝创作处方。
+#
+# 注意：data_modules/fact_text.py 有意不做这件事——它要保住「限知视角」
+# 「用三年时间炼成金丹」这类正常事实，因此不能靠 sanitize_fact_text 反推文风。
+_STYLE_PRESCRIPTION_RE = re.compile(
+    r"(?:文风|文笔|风格|笔调|行文|文体|腔调|口吻|语气|口语化|书面语|"
+    r"句式|短句|长句|断句|句子|段落|分段|篇幅|字数|章长|"
+    r"修辞|比喻|排比|白描|描写手法|润色|去水|水词|"
+    r"节奏|爽点|打脸|钩子|悬念|反转|套路|桥段|"
+    r"黄金三章|开篇|章首|章末|结尾|收尾|"
+    r"prose|writing\s+style|tone|voice|pacing|cadence|rhetoric)",
+    re.IGNORECASE,
+)
 
 
 def _current_chapter(project_root: Path) -> Optional[int]:
@@ -60,11 +77,22 @@ def add_pattern(
     description = " ".join(str(description or "").split())
     if not description:
         raise ValueError("description 不能为空")
-    safe_description = sanitize_fact_text(description, max_chars=500)
-    if safe_description != description:
+    style_hit = _STYLE_PRESCRIPTION_RE.search(description)
+    if style_hit:
         raise ValueError(
-            "description 只能记录跨章事实与一致性约束，不能包含文风、文笔、句式、桥段或模型控制指令"
+            "description 只能记录跨章事实与一致性约束，不能包含文风、文笔、句式、"
+            f"节奏、桥段或模型控制指令（命中「{style_hit.group(0)}」）。"
+            "口吻与文笔偏好请写入 设定集/文风提示词.md。"
         )
+    # 这条记忆会进 hard_constraints，属于控制面：越狱句必须显式拒绝，不能静默剥离。
+    if sanitize_fact_text(description, max_chars=500) != description:
+        raise ValueError(
+            "description 含有试图覆盖写作合同或系统提示的指令，已拒绝写入长期记忆。"
+        )
+    safe_description = normalize_author_text(description, max_chars=500)
+    if not safe_description:
+        raise ValueError("description 不能为空")
+    description = safe_description
 
     chapter = source_chapter if source_chapter is not None else _current_chapter(project_root)
     if chapter is not None and (isinstance(chapter, bool) or int(chapter) < 0):

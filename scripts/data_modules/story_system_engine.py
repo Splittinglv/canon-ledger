@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from reference_search import (
-    CSV_CONFIG,
     GENRE_CANONICAL,
     resolve_genre,
     search as search_reference,
@@ -20,12 +19,7 @@ from .story_contracts import merge_anti_patterns
 
 
 ANTI_PATTERN_SOURCE_FIELDS = {
-    "场景写法": ["毒点"],
-    "写作技法": ["毒点"],
-    "爽点与节奏": ["毒点"],
     "人设与关系": ["毒点"],
-    "桥段套路": ["毒点"],
-    "题材与调性推理": ["毒点"],
     "命名规则": ["毒点"],
     "金手指与设定": ["毒点"],
 }
@@ -94,8 +88,8 @@ class StorySystemEngine:
         )
 
         canonical_genre = str(route.get("meta", {}).get("canonical_genre", "") or "").strip()
-        ranked = self._apply_reasoning({}, base_context, dynamic_context, chapter_directive)
-        source_trace = route["source_trace"] + self._build_source_trace_with_reasoning(ranked, {})
+        ranked = [dict(r) for r in base_context] + [dict(r) for r in dynamic_context]
+        source_trace = route["source_trace"] + self._build_source_trace(ranked)
         anti_patterns = merge_anti_patterns(
             self._extract_anti_patterns(base_context),
             self._extract_anti_patterns(dynamic_context),
@@ -335,178 +329,3 @@ class StorySystemEngine:
             if self._normalize_text(canonical) in normalized:
                 return canonical
         return ""
-
-    # ------------------------------------------------------------------
-    # Reasoning / 裁决 layer
-    # ------------------------------------------------------------------
-
-    def _apply_reasoning(
-        self,
-        reasoning: Dict[str, Any],
-        base_context: List[Dict[str, Any]],
-        dynamic_context: List[Dict[str, Any]],
-        chapter_directive: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Rank *base_context* + *dynamic_context* rows using 冲突裁决 priority."""
-        combined = [dict(r) for r in base_context] + [dict(r) for r in dynamic_context]
-        chapter_terms = self._chapter_keyword_terms(chapter_directive or {})
-        if not reasoning and not chapter_terms:
-            return combined
-
-        priority_order = [
-            s.strip()
-            for s in str(reasoning.get("冲突裁决") or "").split(">")
-            if s.strip()
-        ]
-        priority_map = {name: idx for idx, name in enumerate(priority_order)}
-
-        genre_label = reasoning.get("题材", "")
-        ranked_priorities = sorted(priority_map.values())
-        max_priority = max(ranked_priorities) if ranked_priorities else 0
-        max_chapter_score = 0
-        for row in combined:
-            table = str(row.get("_table") or "")
-            row["_priority_rank"] = priority_map.get(table, 999)
-            row["_reasoning_rule"] = genre_label
-            row["_chapter_keyword_score"] = self._chapter_keyword_score(row, chapter_terms)
-            max_chapter_score = max(max_chapter_score, int(row.get("_chapter_keyword_score") or 0))
-
-        for row in combined:
-            row["_combined_rank_score"] = self._combined_rank_score(
-                int(row.get("_priority_rank") or 999),
-                int(row.get("_chapter_keyword_score") or 0),
-                max_priority=max_priority,
-                max_chapter_score=max_chapter_score,
-                has_reasoning=bool(priority_map),
-                has_chapter_terms=bool(chapter_terms),
-            )
-
-        combined.sort(
-            key=lambda r: (
-                -float(r.get("_combined_rank_score") or 0.0),
-                r["_priority_rank"],
-                -int(r.get("_chapter_keyword_score") or 0),
-            )
-        )
-        return combined
-
-    def _combined_rank_score(
-        self,
-        priority_rank: int,
-        chapter_score: int,
-        *,
-        max_priority: int,
-        max_chapter_score: int,
-        has_reasoning: bool,
-        has_chapter_terms: bool,
-    ) -> float:
-        priority_component = 0.0
-        if has_reasoning:
-            if priority_rank >= 999:
-                priority_component = 0.0
-            elif max_priority <= 0:
-                priority_component = 1.0
-            else:
-                priority_component = 1.0 - (priority_rank / float(max_priority + 1))
-
-        chapter_component = 0.0
-        if has_chapter_terms and max_chapter_score > 0:
-            chapter_component = chapter_score / float(max_chapter_score)
-
-        if has_reasoning and has_chapter_terms:
-            return round((priority_component * 0.4) + (chapter_component * 0.6), 6)
-        if has_chapter_terms:
-            return round(chapter_component, 6)
-        return round(priority_component, 6)
-
-    def _chapter_keyword_terms(self, chapter_directive: Dict[str, Any]) -> List[str]:
-        raw_items: List[str] = []
-        for key in ("goal", "strand", "antagonist_tier"):
-            value = str(chapter_directive.get(key) or "").strip()
-            if value:
-                raw_items.append(value)
-        for key in ("key_entities", "must_cover_nodes"):
-            raw_items.extend(str(item or "") for item in chapter_directive.get(key) or [])
-
-        terms: List[str] = []
-        for item in raw_items:
-            for token in _TEXT_TOKEN_RE.split(item):
-                token = token.strip().lower()
-                if len(token) >= 2 and token not in terms:
-                    terms.append(token)
-        return terms
-
-    def _chapter_keyword_score(self, row: Dict[str, Any], terms: List[str]) -> int:
-        if not terms:
-            return 0
-        haystack = " ".join(
-            str(row.get(field) or "")
-            for field in ("关键词", "意图与同义词", "适用场景", "核心摘要", "详细展开")
-        ).lower()
-        return sum(1 for term in terms if term and term in haystack)
-
-    def _rank_anti_patterns(
-        self,
-        reasoning: Dict[str, Any],
-        anti_patterns: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        """Sort *anti_patterns* by 毒点权重 and append reasoning 反模式."""
-        if not reasoning:
-            return anti_patterns
-
-        weight_order = [
-            s.strip()
-            for s in str(reasoning.get("毒点权重") or "").split(">")
-            if s.strip()
-        ]
-
-        def _sort_key(item: Dict[str, Any]) -> int:
-            text = str(item.get("text") or "")
-            for idx, keyword in enumerate(weight_order):
-                if keyword in text:
-                    return idx
-            return len(weight_order)
-
-        sorted_anti = sorted(anti_patterns, key=_sort_key)
-
-        # Append 反模式 entries from reasoning row
-        existing_texts = {str(a.get("text") or "") for a in sorted_anti}
-        for text in self._split_multi_value(reasoning.get("反模式")):
-            if text and text not in existing_texts:
-                sorted_anti.append(
-                    {"text": text, "source_table": "裁决规则", "source_id": reasoning.get("编号", "")}
-                )
-                existing_texts.add(text)
-
-        return sorted_anti
-
-    def _build_source_trace_with_reasoning(
-        self,
-        ranked: List[Dict[str, Any]],
-        reasoning: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
-        """Build source trace entries enriched with reasoning metadata."""
-        inject_target = self._reasoning_inject_target(reasoning)
-        trace: List[Dict[str, Any]] = []
-        for row in ranked:
-            trace.append(
-                {
-                    "table": row.get("_table", ""),
-                    "id": row.get("编号", ""),
-                    "summary": row.get("核心摘要", ""),
-                    "reasoning_rule": row.get("_reasoning_rule", ""),
-                    "priority_rank": row.get("_priority_rank", 999),
-                    "chapter_keyword_score": row.get("_chapter_keyword_score", 0),
-                    "combined_rank_score": row.get("_combined_rank_score", 0),
-                    "inject_target": inject_target,
-                }
-            )
-        return trace
-
-    def _reasoning_inject_target(self, reasoning: Dict[str, Any]) -> str:
-        if reasoning:
-            explicit = str(reasoning.get("contract注入层") or "").strip()
-            if explicit:
-                return explicit
-        cfg = CSV_CONFIG.get("裁决规则") or {}
-        return str(cfg.get("contract_inject") or "")

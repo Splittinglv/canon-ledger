@@ -24,7 +24,6 @@ description: 初始化长篇小说项目：分阶段收集书名、题材、主�
 | Step | Trigger | Reference |
 |------|---------|-----------|
 | Step 1 | always | `references/system-data-flow.md` |
-| 题材公式 | 用户明确要题材套路参考 | `references/genre-tropes.md`（只读当前题材段） |
 | 角色卡顿 | 人物扁平 | `references/worldbuilding/character-design.md` |
 | 世界观/力量 | 按需 | `references/worldbuilding/faction-systems.md`、`references/worldbuilding/power-systems.md`、`references/worldbuilding/world-rules.md`、`references/worldbuilding/setting-consistency.md` |
 | 命名 | 开始命名 | `"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/reference_search.py" --skill init --table 命名规则 --query "{命名对象} {题材}" --genre {题材}` |
@@ -136,7 +135,7 @@ export SKILL_ROOT="${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-init"
 - 确认当前目录可写；确认入口脚本 `${SCRIPTS_DIR}/canon_ledger.py` 存在（仅支持插件目录）。
 - 初始化前不要用 `where` 把 `WORKSPACE_ROOT` 解析成书项目根；新项目尚不存在时没有可供定位的状态文件。
 - 只打印工作区与脚本目录，确认生成目标将在工作区下的书名安全化子目录中。
-- 加载最小参考：`references/system-data-flow.md`。`references/genre-tropes.md` 与 `templates/genres/` 仅在用户明确要题材公式，或已选定题材后按需读取。
+- 加载最小参考：`references/system-data-flow.md`。插件不提供题材套路库或爽点模板；题材只作为分类标签，不带写法处方。
 
 输出：进入 Deep 采集前的"已知信息清单"和"待收集清单"。
 
@@ -150,7 +149,7 @@ export SKILL_ROOT="${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-init"
 你这本书的灵感来源想从哪里开始？可以直接说原创想法，也可以提供参考作品做拆书提炼。若要拆书，请给参考书名+平台，并尽量提供章节摘录或文本路径；没有参考也可以直接跳过。
 ```
 
-可接受来源：原创想法、参考作品拆书（书名/平台/章节摘录/文本路径）、市场趋势、题材模板/反套路库/已有脑洞片段。
+可接受来源：原创想法、参考作品拆书（书名/平台/章节摘录/文本路径）、市场趋势、已有脑洞片段。
 
 当用户选择参考作品拆书且提供文本路径或章节摘录时，必须使用 `Task` 工具调用 `deconstruction-agent`，不得由 init 主流程口头替代拆解结果。
 
@@ -190,7 +189,7 @@ Prompt: reference_title={reference_title}; reference_source={reference_source}; 
 
 canonical 题材集合（写入 `project_info.genre`）：都市、玄幻、仙侠、奇幻、科幻、历史、悬疑、游戏、古言、现言、幻言、年代、种田、快穿、衍生。
 
-可自由输入细分题材、套路或形式；初始化脚本只把它们映射到中性的 canonical 标签，不会默认加载题材模板或把套路写入设定真源。只有用户明确要求参考某个内置题材模板时，才追加 `--include-genre-templates`；模板会单独写入 `参考/题材模板.md`，不会进入设定集或 Story System canon。优先让用户自由描述再二次结构化确认；卡住时给 2-4 个候选方向。
+可自由输入细分题材、套路或形式；初始化脚本只把它们映射到中性的 canonical 标签，不会加载题材模板或把套路写入设定真源。插件不随包提供题材模板、套路库或爽点公式——题材只是分类标签。优先让用户自由描述再二次结构化确认；卡住时给 2-4 个候选方向。
 
 ### Step 3：角色骨架与关系事实
 
@@ -265,7 +264,6 @@ echo "PROJECT_ROOT=${PROJECT_ROOT}"
   --world-scale "{world_scale}" --power-system-type "{power_system_type}" \
   --core-selling-points "{core_points}"
   # 其余字段（结构/感情线/反派/势力/货币/境界/原型/读者/平台等）按采集对象继续追加对应 --* 选项
-  # 仅当用户明确要内置题材参考时追加 --include-genre-templates
 ```
 
 ### 2) 写入 `idea_bank.json`

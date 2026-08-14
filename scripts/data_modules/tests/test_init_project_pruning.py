@@ -118,7 +118,8 @@ def test_init_persists_canonical_genre_without_injecting_templates(tmp_path, mon
     assert project_info["genre_label"] == "知乎短篇风的规则怪谈"
     assert project_info["genre_tags"]["route"] == ["规则怪谈"]
     assert project_info["genre_tags"]["format"] == ["知乎短篇"]
-    assert project_info["genre_tags"]["templates"] == []
+    # 题材只是分类标签，不携带模板；state 里不得再出现 templates 键。
+    assert "templates" not in project_info["genre_tags"]
 
     worldview = (project_root / "设定集" / "世界观.md").read_text(encoding="utf-8")
     assert "规则怪谈题材模板" not in worldview
@@ -126,36 +127,31 @@ def test_init_persists_canonical_genre_without_injecting_templates(tmp_path, mon
     assert not (project_root / "参考" / "题材模板.md").exists()
 
 
-def test_init_writes_explicit_genre_templates_to_advisory_file(tmp_path, monkeypatch):
+def test_init_has_no_genre_template_opt_in(tmp_path, monkeypatch):
+    """题材模板已从插件移除：不得再有开关能把套路处方写进书项目。"""
+    import inspect
     import init_project as init_project_module
+
+    signature = inspect.signature(init_project_module.init_project)
+    assert "include_genre_templates" not in signature.parameters
 
     monkeypatch.setattr(init_project_module, "is_git_available", lambda: False)
     project_root = tmp_path / "book"
-
     init_project_module.init_project(
         str(project_root),
         title="测试书",
         genre="知乎短篇风的规则怪谈",
         protagonist_name="陆鸣",
         target_chapters=50,
-        include_genre_templates=True,
     )
 
-    state = json.loads((project_root / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
-    assert state["project_info"]["genre_tags"]["templates"] == ["规则怪谈", "知乎短篇"]
-
-    worldview = (project_root / "设定集" / "世界观.md").read_text(encoding="utf-8")
-    advisory = (project_root / "参考" / "题材模板.md").read_text(encoding="utf-8")
-    assert "规则怪谈题材模板" not in worldview
-    assert "知乎短篇题材模板" not in worldview
-    assert "不是设定真源" in advisory
-    assert "规则怪谈题材模板" in advisory
-    assert "知乎短篇题材模板" in advisory
+    assert not (project_root / "参考" / "题材模板.md").exists()
+    for name in ("金手指.md", "爽点规划.md", "复合题材-融合逻辑.md"):
+        assert not (project_root / "设定集" / name).exists()
 
 
 def test_init_does_not_manufacture_golden_finger_fact(tmp_path, monkeypatch):
     import init_project as init_project_module
-    from extract_chapter_context import extract_state_summary
 
     monkeypatch.setattr(init_project_module, "is_git_available", lambda: False)
     project_root = tmp_path / "book"
@@ -172,7 +168,8 @@ def test_init_does_not_manufacture_golden_finger_fact(tmp_path, monkeypatch):
     golden_finger = state["protagonist_state"]["golden_finger"]
     assert golden_finger["name"] == ""
     assert golden_finger["level"] == 0
-    assert "金手指" not in extract_state_summary(project_root)
+    # 初始化不得凭空造出金手指事实：设定集里也不能出现被当成 canon 的金手指条目。
+    assert not (project_root / "设定集" / "金手指.md").exists()
 
 
 def test_init_does_not_migrate_removed_placeholder_shape(tmp_path, monkeypatch):

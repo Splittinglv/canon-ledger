@@ -14,7 +14,11 @@ def _write_csv(path, headers, rows):
 
 
 def _setup_csvs(csv_dir):
-    """Create fixture CSVs for 题材与调性推理, 裁决规则, 桥段套路, 爽点与节奏."""
+    """构造包含写法/套路/裁决数据的 CSV 夹具。
+
+    插件已不再随包发布这些表，但作者仍可能把同名 CSV 放进 references/csv/。
+    这组测试的作用是守住边界：即使这些数据存在，也不得进入写章合同。
+    """
     csv_dir.mkdir(exist_ok=True)
 
     _write_csv(
@@ -136,7 +140,8 @@ def _setup_csvs(csv_dir):
     )
 
 
-def test_build_with_reasoning_includes_reasoning_rule_in_source_trace(tmp_path):
+def test_craft_route_tables_never_reach_contract(tmp_path):
+    """路由表即使推荐了技法表，dynamic_context 也必须为空。"""
     csv_dir = tmp_path / "csv"
     _setup_csvs(csv_dir)
 
@@ -150,7 +155,8 @@ def test_build_with_reasoning_includes_reasoning_rule_in_source_trace(tmp_path):
     assert contract["chapter_brief"]["reasoning"] == {"genre": "玄幻"}
 
 
-def test_reasoning_anti_patterns_sorted_by_weight(tmp_path):
+def test_craft_poison_points_never_reach_anti_patterns(tmp_path):
+    """技法表的毒点不得进入 anti_patterns。"""
     csv_dir = tmp_path / "csv"
     _setup_csvs(csv_dir)
 
@@ -163,15 +169,14 @@ def test_reasoning_anti_patterns_sorted_by_weight(tmp_path):
     assert "角色行为无逻辑" not in texts
 
 
-def test_reasoning_not_found_falls_back_gracefully(tmp_path):
+def test_unmatched_genre_still_builds_valid_contract(tmp_path):
+    """题材在夹具里无对应行时，仍要产出可用的中性合同。"""
     csv_dir = tmp_path / "csv"
     _setup_csvs(csv_dir)
 
     engine = StorySystemEngine(csv_dir=csv_dir)
-    # 末日 has no matching row in 裁决规则.csv fixture
     contract = engine.build(query="末日求生", genre="末日", chapter=None)
 
     assert contract["master_setting"] is not None
     assert contract["anti_patterns"] is not None
-    # Should still produce a valid contract without errors
     assert contract["meta"]["explicit_genre"] == "末日"

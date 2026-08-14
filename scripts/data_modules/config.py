@@ -15,8 +15,6 @@ from typing import Optional
 
 from runtime_compat import normalize_windows_path
 
-from .context_weights import TEMPLATE_WEIGHTS_DYNAMIC_DEFAULT
-
 GLOBAL_CONFIG_DIR_NAMES = ("canon-ledger",)
 
 _PROJECT_ENV_FIELDS = {
@@ -79,16 +77,6 @@ def _load_dotenv():
 
 
 _load_dotenv()
-
-
-def _default_context_template_weights_dynamic() -> dict[str, dict[str, dict[str, float]]]:
-    return {
-        stage: {
-            template: dict(weights)
-            for template, weights in templates.items()
-        }
-        for stage, templates in TEMPLATE_WEIGHTS_DYNAMIC_DEFAULT.items()
-    }
 
 
 @dataclass
@@ -226,78 +214,10 @@ class DataModulesConfig:
     max_state_changes: int = 2000
 
     context_recent_summaries_window: int = 3
-    context_recent_meta_window: int = 3
-    context_alerts_slice: int = 10
-    context_max_appearing_characters: int = 10
-    context_max_urgent_foreshadowing: int = 5
-    context_story_skeleton_interval: int = 20
-    context_story_skeleton_max_samples: int = 5
-    context_story_skeleton_snippet_chars: int = 400
-    context_extra_section_budget: int = 800
-    context_ranker_enabled: bool = True
-    context_ranker_recency_weight: float = 0.7
-    context_ranker_frequency_weight: float = 0.3
-    context_ranker_hook_bonus: float = 0.2
-    context_ranker_length_bonus_cap: float = 0.2
-    context_ranker_alert_critical_keywords: tuple[str, ...] = (
-        "冲突",
-        "矛盾",
-        "critical",
-        "break",
-        "违规",
-        "断裂",
-    )
-    context_ranker_debug: bool = False
-    context_reader_signal_enabled: bool = False
-    context_reader_signal_recent_limit: int = 5
-    context_reader_signal_window_chapters: int = 20
-    context_reader_signal_review_window: int = 5
-    context_reader_signal_include_debt: bool = False
-    context_genre_profile_enabled: bool = False
-    context_genre_profile_max_refs: int = 8
-    context_genre_profile_fallback: str = ""
-    context_compact_text_enabled: bool = True
-    context_compact_min_budget: int = 120
-    context_compact_head_ratio: float = 0.65
-    context_writing_guidance_enabled: bool = False
-    context_writing_guidance_max_items: int = 6
-    context_writing_guidance_low_score_threshold: float = 75.0
-    context_writing_guidance_hook_diversify: bool = True
-    context_methodology_enabled: bool = False
-    context_methodology_genre_whitelist: tuple[str, ...] = ("*",)
-    context_methodology_label: str = "digital-serial-v1"
-    context_writing_checklist_enabled: bool = False
-    context_writing_checklist_min_items: int = 3
-    context_writing_checklist_max_items: int = 6
-    context_writing_checklist_default_weight: float = 1.0
-    context_writing_score_persist_enabled: bool = False
-    context_writing_score_include_reader_trend: bool = True
-    context_writing_score_trend_window: int = 10
     context_rag_assist_enabled: bool = True
     context_rag_assist_top_k: int = 4
     context_rag_assist_min_outline_chars: int = 40
     context_rag_assist_max_query_chars: int = 120
-    context_dynamic_budget_enabled: bool = True
-    context_dynamic_budget_early_chapter: int = 30
-    context_dynamic_budget_late_chapter: int = 120
-    context_dynamic_budget_early_core_bonus: float = 0.08
-    context_dynamic_budget_early_scene_bonus: float = 0.04
-    context_dynamic_budget_late_global_bonus: float = 0.08
-    context_dynamic_budget_late_scene_penalty: float = 0.06
-    context_template_weights_dynamic: dict[str, dict[str, dict[str, float]]] = field(
-        default_factory=_default_context_template_weights_dynamic
-    )
-    context_genre_profile_support_composite: bool = True
-    context_genre_profile_max_genres: int = 2
-    context_genre_profile_separators: tuple[str, ...] = (
-        "+",
-        "/",
-        "|",
-        ",",
-        "，",
-        "、",
-    )
-    context_use_memory_orchestrator: bool = False
     memory_orchestrator_max_items: int = 30
     memory_orchestrator_recent_changes_limit: int = 10
     memory_orchestrator_source_window: int = 20
