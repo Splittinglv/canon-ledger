@@ -28,7 +28,7 @@ chapter-commit 由写章主流程运行，data-agent 不在此执行（见 §5 �
 
 ## 3. 流程
 
-**A 加载**：project_root 由调用方传入（已过 preflight），Read 正文和 `chapter_contract_file`；先 Read `asof_snapshot_file`（或自行 `export-asof --chapter {chapter}`）取得截至 N-1 的实体、别名和可闭合伏笔/承诺稳定 ID。将章合同 `chapter_directive.must_cover_nodes` 按原顺序完整复制为 `planned_nodes`；字段缺失、类型错误或包含空字符串时停止并报告章合同错误，不得改读其他字段。快照缺失时停止并报告，不得改读当前 index/state。
+**A 加载**：project_root 由调用方传入（已过 preflight），Read 正文和 `chapter_contract_file`；先 Read `asof_snapshot_file`（或自行 `export-asof --chapter {chapter}`）取得截至 N-1 的实体、别名、`knowledge_by_entity`、`presence`、`custody`、`coverage` 和可闭合伏笔/承诺稳定 ID。将章合同 `chapter_directive.must_cover_nodes` 按原顺序完整复制为 `planned_nodes`；字段缺失、类型错误或包含空字符串时停止并报告章合同错误，不得改读其他字段。快照缺失时停止并报告，不得改读当前 index/state。
 
 **B 提取与消歧**：同一轮完成，不额外调 LLM。置信度>0.8 自动采用，0.5-0.8 采用+warning，<0.5 标记待人工。
 
@@ -68,7 +68,7 @@ state_changes: ["萧炎: 斗者9层→准备突破"]
 
 ## 6. 校验清单
 
-实体识别完整、三份 artifact 已生成且 schema 合格、`summary_text` 已填写、`scenes` 已作为 artifact 字段填写；`planned_nodes` 必须与章合同权威节点完全一致，每个计划节点必须且只能进入 `covered_nodes` 或 `missed_nodes`，正文出现但章纲未要求的节点只进 `extra_nodes`；所有长期记忆文本均为事实陈述且不含创作指令。
+实体识别完整、三份 artifact 已生成且 schema 合格、`summary_text` 已填写、`scenes` 已作为 artifact 字段填写；知识获得/分享/遗忘、每个场景的实体物理在场、物品持有变化均已抽取或在 `fact_coverage` 中标为 `partial`；`planned_nodes` 必须与章合同权威节点完全一致，每个计划节点必须且只能进入 `covered_nodes` 或 `missed_nodes`，正文出现但章纲未要求的节点只进 `extra_nodes`；所有长期记忆文本均为事实陈述且不含创作指令。
 
 ## 7. 输出 schema（唯一真源）
 
@@ -77,7 +77,7 @@ state_changes: ["萧炎: 斗者9层→准备突破"]
 - 三份 artifact 都必须有顶层 `chapter_binding`，且与 `chapter_binding_file` 字节级对应的对象完全一致。
 - `fulfillment_result.json` 顶层：`chapter_binding` + 四个数组 `planned_nodes`、`covered_nodes`、`missed_nodes`、`extra_nodes`。`planned_nodes` 必须逐项、按顺序等于章合同中的权威 must-cover 列表；`covered_nodes` 与 `missed_nodes` 必须无重叠地完整划分它，禁止用空列表跳过章纲节点。
 - `disambiguation_result.json` 顶层：`chapter_binding` + `pending` 数组。
-- `extraction_result.json` 顶层（**直接放这些键，禁止包在外层对象里**）：`chapter_binding`、`accepted_events`、`state_deltas`、`entity_deltas`、`entities_appeared`、`scenes`、`timeline_events`、`summary_text`；可选 `dominant_strand`、`entities_new`。
+- `extraction_result.json` 顶层（**直接放这些键，禁止包在外层对象里**）：`chapter_binding`、`accepted_events`、`state_deltas`、`entity_deltas`、`entities_appeared`、`scenes`、`timeline_events`、`fact_coverage`、`summary_text`；可选 `dominant_strand`、`entities_new`。
 
 ### 7.1 字段命名
 
@@ -85,9 +85,12 @@ state_changes: ["萧炎: 斗者9层→准备突破"]
 - **entity_deltas 子项**：`entity_id` + `action` + `entity_type`（值为 `角色|组织|地点|物品|势力`，非默认 `"角色"`）+ `payload`；`is_protagonist: true` 标主角（同步到 `state.protagonist_state`）。
 - **accepted_events 子项**：每条必含 `event_id`（章内稳定 ID 如 `evt-ch100-001`）+ `chapter`（当前章号）+ `event_type`（枚举见下）+ `subject`（主体 entity_id，非中文名）+ `payload`。
 - **timeline_events 子项**：`timeline_id`（跨重投保持不变）+ `sequence`（章内顺序）+ `event`；可选 `time_hint`、`event_type`。只提取明确的时间推进/锚点，不确定时留空 `time_hint`。
-- **event_type 枚举**：`character_state_changed`、`power_breakthrough`、`relationship_changed`、`world_rule_revealed`、`world_rule_broken`、`open_loop_created`、`open_loop_closed`、`promise_created`、`promise_paid_off`、`artifact_obtained`。
+- **event_type 枚举**：`character_state_changed`、`power_breakthrough`、`relationship_changed`、`world_rule_revealed`、`world_rule_broken`、`open_loop_created`、`open_loop_closed`、`promise_created`、`promise_paid_off`、`artifact_obtained`、`knowledge_state_changed`、`presence_observed`、`custody_changed`。
 - **各 event_type payload 必备字段**：
   - `character_state_changed`：`field` + `old` + `new`（与 state_deltas 一致）。
+  - `knowledge_state_changed`：`information_id`（同一条信息跨章稳定）+ `content`（必须逐字包含在 `evidence_quote` 中）+ `state`（`known|suspected|forgotten`）+ `source_kind`（`witnessed|told|inferred|read|remembered|forgotten|unknown`）+ `evidence_quote`；可选 `source_entity`。角色明确得知、听说、推断、读到、回忆起或遗忘一条可跨章使用的信息时输出；`subject` 是该角色 entity_id。
+  - `presence_observed`：`location_id` + `presence_kind`（`physical|remote|memory|dream|mentioned`）+ `evidence_quote`；可选 `scene_index`、`time_anchor`、`transition_explicit`。每个场景中每个实际在场实体都必须输出 `physical`；梦境、回忆、远程通信和仅被提及必须用对应类型，禁止伪装成物理在场。
+  - `custody_changed`：`from_holder` + `to_holder` + `evidence_quote`；可选 `location_id`。`subject` 是物品 entity_id；首次取得时 `from_holder` 可为空字符串，丢失/放下且无人持有时 `to_holder` 可为空字符串，但两者不能同时为空。
   - `open_loop_created`：`loop_id`（稳定 ID）+ `content`（必填，悬念正文）；可选 `loop_type`、`unanswered_question`、`urgency`（0-100 整数：紧急≈100/一般≈60/远期≈20）、`planted_chapter`、`expected_payoff`。
   - `open_loop_closed`：`loop_id`（指向已创建的伏笔）+ `resolution`。
   - `promise_created`：`promise_id`（稳定 ID）+ `content`。
@@ -96,15 +99,22 @@ state_changes: ["萧炎: 斗者9层→准备突破"]
   - `relationship_changed`：`to_entity` + `relationship_type`。
   - `artifact_obtained`：`artifact_id` + `name` + `owner`。
 
+- **fact_coverage**：必须是 `{"knowledge":"complete|partial","presence":"complete|partial","custody":"complete|partial"}`。只有完整读完正文，并分别确认该类变化全部进入上述事件后才能写 `complete`；存在低置信歧义、遗漏风险或无法逐字取证时写 `partial`。即使本章没有对应事件，也必须在完成全章核对后显式写 `complete`，不能省略字段。
+
 ### 7.2 最小示例
 
 ```json
 {
-  "accepted_events": [{"event_id": "evt-ch100-001", "chapter": 100, "event_type": "open_loop_created", "subject": "three_year_promise", "payload": {"loop_id": "loop-three-year-promise", "content": "三年之约提及"}}],
+  "accepted_events": [
+    {"event_id": "evt-ch100-001", "chapter": 100, "event_type": "open_loop_created", "subject": "three_year_promise", "payload": {"loop_id": "loop-three-year-promise", "content": "三年之约提及"}},
+    {"event_id": "evt-ch100-002", "chapter": 100, "event_type": "knowledge_state_changed", "subject": "xiaoyan", "payload": {"information_id": "three-year-promise", "content": "三年之约", "state": "known", "source_kind": "remembered", "evidence_quote": "萧炎独自在房间想起三年之约。"}},
+    {"event_id": "evt-ch100-003", "chapter": 100, "event_type": "presence_observed", "subject": "xiaoyan", "payload": {"location_id": "xiaoyan-room", "scene_index": 1, "presence_kind": "physical", "evidence_quote": "萧炎独自在房间想起三年之约。"}}
+  ],
   "state_deltas": [{"entity_id": "xiaoyan", "field": "realm", "old": "斗者", "new": "斗师"}],
   "entity_deltas": [{"entity_id": "hongyi_girl", "action": "upsert", "entity_type": "角色", "payload": {"name": "红衣女子"}}],
   "entities_appeared": [{"id": "xiaoyan", "type": "角色", "mentions": ["萧炎"], "confidence": 0.95}],
-  "scenes": [{"index": 1, "start_line": 1, "end_line": 30, "location": "萧炎房间", "summary": "药老提醒三年之约", "characters": ["xiaoyan", "yaolao"]}],
+  "scenes": [{"index": 1, "start_line": 1, "end_line": 30, "location": "萧炎房间", "summary": "萧炎想起三年之约", "characters": ["xiaoyan"]}],
+  "fact_coverage": {"knowledge": "complete", "presence": "complete", "custody": "complete"},
   "summary_text": "摘要"
 }
 ```

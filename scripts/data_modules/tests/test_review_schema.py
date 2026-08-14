@@ -81,7 +81,7 @@ def test_快速模式明确报告有限维度():
     assert payload["review_status"] == "partial"
     assert payload["review_degraded"] is True
     assert payload["reviewed_dimensions"] == list(FAST_REVIEW_DIMENSIONS)
-    assert payload["skipped_dimensions"] == ["character", "logic"]
+    assert payload["skipped_dimensions"] == ["logic"]
 
 
 def test_最简模式显式记录全部跳过():

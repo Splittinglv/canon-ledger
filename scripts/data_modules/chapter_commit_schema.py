@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, ClassVar, Literal
 
 from pydantic import (
@@ -17,7 +18,11 @@ from pydantic import (
 
 from .story_event_schema import StoryEvent
 from .chapter_content_binding import ChapterContentBinding, chapter_bindings_equal
-from .fact_text import normalize_world_rule_payload
+from .fact_text import (
+    normalize_event_evidence_quote,
+    normalize_world_rule_payload,
+    sanitize_fact_atom,
+)
 
 EXTRACTION_CORE_FIELDS = ("accepted_events", "state_deltas", "entity_deltas")
 EXTRACTION_LIST_FIELDS = (
@@ -48,6 +53,13 @@ EVENT_TYPE_ALIASES = {
     "power_up": "power_breakthrough",
     "artifact": "artifact_obtained",
     "item_obtained": "artifact_obtained",
+    "knowledge_changed": "knowledge_state_changed",
+    "information_learned": "knowledge_state_changed",
+    "information_shared": "knowledge_state_changed",
+    "location_changed": "presence_observed",
+    "presence": "presence_observed",
+    "artifact_transferred": "custody_changed",
+    "item_transferred": "custody_changed",
     "promise": "promise_created",
     "promise_resolved": "promise_paid_off",
     "promise_fulfilled": "promise_paid_off",
@@ -114,7 +126,9 @@ def _ensure_object_list(artifact_name: str, field_name: str, value: Any) -> Any:
 
 
 REVIEW_DIMENSIONS = ("setting", "timeline", "continuity", "character", "logic")
-FAST_REVIEW_DIMENSIONS = REVIEW_DIMENSIONS[:3]
+FAST_REVIEW_DIMENSIONS = REVIEW_DIMENSIONS[:4]
+FACT_COVERAGE_DIMENSIONS = ("knowledge", "presence", "custody")
+FACT_COVERAGE_STATES = {"complete", "partial"}
 
 
 class ReviewDimensionResultSchema(BaseModel):
@@ -258,6 +272,11 @@ class ExtractionResult(CommitArtifactModel):
     # 时间线是 chapter commit 的一等事实；不能再依赖旧 data-agent 输出中的
     # memory_facts（该字段不属于 commit 主链 schema）。
     timeline_events: list[dict[str, Any]] = Field(default_factory=list)
+    # Empty means a legacy extractor that made no completeness claim. New
+    # extractors must explicitly cover all three long-term fact dimensions.
+    fact_coverage: dict[str, Literal["complete", "partial"]] = Field(
+        default_factory=dict
+    )
     chapter_meta: Any = Field(default_factory=dict)
     dominant_strand: Any = ""
     summary_text: str = ""
@@ -282,6 +301,31 @@ class ExtractionResult(CommitArtifactModel):
         if not isinstance(value, str):
             raise ValueError("extraction_result.summary_text must be a string")
         return value
+
+    @field_validator("fact_coverage", mode="before")
+    @classmethod
+    def validate_fact_coverage(cls, value: Any) -> Any:
+        if value in (None, {}):
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("extraction_result.fact_coverage must be a JSON object")
+        expected = set(FACT_COVERAGE_DIMENSIONS)
+        actual = set(value)
+        if actual != expected:
+            raise ValueError(
+                "extraction_result.fact_coverage must contain exactly: "
+                + ", ".join(FACT_COVERAGE_DIMENSIONS)
+            )
+        normalized: dict[str, str] = {}
+        for dimension in FACT_COVERAGE_DIMENSIONS:
+            state = str(value.get(dimension) or "").strip().lower()
+            if state not in FACT_COVERAGE_STATES:
+                raise ValueError(
+                    f"extraction_result.fact_coverage.{dimension} "
+                    "must be complete or partial"
+                )
+            normalized[dimension] = state
+        return normalized
 
 
 class ChapterCommitMeta(BaseModel):
@@ -420,6 +464,7 @@ class AcceptedEventsInput(BaseModel):
                     **normalized_event.get("payload", {}),
                     **normalized_rule,
                 }
+            normalized_event = _normalize_consistency_event(normalized_event, index)
             normalized.append(_normalize_lifecycle_event(normalized_event))
         return normalized
 
@@ -536,6 +581,180 @@ def _generated_event_id(chapter: int, index: int, payload: dict[str, Any]) -> st
     raw = json.dumps(stable_payload, ensure_ascii=False, sort_keys=True)
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:10]
     return f"evt-ch{chapter:03d}-{index:03d}-{digest}"
+
+
+_KNOWLEDGE_STATES = {"known", "suspected", "forgotten"}
+_KNOWLEDGE_SOURCE_KINDS = {
+    "witnessed",
+    "told",
+    "inferred",
+    "read",
+    "remembered",
+    "forgotten",
+    "unknown",
+}
+_PRESENCE_KINDS = {"physical", "remote", "memory", "dream", "mentioned"}
+
+
+def _event_atom(
+    payload: dict[str, Any],
+    key: str,
+    index: int,
+    *,
+    required: bool = True,
+    max_chars: int = 180,
+) -> str:
+    raw = payload.get(key)
+    if raw in (None, "") and not required:
+        return ""
+    value = sanitize_fact_atom(raw, max_chars=max_chars)
+    if not value:
+        qualifier = "a valid atom" if required else "a valid atom when present"
+        raise ValueError(f"accepted_events[{index}].payload.{key} must be {qualifier}")
+    return value
+
+
+def _event_evidence(payload: dict[str, Any], index: int) -> str:
+    quote = normalize_event_evidence_quote(payload.get("evidence_quote"))
+    if not quote:
+        raise ValueError(
+            f"accepted_events[{index}].payload.evidence_quote must be a non-empty "
+            "chapter quote of at most 600 characters"
+        )
+    return quote
+
+
+def _normalize_consistency_event(
+    event: dict[str, Any],
+    index: int,
+) -> dict[str, Any]:
+    """Close long-term knowledge, presence and custody payloads structurally."""
+    event_type = str(event.get("event_type") or "").strip()
+    if event_type not in {
+        "knowledge_state_changed",
+        "presence_observed",
+        "custody_changed",
+    }:
+        return event
+
+    payload = dict(event.get("payload") or {})
+    evidence_quote = _event_evidence(payload, index)
+
+    if event_type == "knowledge_state_changed":
+        information_id = _event_atom(payload, "information_id", index)
+        raw_content = payload.get("content")
+        content = normalize_event_evidence_quote(raw_content)
+        if not content or content not in evidence_quote:
+            raise ValueError(
+                f"accepted_events[{index}].payload.content must be a non-empty "
+                "verbatim fragment of evidence_quote"
+            )
+        state = str(payload.get("state") or "").strip().lower()
+        if state not in _KNOWLEDGE_STATES:
+            raise ValueError(
+                f"accepted_events[{index}].payload.state must be known, suspected, "
+                "or forgotten"
+            )
+        source_kind = str(payload.get("source_kind") or "").strip().lower()
+        if source_kind not in _KNOWLEDGE_SOURCE_KINDS:
+            raise ValueError(
+                f"accepted_events[{index}].payload.source_kind is invalid"
+            )
+        source_entity = _event_atom(
+            payload,
+            "source_entity",
+            index,
+            required=False,
+        )
+        payload.update(
+            {
+                "information_id": information_id,
+                "content": content,
+                "state": state,
+                "source_kind": source_kind,
+                "source_entity": source_entity,
+                "evidence_quote": evidence_quote,
+            }
+        )
+
+    elif event_type == "presence_observed":
+        location_id = _event_atom(payload, "location_id", index)
+        presence_kind = str(payload.get("presence_kind") or "").strip().lower()
+        if presence_kind not in _PRESENCE_KINDS:
+            raise ValueError(
+                f"accepted_events[{index}].payload.presence_kind is invalid"
+            )
+        scene_index = payload.get("scene_index")
+        if scene_index not in (None, ""):
+            if isinstance(scene_index, bool):
+                raise ValueError(
+                    f"accepted_events[{index}].payload.scene_index must be an integer"
+                )
+            try:
+                scene_index = int(scene_index)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"accepted_events[{index}].payload.scene_index must be an integer"
+                ) from exc
+            if scene_index < 1:
+                raise ValueError(
+                    f"accepted_events[{index}].payload.scene_index must be >= 1"
+                )
+        else:
+            scene_index = None
+        transition_explicit = payload.get("transition_explicit")
+        if transition_explicit is not None and not isinstance(transition_explicit, bool):
+            raise ValueError(
+                f"accepted_events[{index}].payload.transition_explicit must be boolean"
+            )
+        time_anchor = str(payload.get("time_anchor") or "").strip()
+        if len(time_anchor) > 240 or re.search(
+            r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", time_anchor
+        ):
+            raise ValueError(
+                f"accepted_events[{index}].payload.time_anchor is invalid"
+            )
+        payload.update(
+            {
+                "location_id": location_id,
+                "presence_kind": presence_kind,
+                "scene_index": scene_index,
+                "time_anchor": time_anchor,
+                "transition_explicit": transition_explicit,
+                "evidence_quote": evidence_quote,
+            }
+        )
+
+    else:
+        if "from_holder" not in payload or "to_holder" not in payload:
+            raise ValueError(
+                f"accepted_events[{index}].payload must contain from_holder and to_holder"
+            )
+        from_holder = _event_atom(
+            payload, "from_holder", index, required=False
+        )
+        to_holder = _event_atom(payload, "to_holder", index, required=False)
+        if not from_holder and not to_holder:
+            raise ValueError(
+                f"accepted_events[{index}].payload custody transition has no holder"
+            )
+        location_id = _event_atom(
+            payload,
+            "location_id",
+            index,
+            required=False,
+        )
+        payload.update(
+            {
+                "from_holder": from_holder,
+                "to_holder": to_holder,
+                "location_id": location_id,
+                "evidence_quote": evidence_quote,
+            }
+        )
+
+    event["payload"] = payload
+    return event
 
 
 def _normalize_lifecycle_event(event: dict[str, Any]) -> dict[str, Any]:

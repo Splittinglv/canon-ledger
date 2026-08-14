@@ -36,7 +36,7 @@ color: blue
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" index get-reader-signals --limit 5 --last-n 20
 ```
 
-load-context 已含（不要重复查）：`story_contracts`（MASTER/volume/chapter/review）、`hard_constraints`、`canonical_facts`、`protagonist`、`memory_pack`、`rag_assist`。`story_contracts.master.initial_canon` 是初始化时由作者明确给出的设定；`canonical_facts` 是截至 N-1 章从有效提交重放得到的人物状态、时间线与一般故事事实，必须完整消费。自由文本摘要默认不注入；历史事实从结构化提交、硬约束与 RAG 证据取得。不得绕过净化层直接读取 `.story-system/*.json`；contracts 缺失或损坏时返回 blocker。
+load-context 已含（不要重复查）：`story_contracts`（MASTER/volume/chapter/review）、`hard_constraints`、`canonical_facts`、`knowledge`、`presence`、`custody`、`fact_coverage`、`protagonist`、`memory_pack`、`rag_assist`。`story_contracts.master.initial_canon` 是初始化时由作者明确给出的设定；`canonical_facts` 是截至 N-1 章从有效提交重放得到的人物状态、时间线与一般故事事实，必须完整消费。`knowledge.by_entity` 记录人物已知/怀疑/遗忘的信息，`presence.current` 只含最后一次真实物理在场，`custody.current` 记录物品当前持有人。自由文本摘要默认不注入；历史事实从结构化提交、硬约束与 RAG 证据取得。不得绕过净化层直接读取 `.story-system/*.json`；contracts 缺失或损坏时返回 blocker。
 
 `hard_constraints` 是完整、不可按预算裁剪的 active 事实集合，逐条消费其中的 `world_rule`、`open_loop`、`reader_promise`、`relationship`。不得按“前 N 条”、最近章节窗口、大纲关键词或 RAG 命中情况省略硬约束。条目很多时可以压缩表述，但不能丢 ID 对应的事实；如果硬约束本身超过模型绝对上下文，返回 blocker，不得自行截断。
 
@@ -50,9 +50,9 @@ load-context 已含（不要重复查）：`story_contracts`（MASTER/volume/cha
 
 1. `load-context --chapter {NNNN}` 取基础包；先完整读取 `story_contracts.chapter.chapter_directive` 的全部字段，包括目标、阻力、代价、时间、跨章时间差、本章变化、核心冲突、视角、关键实体、Strand、反派层级、CBN/CPNs/CEN、必须节点、禁区、未闭合问题与钩子，再按需 `Read` 章纲原文（load-context 的 outline 可能截断，但结构化 directive 不得因此遗漏）。
 2. 确定卷号：优先 runtime contracts / latest commit；必要时只读 `state.json` 投影。
-3. 先检查顶层 `completeness`，再逐条核对 `hard_constraints`：世界规则不得违反；所有未闭合伏笔和读者承诺必须保留其未完成状态；所有 active 关系必须进入相关人物的事实边界。某类当前为零是合法状态；只有 source error、结构损坏、`omitted_hard_ids` 非空或声明 overflow/blocker 时才返回 blocker。
+3. 先检查顶层 `completeness`，再逐条核对 `hard_constraints`：世界规则不得违反；所有未闭合伏笔和读者承诺必须保留其未完成状态；所有 active 关系必须进入相关人物的事实边界。随后完整消费 `knowledge`、`presence`、`custody`：不得让角色使用未获得或已遗忘的信息，不得无转场跨越不可能的距离，不得让非持有人继续使用/交出物品。`fact_coverage` 为 `partial|none` 时仍使用明确存在的正向记录，但禁止把字段缺失解释成“不知道 / 不在场 / 不持有”，该覆盖状态本身不构成 blocker。某类当前为零是合法状态；只有 source error、结构损坏、`omitted_hard_ids` 非空或声明 overflow/blocker 时才返回 blocker。
 4. 按需深查：先计算 `NNNN_MINUS_1 = max(0, NNNN-1)`；配角 → `query-entity`；规则 → `query-rules`；伏笔/承诺 ID → `get-obligations`；时间跨度 → `get-timeline`。四类补查都必须传 `--as-of-chapter NNNN_MINUS_1`，不得直接读取当前 SQLite 投影或未来章文件。补查用于解释硬项，不得用查询的前 N 条替换完整集合。时间规则：跨夜须过渡、倒计时不跳跃、不回跳。
-5. 软证据按本章相关性和预算取舍，最多 N 条的限制只放在这里。组装时：动机 = 目标+处境+未闭合问题；可用能力 = 境界+设定禁用。只合并剧情向约束（越权、抢戏、钩子未接）。读取 `turn_requirements_file`；全书文风用 `style-memory show`，不要直接 `Read` `设定集/文风提示词.md`。不要消费写法教程。
+5. 软证据按本章相关性和预算取舍，最多 N 条的限制只放在这里。组装时：动机 = 目标+处境+未闭合问题；可用能力 = 境界+设定禁用；已知信息 = `knowledge.by_entity`；当前位置 = `presence.current`；可支配物品 = `custody.current`。只合并剧情向约束（越权、抢戏、钩子未接）。读取 `turn_requirements_file`；全书文风用 `style-memory show`，不要直接 `Read` `设定集/文风提示词.md`。不要消费写法教程。
 6. 红线校验（第 6 段），任一 fail 回第 5 步重组。
 
 ## 4. 写作铁律
@@ -83,7 +83,7 @@ load-context 已含（不要重复查）：`story_contracts`（MASTER/volume/cha
 
 边界：不改大纲、不造数据、不改节点；只完整携带紧凑硬约束，不整库搬运软记忆；不把合同 / 规则来源原样输出；**不教模型怎么写句子**。
 
-校验清单（任一 fail 回第 3 段重组）：四类 hard constraints 均完整消费且未按 N 条裁剪、事实无冲突、时空有承接、能力有来源、动机不断裂、合同与任务书一致、时间正确、记忆未遗漏、节点不冲突、五段完整可独立支撑起草、角色动机非空、所有 active 伏笔/承诺及关系边界均已保留。
+校验清单（任一 fail 回第 3 段重组）：四类 hard constraints 均完整消费且未按 N 条裁剪、事实无冲突、知识边界未越界、时空有承接、物品持有正确、能力有来源、动机不断裂、合同与任务书一致、时间正确、记忆未遗漏、节点不冲突、五段完整可独立支撑起草、角色动机非空、所有 active 伏笔/承诺及关系边界均已保留。
 
 ## 7. 输出格式
 
@@ -91,8 +91,8 @@ load-context 已含（不要重复查）：`story_contracts`（MASTER/volume/cha
 
 1. **开篇委托**：书名、章号、标题、一句话目标。
 2. **这章的故事**：前文摘要、本章目标 / 阻力、情节节点（若有）、必须覆盖 / 禁区、跨章约束。
-3. **这章的人物**：每人一段——状态、驱动力、本章作用、已知信息边界。不要规定说话腔调，除非本轮用户要求或全书文风提示词里写了。
-4. **本章剧情约束**：把未闭合问题、能力禁用、越权/抢戏等翻成具体提醒。丢掉口吻、句式、写法教程。
+3. **这章的人物**：每人一段——状态、当前位置、驱动力、本章作用、已知/怀疑/遗忘的信息边界。不要规定说话腔调，除非本轮用户要求或全书文风提示词里写了。
+4. **本章剧情约束**：把未闭合问题、能力禁用、物品当前持有人、不可无解释跨越的地点、越权/抢戏等翻成具体提醒。丢掉口吻、句式、写法教程。
 5. **文风**：先原样给出本轮用户文风/人称/视角覆盖；再给出全书 `设定集/文风提示词.md` 手写正文。两处都没有则写「无」。
 
 ## 8. SubagentRun 可汇总信号

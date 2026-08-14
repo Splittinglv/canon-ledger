@@ -102,16 +102,25 @@ def _accepted_commit(
     extraction = copy.deepcopy(extraction)
     evidence_lines: list[str] = []
     for event in extraction.get("accepted_events") or []:
-        if not isinstance(event, dict) or event.get("event_type") != "world_rule_revealed":
+        if not isinstance(event, dict):
             continue
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        domain = str(payload.get("domain") or event.get("subject") or "").strip()
-        content = str(payload.get("rule_content") or "").strip()
-        if domain and content:
-            quote = str(payload.get("evidence_quote") or f"{domain}：{content}").strip()
-            payload["evidence_quote"] = quote
-            event["payload"] = payload
-            evidence_lines.append(quote)
+        if event.get("event_type") == "world_rule_revealed":
+            domain = str(payload.get("domain") or event.get("subject") or "").strip()
+            content = str(payload.get("rule_content") or "").strip()
+            if domain and content:
+                quote = str(payload.get("evidence_quote") or f"{domain}：{content}").strip()
+                payload["evidence_quote"] = quote
+                event["payload"] = payload
+                evidence_lines.append(quote)
+        elif event.get("event_type") in {
+            "knowledge_state_changed",
+            "presence_observed",
+            "custody_changed",
+        }:
+            quote = str(payload.get("evidence_quote") or "").strip()
+            if quote:
+                evidence_lines.append(quote)
     chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
     chapter_path.write_text(
@@ -388,6 +397,174 @@ def test_historical_context_and_supplementary_queries_never_read_future_commit(t
     assert "是谁从封死的旧井寄出信件？" not in new_text
     assert old_entity is not None and old_entity.attributes["location"] == "北城"
     assert new_entity is not None and new_entity.attributes["location"] == "南港"
+
+
+def test_asof_replays_knowledge_physical_presence_and_custody(tmp_path):
+    (tmp_path / ".canon-ledger").mkdir(parents=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
+    _write_contracts(tmp_path, 1, 2, 3)
+    full_coverage = {
+        "knowledge": "complete",
+        "presence": "complete",
+        "custody": "complete",
+    }
+    _accepted_commit(
+        tmp_path,
+        1,
+        {
+            "fact_coverage": full_coverage,
+            "accepted_events": [
+                {
+                    "event_id": "linzhou-learns-door",
+                    "chapter": 1,
+                    "event_type": "knowledge_state_changed",
+                    "subject": "linzhou",
+                    "payload": {
+                        "information_id": "clocktower-secret-door",
+                        "content": "密门在钟楼下",
+                        "state": "known",
+                        "source_kind": "told",
+                        "source_entity": "keeper",
+                        "evidence_quote": "守门人告诉林舟：密门在钟楼下。",
+                    },
+                },
+                {
+                    "event_id": "linzhou-at-north-city",
+                    "chapter": 1,
+                    "event_type": "presence_observed",
+                    "subject": "linzhou",
+                    "payload": {
+                        "location_id": "north-city",
+                        "scene_index": 1,
+                        "presence_kind": "physical",
+                        "time_anchor": "第一日子时",
+                        "transition_explicit": True,
+                        "evidence_quote": "子时，林舟抵达北城。",
+                    },
+                },
+                {
+                    "event_id": "baizhi-dreams-south-port",
+                    "chapter": 1,
+                    "event_type": "presence_observed",
+                    "subject": "baizhi",
+                    "payload": {
+                        "location_id": "south-port",
+                        "scene_index": 2,
+                        "presence_kind": "dream",
+                        "evidence_quote": "白芷梦见自己站在南港。",
+                    },
+                },
+                {
+                    "event_id": "linzhou-takes-key",
+                    "chapter": 1,
+                    "event_type": "custody_changed",
+                    "subject": "bronze-key",
+                    "payload": {
+                        "from_holder": "",
+                        "to_holder": "linzhou",
+                        "location_id": "north-city",
+                        "evidence_quote": "林舟拾起铜钥匙，收进袖中。",
+                    },
+                },
+            ],
+        },
+    )
+
+    adapter = MemoryContractAdapter(DataModulesConfig.from_project_root(tmp_path))
+    chapter_two = adapter.export_asof_snapshot(chapter=2)
+
+    assert chapter_two["schema_version"] == "canon-ledger-asof-snapshot/v2"
+    assert chapter_two["coverage"] == full_coverage
+    assert chapter_two["information"]["clocktower-secret-door"]["content"] == "密门在钟楼下"
+    assert chapter_two["knowledge_by_entity"]["linzhou"]["clocktower-secret-door"]["state"] == "known"
+    assert chapter_two["presence"]["linzhou"]["location_id"] == "north-city"
+    assert "baizhi" not in chapter_two["presence"]
+    assert any(
+        row["entity_id"] == "baizhi" and row["presence_kind"] == "dream"
+        for row in chapter_two["presence_history"]
+    )
+    assert chapter_two["custody"]["bronze-key"]["holder_id"] == "linzhou"
+
+    _accepted_commit(
+        tmp_path,
+        2,
+        {
+            "fact_coverage": full_coverage,
+            "accepted_events": [
+                {
+                    "event_id": "baizhi-learns-door",
+                    "chapter": 2,
+                    "event_type": "knowledge_state_changed",
+                    "subject": "baizhi",
+                    "payload": {
+                        "information_id": "clocktower-secret-door",
+                        "content": "密门在钟楼下",
+                        "state": "known",
+                        "source_kind": "told",
+                        "source_entity": "linzhou",
+                        "evidence_quote": "林舟告诉白芷：密门在钟楼下。",
+                    },
+                },
+                {
+                    "event_id": "linzhou-at-south-port",
+                    "chapter": 2,
+                    "event_type": "presence_observed",
+                    "subject": "linzhou",
+                    "payload": {
+                        "location_id": "south-port",
+                        "scene_index": 1,
+                        "presence_kind": "physical",
+                        "transition_explicit": True,
+                        "evidence_quote": "翌日，林舟乘船抵达南港。",
+                    },
+                },
+                {
+                    "event_id": "key-to-baizhi",
+                    "chapter": 2,
+                    "event_type": "custody_changed",
+                    "subject": "bronze-key",
+                    "payload": {
+                        "from_holder": "linzhou",
+                        "to_holder": "baizhi",
+                        "location_id": "south-port",
+                        "evidence_quote": "林舟把铜钥匙交给白芷。",
+                    },
+                },
+            ],
+        },
+    )
+
+    still_chapter_two = adapter.export_asof_snapshot(chapter=2)
+    chapter_three = adapter.export_asof_snapshot(chapter=3)
+    assert "baizhi" not in still_chapter_two["knowledge_by_entity"]
+    assert still_chapter_two["presence"]["linzhou"]["location_id"] == "north-city"
+    assert still_chapter_two["custody"]["bronze-key"]["holder_id"] == "linzhou"
+    assert chapter_three["knowledge_by_entity"]["baizhi"]["clocktower-secret-door"]["state"] == "known"
+    assert chapter_three["presence"]["linzhou"]["location_id"] == "south-port"
+    assert chapter_three["custody"]["bronze-key"]["holder_id"] == "baizhi"
+
+    context = adapter.load_context(3, budget_tokens=20_000).to_dict()["sections"]
+    assert context["knowledge"]["by_entity"]["baizhi"]["clocktower-secret-door"]["state"] == "known"
+    assert context["presence"]["current"]["linzhou"]["location_id"] == "south-port"
+    assert context["custody"]["current"]["bronze-key"]["holder_id"] == "baizhi"
+    assert context["fact_coverage"] == full_coverage
+
+
+def test_legacy_commits_report_partial_long_term_fact_coverage(tmp_path):
+    (tmp_path / ".canon-ledger").mkdir(parents=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
+    _write_contracts(tmp_path, 1, 2)
+    _accepted_commit(tmp_path, 1, {})
+
+    snapshot = MemoryContractAdapter(
+        DataModulesConfig.from_project_root(tmp_path)
+    ).export_asof_snapshot(chapter=2)
+
+    assert snapshot["coverage"] == {
+        "knowledge": "partial",
+        "presence": "partial",
+        "custody": "partial",
+    }
 
 
 def test_invalid_bound_commit_is_omitted_and_blocks_context(tmp_path):

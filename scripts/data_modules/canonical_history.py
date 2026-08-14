@@ -15,19 +15,27 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from .chapter_content_binding import verify_commit_content_binding
-from .commit_artifacts import extraction_list
+from .commit_artifacts import extraction_dict, extraction_list
 from .commit_lineage import VALIDATION_NEEDS_REVALIDATION
 from .consistency_context import sanitize_initial_canon
 from .fact_text import (
+    bound_chapter_text_for_commit,
+    event_evidence_in_chapter,
     normalize_author_text,
     normalize_world_rule_payload,
     sanitize_fact_atom,
-    world_rule_evidence_in_commit,
+    world_rule_evidence_in_chapter,
 )
 from .story_contracts import sanitize_setting_canon, verify_setting_canon
 
 
 _COMMIT_NAME = re.compile(r"^chapter_(\d+)\.commit\.json$")
+_KNOWLEDGE_STATES = {"known", "suspected", "forgotten"}
+_KNOWLEDGE_SOURCE_KINDS = {
+    "witnessed", "told", "inferred", "read", "remembered", "forgotten", "unknown"
+}
+_PRESENCE_KINDS = {"physical", "remote", "memory", "dream", "mentioned"}
+_FACT_COVERAGE_DIMENSIONS = ("knowledge", "presence", "custody")
 
 
 def _text(value: Any, max_chars: int = 1200) -> str:
@@ -116,6 +124,15 @@ class CanonicalHistory:
     rules: List[Dict[str, Any]] = field(default_factory=list)
     obligations: List[Dict[str, Any]] = field(default_factory=list)
     timeline: List[Dict[str, Any]] = field(default_factory=list)
+    information: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    knowledge_by_entity: Dict[str, Dict[str, Dict[str, Any]]] = field(
+        default_factory=dict
+    )
+    presence: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    presence_history: List[Dict[str, Any]] = field(default_factory=list)
+    custody: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    custody_history: List[Dict[str, Any]] = field(default_factory=list)
+    coverage: Dict[str, str] = field(default_factory=dict)
 
 
 def _trusted_commits(
@@ -210,6 +227,14 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
     story_facts: Dict[str, Dict[str, Any]] = {}
     timeline: Dict[str, Dict[str, Any]] = {}
     state_changes: List[Dict[str, Any]] = []
+    information: Dict[str, Dict[str, Any]] = {}
+    knowledge_by_entity: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    presence: Dict[str, Dict[str, Any]] = {}
+    presence_history: List[Dict[str, Any]] = []
+    custody: Dict[str, Dict[str, Any]] = {}
+    custody_history: List[Dict[str, Any]] = []
+    coverage_claims: List[Dict[str, Any]] = []
+    coverage_failures: set[str] = set()
 
     def remember_state(
         *, chapter: int, entity_id: Any, field_name: Any, value: Any,
@@ -247,6 +272,59 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
 
     for commit in commits:
         chapter = int(commit["meta"]["chapter"])
+        chapter_text = bound_chapter_text_for_commit(project_root, commit) or ""
+        coverage_claims.append(extraction_dict(commit, "fact_coverage"))
+
+        # Entity appearances are useful identity evidence, but they never
+        # imply physical presence. Only presence_observed may update location.
+        for appeared in extraction_list(commit, "entities_appeared"):
+            if not isinstance(appeared, dict):
+                continue
+            entity_id = _atom(appeared.get("id") or appeared.get("entity_id"))
+            if not entity_id:
+                continue
+            current = entities.setdefault(
+                entity_id,
+                {"id": entity_id, "name": entity_id, "type": "角色"},
+            )
+            mentions = appeared.get("mentions")
+            name = ""
+            if isinstance(mentions, list):
+                name = next(
+                    (_text(item, 240) for item in mentions if _text(item, 240)),
+                    "",
+                )
+            entity_type = _atom(appeared.get("type") or appeared.get("entity_type"), 80)
+            if name:
+                current["name"] = name
+            if entity_type:
+                current["type"] = entity_type
+            current.setdefault("first_appearance", chapter)
+            current["first_appearance"] = min(
+                int(current.get("first_appearance") or chapter), chapter
+            )
+            current["last_appearance"] = max(
+                int(current.get("last_appearance") or 0), chapter
+            )
+
+        for scene in extraction_list(commit, "scenes"):
+            if not isinstance(scene, dict) or not isinstance(scene.get("characters"), list):
+                continue
+            for raw_entity in scene.get("characters") or []:
+                entity_id = _atom(raw_entity)
+                if not entity_id:
+                    continue
+                current = entities.setdefault(
+                    entity_id,
+                    {"id": entity_id, "name": entity_id, "type": "角色"},
+                )
+                current.setdefault("first_appearance", chapter)
+                current["first_appearance"] = min(
+                    int(current.get("first_appearance") or chapter), chapter
+                )
+                current["last_appearance"] = max(
+                    int(current.get("last_appearance") or 0), chapter
+                )
 
         for index, delta in enumerate(extraction_list(commit, "entity_deltas")):
             if not isinstance(delta, dict):
@@ -359,7 +437,7 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
                     and rule_id
                     and domain
                     and field_name
-                    and world_rule_evidence_in_commit(project_root, commit, event)
+                    and world_rule_evidence_in_chapter(payload, subject, chapter_text)
                 ):
                     rules[rule_id] = {
                         "id": rule_id,
@@ -452,6 +530,160 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
                 )
                 if promise_id:
                     promises.pop(promise_id, None)
+            elif event_type == "knowledge_state_changed":
+                information_id = _atom(payload.get("information_id"), 180)
+                raw_content = payload.get("content")
+                content = _text(raw_content, max_chars=600)
+                evidence_quote = str(payload.get("evidence_quote") or "").strip()
+                state = str(payload.get("state") or "").strip().lower()
+                source_kind = str(payload.get("source_kind") or "").strip().lower()
+                source_entity = _atom(payload.get("source_entity"), 180)
+                existing_information = information.get(information_id)
+                valid_information = (
+                    bool(subject)
+                    and bool(information_id)
+                    and bool(content)
+                    and isinstance(raw_content, str)
+                    and raw_content.strip() in evidence_quote
+                    and state in _KNOWLEDGE_STATES
+                    and source_kind in _KNOWLEDGE_SOURCE_KINDS
+                    and event_evidence_in_chapter(event, chapter_text)
+                    and (
+                        existing_information is None
+                        or existing_information.get("content") == content
+                    )
+                )
+                if valid_information:
+                    information.setdefault(
+                        information_id,
+                        {
+                            "id": information_id,
+                            "content": content,
+                            "source_chapter": chapter,
+                            "source_event_id": event_id,
+                        },
+                    )
+                    knowledge_by_entity.setdefault(subject, {})[information_id] = {
+                        "event_id": event_id,
+                        "entity_id": subject,
+                        "information_id": information_id,
+                        "content": content,
+                        "state": state,
+                        "source_kind": source_kind,
+                        "source_entity": source_entity,
+                        "evidence_quote": evidence_quote,
+                        "source_chapter": chapter,
+                    }
+                    entities.setdefault(
+                        subject,
+                        {"id": subject, "name": subject, "type": "角色"},
+                    )
+                else:
+                    result.omitted_fact_ids.append(event_id)
+                    coverage_failures.add("knowledge")
+            elif event_type == "presence_observed":
+                location_id = _atom(payload.get("location_id"), 180)
+                presence_kind = str(payload.get("presence_kind") or "").strip().lower()
+                evidence_quote = str(payload.get("evidence_quote") or "").strip()
+                raw_scene_index = payload.get("scene_index")
+                transition_explicit = payload.get("transition_explicit")
+                try:
+                    scene_index = (
+                        int(raw_scene_index)
+                        if raw_scene_index not in (None, "")
+                        and not isinstance(raw_scene_index, bool)
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    scene_index = -1
+                if (
+                    subject
+                    and location_id
+                    and presence_kind in _PRESENCE_KINDS
+                    and (scene_index is None or scene_index >= 1)
+                    and (
+                        transition_explicit is None
+                        or isinstance(transition_explicit, bool)
+                    )
+                    and event_evidence_in_chapter(event, chapter_text)
+                ):
+                    row = {
+                        "event_id": event_id,
+                        "entity_id": subject,
+                        "location_id": location_id,
+                        "scene_index": scene_index,
+                        "time_anchor": _text(payload.get("time_anchor"), max_chars=240),
+                        "presence_kind": presence_kind,
+                        "transition_explicit": transition_explicit,
+                        "evidence_quote": evidence_quote,
+                        "source_chapter": chapter,
+                    }
+                    presence_history.append(row)
+                    if presence_kind == "physical":
+                        presence[subject] = dict(row)
+                    entity = entities.setdefault(
+                        subject,
+                        {"id": subject, "name": subject, "type": "角色"},
+                    )
+                    entity.setdefault("first_appearance", chapter)
+                    entity["first_appearance"] = min(
+                        int(entity.get("first_appearance") or chapter), chapter
+                    )
+                    entity["last_appearance"] = max(
+                        int(entity.get("last_appearance") or 0), chapter
+                    )
+                    entities.setdefault(
+                        location_id,
+                        {"id": location_id, "name": location_id, "type": "地点"},
+                    )
+                else:
+                    result.omitted_fact_ids.append(event_id)
+                    coverage_failures.add("presence")
+            elif event_type == "custody_changed":
+                artifact_id = subject
+                from_holder = _atom(payload.get("from_holder"), 180)
+                to_holder = _atom(payload.get("to_holder"), 180)
+                location_id = _atom(payload.get("location_id"), 180)
+                evidence_quote = str(payload.get("evidence_quote") or "").strip()
+                prior_holder = str(
+                    (custody.get(artifact_id) or {}).get("holder_id") or ""
+                )
+                if (
+                    artifact_id
+                    and (from_holder or to_holder)
+                    and event_evidence_in_chapter(event, chapter_text)
+                ):
+                    row = {
+                        "event_id": event_id,
+                        "artifact_id": artifact_id,
+                        "from_holder": from_holder,
+                        "to_holder": to_holder,
+                        "holder_id": to_holder,
+                        "prior_holder": prior_holder,
+                        "location_id": location_id,
+                        "transition_consistent": (
+                            not prior_holder
+                            or not from_holder
+                            or prior_holder == from_holder
+                        ),
+                        "evidence_quote": evidence_quote,
+                        "source_chapter": chapter,
+                    }
+                    custody_history.append(row)
+                    custody[artifact_id] = dict(row)
+                    entities.setdefault(
+                        artifact_id,
+                        {"id": artifact_id, "name": artifact_id, "type": "物品"},
+                    )
+                    for holder in (from_holder, to_holder):
+                        if holder:
+                            entities.setdefault(
+                                holder,
+                                {"id": holder, "name": holder, "type": "角色"},
+                            )
+                else:
+                    result.omitted_fact_ids.append(event_id)
+                    coverage_failures.add("custody")
             elif event_type == "artifact_obtained":
                 artifact = _text(
                     payload.get("name")
@@ -592,6 +824,22 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
         entity.setdefault("first_appearance", 0)
         entity.setdefault("last_appearance", 0)
 
+    expected_chapters = list(range(1, as_of + 1))
+    history_is_contiguous = result.valid_chapters == expected_chapters
+    coverage: Dict[str, str] = {}
+    for dimension in _FACT_COVERAGE_DIMENSIONS:
+        if not commits:
+            coverage[dimension] = "partial" if result.invalid_sources else "none"
+        elif (
+            not result.invalid_sources
+            and history_is_contiguous
+            and dimension not in coverage_failures
+            and all(claim.get(dimension) == "complete" for claim in coverage_claims)
+        ):
+            coverage[dimension] = "complete"
+        else:
+            coverage[dimension] = "partial"
+
     result.hard_constraints = hard
     result.canonical_facts = canonical_facts
     result.entities = entities
@@ -602,6 +850,29 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
     result.rules = list(rules.values())
     result.obligations = [*loops.values(), *promises.values()]
     result.timeline = timeline_rows
+    result.information = dict(sorted(information.items()))
+    result.knowledge_by_entity = {
+        entity_id: dict(sorted(facts.items()))
+        for entity_id, facts in sorted(knowledge_by_entity.items())
+    }
+    result.presence = dict(sorted(presence.items()))
+    result.presence_history = sorted(
+        presence_history,
+        key=lambda row: (
+            int(row.get("source_chapter") or 0),
+            int(row.get("scene_index") or 0),
+            str(row.get("event_id") or ""),
+        ),
+    )
+    result.custody = dict(sorted(custody.items()))
+    result.custody_history = sorted(
+        custody_history,
+        key=lambda row: (
+            int(row.get("source_chapter") or 0),
+            str(row.get("event_id") or ""),
+        ),
+    )
+    result.coverage = coverage
     result.invalid_sources = list(dict.fromkeys(result.invalid_sources))
     result.omitted_fact_ids = sorted(set(result.omitted_fact_ids))
     return result
@@ -613,7 +884,7 @@ def latest_canonical_chapter(project_root: Path) -> int:
     return max((int(row["meta"]["chapter"]) for row in commits), default=0)
 
 
-ASOF_SNAPSHOT_SCHEMA = "canon-ledger-asof-snapshot/v1"
+ASOF_SNAPSHOT_SCHEMA = "canon-ledger-asof-snapshot/v2"
 
 
 def history_to_asof_snapshot(
@@ -648,6 +919,13 @@ def history_to_asof_snapshot(
         "rules": history.rules,
         "obligations": history.obligations,
         "timeline": history.timeline,
+        "information": history.information,
+        "knowledge_by_entity": history.knowledge_by_entity,
+        "presence": history.presence,
+        "presence_history": history.presence_history,
+        "custody": history.custody,
+        "custody_history": history.custody_history,
+        "coverage": history.coverage,
         "canonical_facts": history.canonical_facts,
         "hard_constraints": history.hard_constraints,
     }

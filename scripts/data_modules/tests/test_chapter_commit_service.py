@@ -150,6 +150,48 @@ def test_commit_service_rejects_world_rule_without_matching_prose_evidence(tmp_p
         )
 
 
+def test_commit_service_rejects_long_term_event_without_matching_prose_evidence(tmp_path):
+    chapter_path = tmp_path / "正文" / "第0003章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("守门人没有透露密门的位置。", encoding="utf-8")
+    service = ChapterCommitService(tmp_path)
+
+    with pytest.raises(ValueError, match="is not present in the bound chapter"):
+        _build_commit(
+            service,
+            tmp_path,
+            chapter=3,
+            review_result={"blocking_count": 0},
+            fulfillment_result={
+                "planned_nodes": [],
+                "covered_nodes": [],
+                "missed_nodes": [],
+                "extra_nodes": [],
+            },
+            disambiguation_result={"pending": []},
+            extraction_result={
+                "state_deltas": [],
+                "entity_deltas": [],
+                "accepted_events": [
+                    {
+                        "event_id": "false-secret",
+                        "chapter": 3,
+                        "event_type": "knowledge_state_changed",
+                        "subject": "linzhou",
+                        "payload": {
+                            "information_id": "clocktower-secret-door",
+                            "content": "密门在钟楼下",
+                            "state": "known",
+                            "source_kind": "told",
+                            "source_entity": "keeper",
+                            "evidence_quote": "守门人告诉林舟：密门在钟楼下。",
+                        },
+                    }
+                ],
+            },
+        )
+
+
 def test_commit_service_rejects_empty_fulfillment_for_authoritative_nodes(tmp_path):
     contract_path = tmp_path / ".story-system" / "chapters" / "chapter_003.json"
     contract_path.parent.mkdir(parents=True, exist_ok=True)

@@ -255,7 +255,7 @@ Task:
 - scripts_dir=${SCRIPTS_DIR}
 - 只返回严格的 reviewer schema JSON，不写任何文件。
 - 除 JSON 字段、固定枚举、路径和正文原样引用外，所有自然语言审查内容使用中文。
-- standard 必须逐项覆盖 setting/timeline/continuity/character/logic；fast 只能覆盖 setting/timeline/continuity，并由 artifact 明确报告降级。
+- standard 必须逐项覆盖 setting/timeline/continuity/character/logic；fast 必须覆盖 setting/timeline/continuity/character（知识边界不可跳过），只跳过 logic，并由 artifact 明确报告降级。
 - 不评分、不口头总结。
 
 reviewer 只返回 JSON；主流程负责用 `Write` 把返回的 JSON 写入 `${PROJECT_ROOT}/.canon-ledger/tmp/review_results.json`（reviewer 不持 Write，是这份 artifact 的非写入方）。随后必须运行 review-pipeline；review-pipeline 会把同一路径覆盖为标准 review_result artifact（含 `blocking_count`），供 precommit gate 与后续提交命令使用。
@@ -287,7 +287,7 @@ reviewer 跳过、失败、输出不完整、`--minimal` 写 no-review artifact�
   --save-audit
 ```
 
-每个正文字节版本只跑一轮审查。只处理可验证的事实问题。`blocking=true` 的事实问题在不改剧情、不破设定、**不改文风**的前提下定点修复；任何字节变更都会使旧 `chapter_binding`、review artifact 和审计记录失效，因此必须先重新生成 binding，再对最终正文重新调用 reviewer + review-pipeline，然后才能进 Step 5。确实无法修复的阻断问题用 `AskQuestion` 让用户裁决（接受当前版本 / 手动修复 / 放弃）；若 AskQuestion 不可用，在聊天里给出同样的 2–3 个有限选项。非阻断的事实问题交给 Step 4；只要 Step 4 改了正文，同样必须重新审查最终版。口吻、句式、修辞类意见一律忽略。`--fast` 只检查 setting/timeline/continuity，并在作者报告中明确标记未检查 character/logic。
+每个正文字节版本只跑一轮审查。只处理可验证的事实问题。`blocking=true` 的事实问题在不改剧情、不破设定、**不改文风**的前提下定点修复；任何字节变更都会使旧 `chapter_binding`、review artifact 和审计记录失效，因此必须先重新生成 binding，再对最终正文重新调用 reviewer + review-pipeline，然后才能进 Step 5。确实无法修复的阻断问题用 `AskQuestion` 让用户裁决（接受当前版本 / 手动修复 / 放弃）；若 AskQuestion 不可用，在聊天里给出同样的 2–3 个有限选项。非阻断的事实问题交给 Step 4；只要 Step 4 改了正文，同样必须重新审查最终版。口吻、句式、修辞类意见一律忽略。`--fast` 检查 setting/timeline/continuity/character（含知识边界），并在作者报告中明确标记未检查 logic。
 
 `--minimal` 不调用 reviewer，也不生成审查报告或审计记录；必须通过统一 CLI **覆盖写入**本章新的跳过审查凭据（禁止复用旧 artifact），使 Step 5 提交链有有效 `--review-result`（成功标准“审查已落库”对 `--minimal` 的豁免仍成立）：
 

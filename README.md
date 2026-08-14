@@ -8,7 +8,7 @@
 
 **叙典 CanonLedger** 是长篇小说一致性引擎。它让 AI 写到几百章后仍然记得住设定、接得住伏笔、守得住章纲；具体的写作风格和文笔由作者与当前模型自定义。
 
-项目最初基于 [lingfengQAQ/webnovel-writer](https://github.com/lingfengQAQ/webnovel-writer) v6.2.1 移植，随后在生成式 AI 辅助下围绕长期一致性目标进行了大幅重构。当前产品不跟踪上游后续版本，也不是上游的官方产品；历史派生范围和许可信息见 [NOTICE.md](NOTICE.md) 与 [ATTRIBUTION.md](ATTRIBUTION.md)。项目由 Splittinglv 发起并发布，仓库为 [Splittinglv/canon-ledger](https://github.com/Splittinglv/canon-ledger)。
+叙典由 Splittinglv 发起并发布，仓库为 [Splittinglv/canon-ledger](https://github.com/Splittinglv/canon-ledger)。它使用自己的产品名、命令、数据空间和版本规划，不跟踪其他仓库的后续版本。代码、测试与文档大量使用生成式 AI 辅助完成。许可与历史来源见 [NOTICE.md](NOTICE.md) 与 [ATTRIBUTION.md](ATTRIBUTION.md)。
 
 叙典的默认产品边界是**长期一致性状态机**：插件负责故事别写崩，不负责把句子写成某种网文腔。
 
@@ -237,9 +237,11 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" --project-root "<PROJECT
 
 ## 产品边界与历史来源
 
-叙典采用自己的产品名、命令和数据空间：`/canon-ledger-*`、`scripts/canon_ledger.py`、`.canon-ledger/` 与 `CANON_LEDGER_*` 是唯一受支持的当前接口。本版本按全新产品发布，不提供旧插件命令、环境变量、运行目录或项目数据的迁移入口。
+叙典采用自己的产品名、命令和数据空间：`/canon-ledger-*`、`scripts/canon_ledger.py`、`.canon-ledger/` 与 `CANON_LEDGER_*` 是唯一受支持的当前接口。本版本按独立产品发布，不提供旧插件命令、环境变量、运行目录或项目数据的迁移入口。
 
-历史派生组件、基线提交和主要修改范围见 [ATTRIBUTION.md](ATTRIBUTION.md)；原始许可和非官方关系声明见 [NOTICE.md](NOTICE.md)。测试中的剧情、章纲、文风指令和审查问题统一使用自然中文句子；JSON 字段、枚举、命令、路径、错误码与 agent 名等协议标识保留原值。
+代码最初从 [lingfengQAQ/webnovel-writer](https://github.com/lingfengQAQ/webnovel-writer) v6.2.1 导入，并继续按 GNU GPL v3 发布。当前产品不是该项目的官方发行版，也不跟踪其后续版本。派生范围、基线提交和主要修改见 [ATTRIBUTION.md](ATTRIBUTION.md)；许可与非官方关系声明见 [NOTICE.md](NOTICE.md)。
+
+测试中的剧情、章纲、文风指令和审查问题统一使用自然中文句子；JSON 字段、枚举、命令、路径、错误码与 agent 名等协议标识保留原值。
 
 ## 版本
 

@@ -14,7 +14,7 @@ from .chapter_content_binding import ChapterContentBinding, chapter_bindings_equ
 
 
 REVIEW_DIMENSIONS = ("setting", "timeline", "continuity", "character", "logic")
-FAST_REVIEW_DIMENSIONS = ("setting", "timeline", "continuity")
+FAST_REVIEW_DIMENSIONS = ("setting", "timeline", "continuity", "character")
 VALID_SEVERITIES = {"critical", "high", "medium", "low"}
 VALID_CATEGORIES = set(REVIEW_DIMENSIONS)
 

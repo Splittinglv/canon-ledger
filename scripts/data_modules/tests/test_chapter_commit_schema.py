@@ -87,6 +87,33 @@ def test_artifact_models_preserve_valid_top_level_payloads():
     assert extraction.state_deltas[0]["entity_id"] == "xiaoyan"
 
 
+def test_extraction_fact_coverage_is_explicit_and_closed():
+    payload = {
+        "accepted_events": [],
+        "state_deltas": [],
+        "entity_deltas": [],
+        "fact_coverage": {
+            "knowledge": "complete",
+            "presence": "partial",
+            "custody": "complete",
+        },
+        "chapter_binding": _binding(),
+    }
+
+    extraction = ExtractionResult.model_validate(payload)
+    assert extraction.fact_coverage == payload["fact_coverage"]
+
+    bad = deepcopy(payload)
+    bad["fact_coverage"].pop("custody")
+    with pytest.raises(ValueError, match="must contain exactly"):
+        ExtractionResult.model_validate(bad)
+
+    bad = deepcopy(payload)
+    bad["fact_coverage"]["presence"] = "unknown"
+    with pytest.raises(ValueError, match="must be complete or partial"):
+        ExtractionResult.model_validate(bad)
+
+
 def test_artifact_models_reject_nested_wrappers_and_missing_core_fields():
     with pytest.raises(ValueError, match="nested under fulfillment"):
         FulfillmentResult.model_validate({"fulfillment": {"missed_nodes": []}})
@@ -234,3 +261,103 @@ def test_accepted_event_model_rejects_chapter_spoofing():
                 }
             ],
         )
+
+
+def test_long_term_consistency_events_are_normalized():
+    events = normalize_accepted_events(
+        3,
+        [
+            {
+                "event_id": "learn-secret",
+                "event_type": "information_learned",
+                "subject": "alice",
+                "payload": {
+                    "information_id": "secret-door",
+                    "content": "密门在钟楼下",
+                    "state": "KNOWN",
+                    "source_kind": "TOLD",
+                    "source_entity": "keeper",
+                    "evidence_quote": "守门人告诉她：密门在钟楼下。",
+                },
+            },
+            {
+                "event_id": "alice-north",
+                "event_type": "location_changed",
+                "subject": "alice",
+                "payload": {
+                    "location_id": "north-city",
+                    "presence_kind": "PHYSICAL",
+                    "scene_index": "2",
+                    "transition_explicit": True,
+                    "evidence_quote": "爱丽丝抵达北城。",
+                },
+            },
+            {
+                "event_id": "key-transfer",
+                "event_type": "artifact_transferred",
+                "subject": "bronze-key",
+                "payload": {
+                    "from_holder": "alice",
+                    "to_holder": "bob",
+                    "evidence_quote": "爱丽丝把铜钥匙交给鲍勃。",
+                },
+            },
+        ],
+    )
+
+    assert [event["event_type"] for event in events] == [
+        "knowledge_state_changed",
+        "presence_observed",
+        "custody_changed",
+    ]
+    assert events[0]["payload"]["state"] == "known"
+    assert events[0]["payload"]["source_kind"] == "told"
+    assert events[1]["payload"]["scene_index"] == 2
+    assert events[1]["payload"]["presence_kind"] == "physical"
+    assert events[2]["payload"]["location_id"] == ""
+
+
+@pytest.mark.parametrize(
+    ("event", "message"),
+    [
+        (
+            {
+                "event_type": "knowledge_state_changed",
+                "subject": "alice",
+                "payload": {
+                    "information_id": "secret-door",
+                    "content": "密门在钟楼下",
+                    "state": "known",
+                    "source_kind": "told",
+                    "evidence_quote": "守门人只说了半句话。",
+                },
+            },
+            "verbatim fragment",
+        ),
+        (
+            {
+                "event_type": "presence_observed",
+                "subject": "alice",
+                "payload": {
+                    "presence_kind": "dream",
+                    "evidence_quote": "她梦见自己站在南港。",
+                },
+            },
+            "location_id",
+        ),
+        (
+            {
+                "event_type": "custody_changed",
+                "subject": "bronze-key",
+                "payload": {
+                    "to_holder": "bob",
+                    "evidence_quote": "鲍勃拿到了铜钥匙。",
+                },
+            },
+            "from_holder and to_holder",
+        ),
+    ],
+)
+def test_long_term_consistency_events_fail_closed(event, message):
+    with pytest.raises(ValueError, match=message):
+        normalize_accepted_events(3, [event])

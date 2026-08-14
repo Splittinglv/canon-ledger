@@ -268,9 +268,14 @@ def test_export_asof_empty_project(tmp_path, capsys):
         sys.argv = old_argv
 
     output = json.loads(capsys.readouterr().out)
-    assert output["schema_version"] == "canon-ledger-asof-snapshot/v1"
+    assert output["schema_version"] == "canon-ledger-asof-snapshot/v2"
     assert output["chapter"] == 1
     assert output["as_of_chapter"] == 0
     saved = json.loads(out.read_text(encoding="utf-8"))
     assert saved["as_of_chapter"] == 0
     assert saved["obligations"] == []
+    assert saved["coverage"] == {
+        "knowledge": "none",
+        "presence": "none",
+        "custody": "none",
+    }

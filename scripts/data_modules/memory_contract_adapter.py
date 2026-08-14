@@ -268,6 +268,17 @@ class MemoryContractAdapter:
 
         mandatory["hard_constraints"] = hard_constraints
         mandatory["canonical_facts"] = list(canonical_history.canonical_facts)
+        mandatory["knowledge"] = {
+            "information": dict(canonical_history.information),
+            "by_entity": dict(canonical_history.knowledge_by_entity),
+        }
+        mandatory["presence"] = {
+            "current": dict(canonical_history.presence),
+        }
+        mandatory["custody"] = {
+            "current": dict(canonical_history.custody),
+        }
+        mandatory["fact_coverage"] = dict(canonical_history.coverage)
 
         # Context Pack v2 exposes one canonical hard set.  Optional evidence
         # never repeats it, and aliases that duplicated the same prose were

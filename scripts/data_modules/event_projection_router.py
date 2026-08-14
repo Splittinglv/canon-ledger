@@ -19,6 +19,13 @@ class EventProjectionRouter:
         "promise_created": ["memory", "vector"],
         "promise_paid_off": ["memory", "vector"],
         "artifact_obtained": ["index", "vector"],
+        # These remain in the bound commit/event log and are replayed by
+        # canonical_history. In particular, knowledge contents must not be
+        # flattened into generic vector retrieval where access boundaries are
+        # lost.
+        "knowledge_state_changed": [],
+        "presence_observed": [],
+        "custody_changed": [],
     }
 
     def route(self, event: Dict) -> List[str]:

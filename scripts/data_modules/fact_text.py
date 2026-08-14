@@ -89,6 +89,7 @@ _WORLD_RULE_META_LANGUAGE = re.compile(
 )
 
 _WORLD_RULE_EVIDENCE_LIMIT = 600
+_EVENT_EVIDENCE_LIMIT = 600
 
 
 def sanitize_world_rule_text(value: Any, *, max_chars: int = 1200) -> str:
@@ -166,24 +167,48 @@ def world_rule_evidence_in_chapter(
     return normalized["evidence_quote"] in chapter_text
 
 
-def world_rule_evidence_in_commit(
+def normalize_event_evidence_quote(value: Any) -> str:
+    """Return an exact, bounded prose quote suitable for event provenance."""
+    if not isinstance(value, str):
+        return ""
+    quote = value.strip()
+    if (
+        not quote
+        or len(quote) > _EVENT_EVIDENCE_LIMIT
+        or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", quote)
+    ):
+        return ""
+    return quote
+
+
+def event_evidence_in_chapter(event: Any, chapter_text: Any) -> bool:
+    """Confirm a structured event quotes the bound chapter verbatim."""
+    if not isinstance(event, dict) or not isinstance(chapter_text, str):
+        return False
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    quote = normalize_event_evidence_quote(payload.get("evidence_quote"))
+    return bool(quote and quote in chapter_text)
+
+
+def bound_chapter_text_for_commit(
     project_root: str | Path,
     commit_payload: Any,
-    event: Any,
-) -> bool:
-    """只信任与当前提交绑定正文逐字一致的世界规则证据。"""
-    if not isinstance(commit_payload, dict) or not isinstance(event, dict):
-        return False
+) -> str | None:
+    """Read chapter prose only when the commit binding still matches exactly."""
+    if not isinstance(commit_payload, dict):
+        return None
     binding = commit_payload.get("chapter_binding")
     meta = commit_payload.get("meta")
     if not isinstance(binding, dict) or not isinstance(meta, dict):
-        return False
+        return None
     try:
         chapter = int(meta.get("chapter") or 0)
         binding_chapter = int(binding.get("chapter") or 0)
         expected_bytes = int(binding.get("bytes") or -1)
     except (TypeError, ValueError):
-        return False
+        return None
     relative = str(binding.get("path") or "").strip().replace("\\", "/")
     digest = str(binding.get("sha256") or "").strip().lower()
     pure = Path(relative)
@@ -196,7 +221,7 @@ def world_rule_evidence_in_commit(
         or not re.fullmatch(r"[0-9a-f]{64}", digest)
         or expected_bytes <= 0
     ):
-        return False
+        return None
     root = Path(project_root).expanduser().resolve()
     target = (root / pure).resolve()
     try:
@@ -204,14 +229,38 @@ def world_rule_evidence_in_commit(
         raw = target.read_bytes()
         text = raw.decode("utf-8")
     except (OSError, UnicodeDecodeError, ValueError):
-        return False
+        return None
     if len(raw) != expected_bytes or hashlib.sha256(raw).hexdigest() != digest:
+        return None
+    return text
+
+
+def world_rule_evidence_in_commit(
+    project_root: str | Path,
+    commit_payload: Any,
+    event: Any,
+) -> bool:
+    """只信任与当前提交绑定正文逐字一致的世界规则证据。"""
+    if not isinstance(event, dict):
+        return False
+    text = bound_chapter_text_for_commit(project_root, commit_payload)
+    if text is None:
         return False
     return world_rule_evidence_in_chapter(
         event.get("payload"),
         event.get("subject"),
         text,
     )
+
+
+def event_evidence_in_commit(
+    project_root: str | Path,
+    commit_payload: Any,
+    event: Any,
+) -> bool:
+    """Verify generic structured-event evidence against bound chapter prose."""
+    text = bound_chapter_text_for_commit(project_root, commit_payload)
+    return text is not None and event_evidence_in_chapter(event, text)
 
 
 def _strip_controls(value: Any) -> str:

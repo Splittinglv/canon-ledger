@@ -26,6 +26,7 @@ from .commit_artifacts import extraction_list
 from .config import DataModulesConfig
 from .event_log_store import EventLogStore
 from .event_projection_router import EventProjectionRouter
+from .fact_text import bound_chapter_text_for_commit, event_evidence_in_chapter
 from .story_contracts import write_json
 from .index_manager import IndexManager
 from .override_ledger_service import (
@@ -111,6 +112,27 @@ class ChapterCommitService:
         accepted_events = EventLogStore(self.project_root).normalize_events(
             chapter, extraction.accepted_events
         )
+        evidence_envelope = {
+            "meta": {"chapter": chapter},
+            "chapter_binding": chapter_binding,
+        }
+        if status == "accepted":
+            bound_chapter_text = bound_chapter_text_for_commit(
+                self.project_root,
+                evidence_envelope,
+            )
+            for index, event in enumerate(accepted_events):
+                if str(event.get("event_type") or "") not in {
+                    "knowledge_state_changed",
+                    "presence_observed",
+                    "custody_changed",
+                }:
+                    continue
+                if not event_evidence_in_chapter(event, bound_chapter_text):
+                    raise ValueError(
+                        f"accepted_events[{index}].payload.evidence_quote "
+                        "is not present in the bound chapter"
+                    )
         extraction_payload = extraction.model_dump()
         extraction_payload["accepted_events"] = accepted_events
         extraction_payload["timeline_events"] = normalize_timeline_events(

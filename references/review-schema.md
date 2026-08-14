@@ -28,8 +28,9 @@ reviewer 输出顶层必须包含调用方传入的 `chapter_binding`（`schema_
 | dimension_results | array | ✅ | 已审维度结论；顺序与模式绑定 |
 | summary | string | ✅ | 中文摘要，不是评分 |
 
-`standard` 的 `dimension_results` 必须按顺序且只能覆盖 setting / timeline / continuity / character / logic。  
-`fast` 必须按顺序且只能覆盖 setting / timeline / continuity。  
+`standard` 的 `dimension_results` 必须按顺序且只能覆盖 setting / timeline / continuity / character / logic。
+
+`fast` 必须按顺序且只能覆盖 setting / timeline / continuity / character；知识边界是默认长期一致性检查，不能跳过。
 `minimal` 不得携带问题结论，`dimension_results` 必须为空。
 
 每条维度结论：
@@ -37,7 +38,7 @@ reviewer 输出顶层必须包含调用方传入的 `chapter_binding`（`schema_
 | 字段 | 说明 |
 |------|------|
 | dimension | 上述合法维度名 |
-| conclusion | 无问题写「未发现事实问题」；有问题写「发现N个问题：简述」，并在 `issues` 给出完整条目 |
+| conclusion | 覆盖完整且无问题写「未发现事实问题」；有问题写「发现N个问题：简述」；依赖的历史覆盖为 partial / none 时必须明确写覆盖不完整，不得伪装成完整通过 |
 
 ## Issue Schema
 
@@ -54,12 +55,16 @@ reviewer 输出顶层必须包含调用方传入的 `chapter_binding`（`schema_
 分类含义：
 
 - `setting`：与设定集 / `setting_canon` / 世界规则矛盾
-- `timeline`：时间顺序、跨度、倒计时与已接受事实矛盾
-- `continuity`：已接受提交中的未闭合问题、伏笔、承诺、状态，以及章合同 `must_cover_nodes` / `forbidden_zones`
-- `character`：动机、知识边界、能力与已建立人设矛盾
+- `timeline`：时间顺序、跨度、倒计时，以及有明确物理在场证据的地点矛盾；梦境、回忆、远程通信和提及不更新当前位置
+- `continuity`：已接受提交中的未闭合问题、伏笔、承诺、状态、物品持有，以及章合同 `must_cover_nodes` / `forbidden_zones`
+- `character`：只查知识边界；不评价性格、动机、口吻或文笔
 - `logic`：因果、力量对比、决策前提不成立
 
 文笔、钩子、场景过渡、情绪弧、对话是否书面都不是合法分类。
+
+## 长期事实覆盖
+
+as-of v2 快照提供 `information`、`knowledge_by_entity`、`presence` / `presence_history`、`custody` / `custody_history` 和 `coverage`。`coverage.knowledge|presence|custody` 只有 `complete` 时，字段缺失才可作为否定证据；`partial` 或 `none` 只能核对明确存在的正向记录，不能据此断言某角色不知道、不在场或不持有物品。
 
 ## 阻断规则
 
