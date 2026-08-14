@@ -1,14 +1,14 @@
 # 叙典 CanonLedger
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-7.0.0-brightgreen.svg)](.cursor-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-7.0.1-brightgreen.svg)](.cursor-plugin/plugin.json)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 
 记住故事事实，不替你决定文风。
 
 **叙典 CanonLedger** 是长篇小说一致性引擎。它让 AI 写到几百章后仍然记得住设定、接得住伏笔、守得住章纲；具体的写作风格和文笔由作者与当前模型自定义。
 
-项目最初基于 [lingfengQAQ/webnovel-writer](https://github.com/lingfengQAQ/webnovel-writer) v6.2.1 移植，自 2026-08-13 起由 Splittinglv 独立维护，不跟踪上游后续版本，也不是上游的官方产品。历史派生范围和许可信息见 [NOTICE.md](NOTICE.md) 与 [ATTRIBUTION.md](ATTRIBUTION.md)。当前可访问的仓库仍为 [Splittinglv/webnovel-writer-cursor](https://github.com/Splittinglv/webnovel-writer-cursor)，仓库地址可在后续版本独立迁移。
+项目最初基于 [lingfengQAQ/webnovel-writer](https://github.com/lingfengQAQ/webnovel-writer) v6.2.1 移植，随后在生成式 AI 辅助下围绕长期一致性目标进行了大幅重构。当前产品不跟踪上游后续版本，也不是上游的官方产品；历史派生范围和许可信息见 [NOTICE.md](NOTICE.md) 与 [ATTRIBUTION.md](ATTRIBUTION.md)。项目由 Splittinglv 发起并发布，仓库为 [Splittinglv/canon-ledger](https://github.com/Splittinglv/canon-ledger)。
 
 叙典的默认产品边界是**长期一致性状态机**：插件负责故事别写崩，不负责把句子写成某种网文腔。
 
@@ -237,7 +237,7 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" --project-root "<PROJECT
 
 ## 产品边界与历史来源
 
-叙典采用独立产品名、独立命令和独立数据空间：`/canon-ledger-*`、`scripts/canon_ledger.py`、`.canon-ledger/` 与 `CANON_LEDGER_*` 是唯一受支持的当前接口。本版本按全新产品发布，不提供旧插件命令、环境变量、运行目录或项目数据的迁移入口。
+叙典采用自己的产品名、命令和数据空间：`/canon-ledger-*`、`scripts/canon_ledger.py`、`.canon-ledger/` 与 `CANON_LEDGER_*` 是唯一受支持的当前接口。本版本按全新产品发布，不提供旧插件命令、环境变量、运行目录或项目数据的迁移入口。
 
 历史派生组件、基线提交和主要修改范围见 [ATTRIBUTION.md](ATTRIBUTION.md)；原始许可和非官方关系声明见 [NOTICE.md](NOTICE.md)。测试中的剧情、章纲、文风指令和审查问题统一使用自然中文句子；JSON 字段、枚举、命令、路径、错误码与 agent 名等协议标识保留原值。
 
@@ -245,10 +245,11 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" --project-root "<PROJECT
 
 | 版本 | 说明 |
 |------|------|
-| **v7.0.0 (当前)** | 更名为叙典 CanonLedger，启用独立命令、运行目录与产品身份。 |
+| **v7.0.1 (当前)** | 仓库更名为 Splittinglv/canon-ledger，并明确生成式 AI 辅助开发说明。 |
+| **v7.0.0** | 更名为叙典 CanonLedger，启用独立命令、运行目录与产品身份。 |
 | **v6.2.2** | 长期一致性真源可重建、设定写回可验证；文风仍由作者或模型决定。 |
 | **v6.2.1** | 上游引擎 v6.2.1 的 Cursor 本地插件。只守事实一致性；文风只读 `设定集/文风提示词.md` 或按模型默认写。未上架官方商店。 |
 
 ## 开源协议
 
-GNU GPL v3。见 [LICENSE](LICENSE)、[NOTICE.md](NOTICE.md)、[ATTRIBUTION.md](ATTRIBUTION.md) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。作者与维护关系见 [AUTHORS.md](AUTHORS.md)。
+GNU GPL v3。见 [LICENSE](LICENSE)、[NOTICE.md](NOTICE.md)、[ATTRIBUTION.md](ATTRIBUTION.md) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。项目发起、生成式 AI 辅助开发与历史贡献关系见 [AUTHORS.md](AUTHORS.md)。

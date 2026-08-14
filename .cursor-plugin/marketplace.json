@@ -5,19 +5,19 @@
   },
   "metadata": {
     "description": "本地 Cursor 插件市场：叙典 CanonLedger 长篇小说一致性引擎",
-    "version": "7.0.0"
+    "version": "7.0.1"
   },
   "plugins": [
     {
       "name": "canon-ledger",
       "source": ".",
       "description": "叙典 CanonLedger：默认守住设定、时间线、人物状态、伏笔与章纲，文风由作者和模型自定义。",
-      "version": "7.0.0",
+      "version": "7.0.1",
       "author": {
         "name": "Splittinglv"
       },
-      "homepage": "https://github.com/Splittinglv/webnovel-writer-cursor",
-      "repository": "https://github.com/Splittinglv/webnovel-writer-cursor",
+      "homepage": "https://github.com/Splittinglv/canon-ledger",
+      "repository": "https://github.com/Splittinglv/canon-ledger",
       "license": "GPL-3.0",
       "keywords": [
         "canon-ledger",

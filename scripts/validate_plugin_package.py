@@ -17,7 +17,7 @@ SCHEMA_VERSION = "canon-ledger-plugin-package-validator/v1"
 PLUGIN_NAME = "canon-ledger"
 PLUGIN_AUTHOR = "Splittinglv"
 MARKETPLACE_NAME = "canon-ledger-local"
-PRODUCT_REPOSITORY_URL = "https://github.com/Splittinglv/webnovel-writer-cursor"
+PRODUCT_REPOSITORY_URL = "https://github.com/Splittinglv/canon-ledger"
 KEBAB_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SEMVER_RE = sync_plugin_version.VERSION_PATTERN
 LOCAL_ABSOLUTE_RE = re.compile(r"(?i)(?:[a-z]:\\users\\|/users/[^/\s]+/|/home/[^/\s]+/)")
@@ -233,7 +233,7 @@ def _check_manifest(root: Path, issues: list[dict[str, str]]) -> tuple[str, str]
         issues.append(
             _issue(
                 "manifest.author",
-                message=f"插件维护者必须是 {PLUGIN_AUTHOR}，当前为：{author_name or '缺失'}",
+                message=f"插件发布账号必须是 {PLUGIN_AUTHOR}，当前为：{author_name or '缺失'}",
                 path=str(plugin_json),
                 repair=f"将 author.name 改为 {PLUGIN_AUTHOR}；历史来源请写入 NOTICE/ATTRIBUTION。",
             )
@@ -289,7 +289,7 @@ def _check_marketplace(root: Path, plugin_version: str, issues: list[dict[str, s
         issues.append(
             _issue(
                 "marketplace.plugin_author",
-                message=f"市场插件维护者必须是 {PLUGIN_AUTHOR}，当前为：{author_name or '缺失'}",
+                message=f"市场插件发布账号必须是 {PLUGIN_AUTHOR}，当前为：{author_name or '缺失'}",
                 path=str(marketplace),
                 repair=f"将 plugins[].author.name 改为 {PLUGIN_AUTHOR}。",
             )
@@ -440,9 +440,21 @@ def _runtime_dependency_rows(
 def _check_legal_compliance(root: Path, issues: list[dict[str, str]]) -> None:
     plugin_root = _plugin_root(root)
     required_documents = {
-        "NOTICE.md": ("CanonLedger", "lingfengQAQ/webnovel-writer", "GPL-3.0"),
-        "ATTRIBUTION.md": ("CanonLedger", "lingfengQAQ/webnovel-writer", "GNU General Public License v3"),
-        "AUTHORS.md": ("CanonLedger", "Splittinglv", "lingfengQAQ"),
+        "NOTICE.md": (
+            "CanonLedger",
+            "lingfengQAQ/webnovel-writer",
+            "GPL-3.0",
+            "生成式 AI",
+            PRODUCT_REPOSITORY_URL,
+        ),
+        "ATTRIBUTION.md": (
+            "CanonLedger",
+            "lingfengQAQ/webnovel-writer",
+            "GNU General Public License v3",
+            "生成式 AI",
+            PRODUCT_REPOSITORY_URL,
+        ),
+        "AUTHORS.md": ("CanonLedger", "Splittinglv", "lingfengQAQ", "生成式 AI"),
         "THIRD_PARTY_NOTICES.md": ("CanonLedger", "Dashboard 前端运行时", "third_party_licenses/npm/"),
     }
 

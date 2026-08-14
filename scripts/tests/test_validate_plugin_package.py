@@ -20,7 +20,7 @@ from validate_plugin_package import validate_package  # noqa: E402
 
 
 SOURCE_ROOT = SCRIPTS_DIR.parent
-PRODUCT_REPOSITORY_URL = "https://github.com/Splittinglv/webnovel-writer-cursor"
+PRODUCT_REPOSITORY_URL = "https://github.com/Splittinglv/canon-ledger"
 CORE_SURFACES = (
     "dashboard",
     "doctor",
@@ -121,15 +121,15 @@ def _write_minimal_package(
         encoding="utf-8",
     )
     (plugin_root / "NOTICE.md").write_text(
-        "# NOTICE\n\n叙典 CanonLedger 由 Splittinglv 维护，派生自 lingfengQAQ/webnovel-writer，按 GPL-3.0 发布。\n",
+        f"# NOTICE\n\n叙典 CanonLedger 由 Splittinglv 发起并发布，使用生成式 AI 辅助开发；项目派生自 lingfengQAQ/webnovel-writer，按 GPL-3.0 发布。仓库：{PRODUCT_REPOSITORY_URL}。\n",
         encoding="utf-8",
     )
     (plugin_root / "ATTRIBUTION.md").write_text(
-        "# 来源\n\nCanonLedger 派生自 lingfengQAQ/webnovel-writer，按 GNU General Public License v3 发布。\n",
+        f"# 来源\n\nCanonLedger 派生自 lingfengQAQ/webnovel-writer，使用生成式 AI 辅助开发，按 GNU General Public License v3 发布。仓库：{PRODUCT_REPOSITORY_URL}。\n",
         encoding="utf-8",
     )
     (plugin_root / "AUTHORS.md").write_text(
-        "# 作者\n\nCanonLedger 当前维护者为 Splittinglv，历史上游作者为 lingfengQAQ。\n",
+        "# 项目参与与来源\n\nCanonLedger 的发布账号为 Splittinglv，开发过程使用生成式 AI 工具辅助；历史上游作者为 lingfengQAQ。\n",
         encoding="utf-8",
     )
 
@@ -329,6 +329,43 @@ def test_validate_plugin_package_rejects_missing_attribution_file(tmp_path):
     assert report["ok"] is False
     assert any(
         item["code"] == "legal.required_file" and item["path"].endswith("ATTRIBUTION.md")
+        for item in report["issues"]
+    )
+
+
+def test_validate_plugin_package_rejects_missing_ai_assistance_disclosure(tmp_path):
+    plugin_root = _write_minimal_package(tmp_path)
+    authors = plugin_root / "AUTHORS.md"
+    authors.write_text(
+        authors.read_text(encoding="utf-8").replace("生成式 AI 工具辅助", "自动化工具辅助"),
+        encoding="utf-8",
+    )
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "legal.document_content" and item["path"].endswith("AUTHORS.md")
+        for item in report["issues"]
+    )
+
+
+def test_validate_plugin_package_rejects_old_repository_in_current_attribution(tmp_path):
+    plugin_root = _write_minimal_package(tmp_path)
+    attribution = plugin_root / "ATTRIBUTION.md"
+    attribution.write_text(
+        attribution.read_text(encoding="utf-8").replace(
+            PRODUCT_REPOSITORY_URL,
+            "https://github.com/Splittinglv/webnovel-writer-cursor",
+        ),
+        encoding="utf-8",
+    )
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "legal.document_content" and item["path"].endswith("ATTRIBUTION.md")
         for item in report["issues"]
     )
 

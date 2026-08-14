@@ -50,8 +50,8 @@ def test_cursor_plugin_identity_and_rules_are_scoped():
     )
     assert manifest["name"] == "canon-ledger"
     assert manifest["author"]["name"] == "Splittinglv"
-    assert manifest["homepage"] == "https://github.com/Splittinglv/webnovel-writer-cursor"
-    assert manifest["repository"] == "https://github.com/Splittinglv/webnovel-writer-cursor"
+    assert manifest["homepage"] == "https://github.com/Splittinglv/canon-ledger"
+    assert manifest["repository"] == "https://github.com/Splittinglv/canon-ledger"
 
     rule = (PLUGIN_ROOT / "rules" / "canon-ledger-canon.mdc").read_text(encoding="utf-8")
     assert "alwaysApply: false" in rule
