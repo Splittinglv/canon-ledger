@@ -181,7 +181,7 @@ def test_artifact_validator_reports_schema_errors_for_wrapped_payloads(tmp_path)
     assert "nested under fulfillment" in report["errors"][0]["message"]
 
 
-def test_artifact_validator_reports_policy_blockers(tmp_path):
+def test_artifact_validator_separates_blockers_from_author_advisories(tmp_path):
     review = _write_json(
         tmp_path / "review_results.json",
         _review_payload(blocking=True),
@@ -201,8 +201,47 @@ def test_artifact_validator_reports_policy_blockers(tmp_path):
     )
 
     assert validate_review_result(review)["errors"][0]["type"] == ERROR_BLOCKING_REVIEW
-    assert validate_fulfillment_result(fulfillment)["errors"][0]["type"] == ERROR_MISSED_OUTLINE_NODE
-    assert validate_disambiguation_result(disambiguation)["errors"][0]["type"] == ERROR_PENDING_DISAMBIGUATION
+
+    fulfillment_report = validate_fulfillment_result(fulfillment)
+    assert fulfillment_report["ok"] is True
+    assert fulfillment_report["warnings"][0]["type"] == ERROR_MISSED_OUTLINE_NODE
+
+    disambiguation_report = validate_disambiguation_result(disambiguation)
+    assert disambiguation_report["ok"] is True
+    assert (
+        disambiguation_report["warnings"][0]["type"]
+        == ERROR_PENDING_DISAMBIGUATION
+    )
+
+
+def test_artifact_validator_blocks_only_explicit_strict_or_blocking_policy(tmp_path):
+    fulfillment = _write_json(
+        tmp_path / "fulfillment_result.json",
+        _with_binding(
+            {
+                "planned_nodes": ["A"],
+                "covered_nodes": [],
+                "missed_nodes": ["A"],
+                "extra_nodes": [],
+                "enforcement": "strict",
+            }
+        ),
+    )
+    disambiguation = _write_json(
+        tmp_path / "disambiguation_result.json",
+        _with_binding(
+            {"pending": [{"mention": "宗主", "blocking": True}]}
+        ),
+    )
+
+    assert (
+        validate_fulfillment_result(fulfillment)["errors"][0]["type"]
+        == ERROR_MISSED_OUTLINE_NODE
+    )
+    assert (
+        validate_disambiguation_result(disambiguation)["errors"][0]["type"]
+        == ERROR_PENDING_DISAMBIGUATION
+    )
 
 
 def test_artifact_validator_accepts_valid_extraction(tmp_path):

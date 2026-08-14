@@ -471,7 +471,7 @@ def init_project(
             },
             "must_check": [],
             "blocking_rules": [],
-            "review_thresholds": {"blocking_count": 0, "missed_nodes": 0},
+            "review_thresholds": {"blocking_count": 0},
         },
     )
 

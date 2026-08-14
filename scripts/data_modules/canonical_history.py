@@ -36,6 +36,11 @@ _KNOWLEDGE_SOURCE_KINDS = {
 }
 _PRESENCE_KINDS = {"physical", "remote", "memory", "dream", "mentioned"}
 _FACT_COVERAGE_DIMENSIONS = ("knowledge", "presence", "custody")
+_EVENT_COVERAGE_DIMENSION = {
+    "knowledge_state_changed": "knowledge",
+    "presence_observed": "presence",
+    "custody_changed": "custody",
+}
 
 
 def _text(value: Any, max_chars: int = 1200) -> str:
@@ -133,6 +138,7 @@ class CanonicalHistory:
     custody: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     custody_history: List[Dict[str, Any]] = field(default_factory=list)
     coverage: Dict[str, str] = field(default_factory=dict)
+    verification: Dict[str, str] = field(default_factory=dict)
 
 
 def _trusted_commits(
@@ -234,7 +240,9 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
     custody: Dict[str, Dict[str, Any]] = {}
     custody_history: List[Dict[str, Any]] = []
     coverage_claims: List[Dict[str, Any]] = []
+    verification_claims: List[Dict[str, Any]] = []
     coverage_failures: set[str] = set()
+    legacy_dimensions: set[str] = set()
 
     def remember_state(
         *, chapter: int, entity_id: Any, field_name: Any, value: Any,
@@ -274,6 +282,9 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
         chapter = int(commit["meta"]["chapter"])
         chapter_text = bound_chapter_text_for_commit(project_root, commit) or ""
         coverage_claims.append(extraction_dict(commit, "fact_coverage"))
+        verification_claims.append(
+            extraction_dict(commit, "fact_verification")
+        )
 
         # Entity appearances are useful identity evidence, but they never
         # imply physical presence. Only presence_observed may update location.
@@ -385,13 +396,49 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
                 source_id=_atom(delta.get("id")) or f"state-{chapter}-{index}",
             )
 
-        for index, event in enumerate(extraction_list(commit, "accepted_events")):
+        raw_events = extraction_list(commit, "accepted_events")
+        ordered_events: List[tuple[int, int, Dict[str, Any]]] = []
+        for original_index, raw_event in enumerate(raw_events):
+            if not isinstance(raw_event, dict):
+                continue
+            event_type = str(raw_event.get("event_type") or "").strip()
+            raw_sequence = raw_event.get("sequence")
+            try:
+                sequence = (
+                    int(raw_sequence)
+                    if raw_sequence not in (None, "")
+                    and not isinstance(raw_sequence, bool)
+                    else original_index + 1
+                )
+            except (TypeError, ValueError):
+                sequence = original_index + 1
+            dimension = _EVENT_COVERAGE_DIMENSION.get(event_type)
+            if dimension and raw_sequence in (None, ""):
+                coverage_failures.add(dimension)
+                legacy_dimensions.add(dimension)
+            if dimension:
+                raw_verification = str(
+                    raw_event.get("verification") or ""
+                ).strip().lower()
+                if not raw_verification:
+                    legacy_dimensions.add(dimension)
+                elif raw_verification not in {"supported", "verified"}:
+                    coverage_failures.add(dimension)
+            ordered_events.append((sequence, original_index, raw_event))
+
+        for _sequence, index, event in sorted(
+            ordered_events,
+            key=lambda item: (item[0], item[1]),
+        ):
             if not isinstance(event, dict):
                 continue
             event_id = _atom(event.get("event_id"), 180) or f"event-{chapter}-{index}"
             event_type = str(event.get("event_type") or "").strip()
             payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
             subject = _atom(event.get("subject"))
+            event_verification = str(
+                event.get("verification") or "legacy"
+            ).strip().lower()
 
             if event_type in {"character_state_changed", "power_breakthrough"}:
                 remember_state(
@@ -532,45 +579,55 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
                     promises.pop(promise_id, None)
             elif event_type == "knowledge_state_changed":
                 information_id = _atom(payload.get("information_id"), 180)
-                raw_content = payload.get("content")
-                content = _text(raw_content, max_chars=600)
+                raw_claim = payload.get("canonical_claim") or payload.get("content")
+                canonical_claim = _text(raw_claim, max_chars=600)
+                raw_fragment = payload.get("evidence_fragment") or payload.get("content")
+                evidence_fragment = _text(raw_fragment, max_chars=600)
                 evidence_quote = str(payload.get("evidence_quote") or "").strip()
                 state = str(payload.get("state") or "").strip().lower()
                 source_kind = str(payload.get("source_kind") or "").strip().lower()
                 source_entity = _atom(payload.get("source_entity"), 180)
                 existing_information = information.get(information_id)
+                content = str(
+                    (existing_information or {}).get("canonical_claim")
+                    or (existing_information or {}).get("content")
+                    or canonical_claim
+                )
                 valid_information = (
                     bool(subject)
                     and bool(information_id)
                     and bool(content)
-                    and isinstance(raw_content, str)
-                    and raw_content.strip() in evidence_quote
+                    and isinstance(raw_fragment, str)
+                    and raw_fragment.strip() in evidence_quote
                     and state in _KNOWLEDGE_STATES
                     and source_kind in _KNOWLEDGE_SOURCE_KINDS
                     and event_evidence_in_chapter(event, chapter_text)
-                    and (
-                        existing_information is None
-                        or existing_information.get("content") == content
-                    )
                 )
                 if valid_information:
-                    information.setdefault(
+                    information_row = information.setdefault(
                         information_id,
                         {
                             "id": information_id,
+                            "canonical_claim": content,
                             "content": content,
+                            "verification": event_verification,
                             "source_chapter": chapter,
                             "source_event_id": event_id,
                         },
                     )
+                    if event_verification == "verified":
+                        information_row["verification"] = "verified"
                     knowledge_by_entity.setdefault(subject, {})[information_id] = {
                         "event_id": event_id,
+                        "sequence": int(event.get("sequence") or _sequence),
                         "entity_id": subject,
                         "information_id": information_id,
                         "content": content,
+                        "evidence_fragment": evidence_fragment,
                         "state": state,
                         "source_kind": source_kind,
                         "source_entity": source_entity,
+                        "verification": event_verification,
                         "evidence_quote": evidence_quote,
                         "source_chapter": chapter,
                     }
@@ -609,12 +666,14 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
                 ):
                     row = {
                         "event_id": event_id,
+                        "sequence": int(event.get("sequence") or _sequence),
                         "entity_id": subject,
                         "location_id": location_id,
                         "scene_index": scene_index,
                         "time_anchor": _text(payload.get("time_anchor"), max_chars=240),
                         "presence_kind": presence_kind,
                         "transition_explicit": transition_explicit,
+                        "verification": event_verification,
                         "evidence_quote": evidence_quote,
                         "source_chapter": chapter,
                     }
@@ -648,29 +707,35 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
                 prior_holder = str(
                     (custody.get(artifact_id) or {}).get("holder_id") or ""
                 )
+                prior_recorded = artifact_id in custody
                 if (
                     artifact_id
                     and (from_holder or to_holder)
                     and event_evidence_in_chapter(event, chapter_text)
                 ):
+                    transition_consistent = (
+                        not prior_recorded or prior_holder == from_holder
+                    )
                     row = {
                         "event_id": event_id,
+                        "sequence": int(event.get("sequence") or _sequence),
                         "artifact_id": artifact_id,
                         "from_holder": from_holder,
                         "to_holder": to_holder,
                         "holder_id": to_holder,
                         "prior_holder": prior_holder,
                         "location_id": location_id,
-                        "transition_consistent": (
-                            not prior_holder
-                            or not from_holder
-                            or prior_holder == from_holder
-                        ),
+                        "transition_consistent": transition_consistent,
+                        "verification": event_verification,
                         "evidence_quote": evidence_quote,
                         "source_chapter": chapter,
                     }
                     custody_history.append(row)
-                    custody[artifact_id] = dict(row)
+                    if transition_consistent:
+                        custody[artifact_id] = dict(row)
+                    else:
+                        result.omitted_fact_ids.append(event_id)
+                        coverage_failures.add("custody")
                     entities.setdefault(
                         artifact_id,
                         {"id": artifact_id, "name": artifact_id, "type": "物品"},
@@ -827,18 +892,54 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
     expected_chapters = list(range(1, as_of + 1))
     history_is_contiguous = result.valid_chapters == expected_chapters
     coverage: Dict[str, str] = {}
+    verification: Dict[str, str] = {}
     for dimension in _FACT_COVERAGE_DIMENSIONS:
+        coverage_values = [
+            str(claim.get(dimension) or "") for claim in coverage_claims
+        ]
+        verification_values = [
+            str(claim.get(dimension) or "") for claim in verification_claims
+        ]
         if not commits:
             coverage[dimension] = "partial" if result.invalid_sources else "none"
         elif (
             not result.invalid_sources
             and history_is_contiguous
             and dimension not in coverage_failures
-            and all(claim.get(dimension) == "complete" for claim in coverage_claims)
+            and coverage_values
+            and all(claim == "complete" for claim in coverage_values)
         ):
             coverage[dimension] = "complete"
         else:
             coverage[dimension] = "partial"
+
+        if not commits:
+            verification[dimension] = (
+                "legacy" if result.invalid_sources else "unknown"
+            )
+        elif (
+            dimension in legacy_dimensions
+            or any(not claim for claim in coverage_values)
+            or any(not claim for claim in verification_values)
+        ):
+            verification[dimension] = "legacy"
+        elif (
+            result.invalid_sources
+            or not history_is_contiguous
+            or dimension in coverage_failures
+            or any(claim == "partial" for claim in coverage_values)
+            or any(
+                claim in {"pending", "unknown"}
+                for claim in verification_values
+            )
+        ):
+            verification[dimension] = "pending"
+        elif verification_values and all(
+            claim == "verified" for claim in verification_values
+        ):
+            verification[dimension] = "verified"
+        else:
+            verification[dimension] = "supported"
 
     result.hard_constraints = hard
     result.canonical_facts = canonical_facts
@@ -860,7 +961,7 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
         presence_history,
         key=lambda row: (
             int(row.get("source_chapter") or 0),
-            int(row.get("scene_index") or 0),
+            int(row.get("sequence") or 0),
             str(row.get("event_id") or ""),
         ),
     )
@@ -869,10 +970,12 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
         custody_history,
         key=lambda row: (
             int(row.get("source_chapter") or 0),
+            int(row.get("sequence") or 0),
             str(row.get("event_id") or ""),
         ),
     )
     result.coverage = coverage
+    result.verification = verification
     result.invalid_sources = list(dict.fromkeys(result.invalid_sources))
     result.omitted_fact_ids = sorted(set(result.omitted_fact_ids))
     return result
@@ -884,7 +987,7 @@ def latest_canonical_chapter(project_root: Path) -> int:
     return max((int(row["meta"]["chapter"]) for row in commits), default=0)
 
 
-ASOF_SNAPSHOT_SCHEMA = "canon-ledger-asof-snapshot/v2"
+ASOF_SNAPSHOT_SCHEMA = "canon-ledger-asof-snapshot/v3"
 
 
 def history_to_asof_snapshot(
@@ -926,6 +1029,7 @@ def history_to_asof_snapshot(
         "custody": history.custody,
         "custody_history": history.custody_history,
         "coverage": history.coverage,
+        "verification": history.verification,
         "canonical_facts": history.canonical_facts,
         "hard_constraints": history.hard_constraints,
     }

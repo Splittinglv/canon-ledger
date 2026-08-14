@@ -38,6 +38,41 @@ def test_prewrite_validator_builds_disambiguation_domain_and_fulfillment_seed(tm
     assert payload["disambiguation_domain"]["pending_count"] == 0
 
 
+def test_prewrite_validator_keeps_ordinary_ambiguity_as_human_advisory(tmp_path):
+    payload = PrewriteValidator(tmp_path).build(
+        chapter=3,
+        review_contract={},
+        plot_structure={},
+        state_snapshot={
+            "disambiguation_pending": [
+                {"mention": "宗主", "reason": "指代可能有两种解释"}
+            ],
+            "disambiguation_warnings": [],
+        },
+    )
+
+    assert payload["blocking"] is False
+    assert payload["disambiguation_domain"]["pending_count"] == 1
+    assert payload["disambiguation_domain"]["blocking_pending_count"] == 0
+
+
+def test_prewrite_validator_blocks_explicit_blocking_ambiguity(tmp_path):
+    payload = PrewriteValidator(tmp_path).build(
+        chapter=3,
+        review_contract={},
+        plot_structure={},
+        state_snapshot={
+            "disambiguation_pending": [
+                {"mention": "遗失钥匙", "blocking": True}
+            ],
+            "disambiguation_warnings": [],
+        },
+    )
+
+    assert payload["blocking"] is True
+    assert payload["disambiguation_domain"]["blocking_pending_count"] == 1
+
+
 def test_prewrite_validator_blocks_when_required_contracts_missing(tmp_path):
     project_root = tmp_path
     (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)

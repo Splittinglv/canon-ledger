@@ -5,7 +5,7 @@ from __future__ import annotations
 from data_modules.review_author_view import build_review_author_view, render_review_author_view
 
 
-def _payload(issues, *, summary=""):
+def _payload(issues, *, summary="", manual_checks=None):
     return {
         "chapter": 1,
         "review_result": {
@@ -13,6 +13,7 @@ def _payload(issues, *, summary=""):
             "issues_count": len(issues),
             "blocking_count": sum(1 for issue in issues if issue.get("blocking")),
             "has_blocking": any(issue.get("blocking") for issue in issues),
+            "manual_checks": list(manual_checks or []),
             "summary": summary,
         },
         "metrics": {},
@@ -71,6 +72,26 @@ def test_review_author_view_allows_clean_chapter_to_continue():
     assert view.status == "can_continue"
     assert view.verdict == "✅可以继续"
     assert view.actions == ("整体可继续",)
+
+
+def test_review_author_view_surfaces_manual_check_without_blocking():
+    view = build_review_author_view(
+        _payload(
+            [],
+            manual_checks=[
+                {
+                    "category": "character",
+                    "location": "第3段",
+                    "description": "角色是否已经知道暗门位置",
+                    "reason": "前文只有模糊暗示",
+                }
+            ],
+        )
+    )
+
+    assert view.status == "manual_check"
+    assert view.verdict == "👀可以继续，建议确认"
+    assert "前文只有模糊暗示" in view.actions[0]
 
 
 def test_review_author_view_render_has_author_section():

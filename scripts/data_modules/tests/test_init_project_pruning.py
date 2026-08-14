@@ -33,6 +33,15 @@ def test_init_skips_dead_templates_and_empty_libraries_for_single_protagonist(tm
     assert not (project_root / "设定集" / "角色库").exists()
     assert not (project_root / "设定集" / "物品库").exists()
     assert not (project_root / "设定集" / "其他设定").exists()
+    review_contract = json.loads(
+        (
+            project_root
+            / ".story-system"
+            / "reviews"
+            / "chapter_001.review.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert review_contract["review_thresholds"] == {"blocking_count": 0}
 
 
 def test_init_master_outline_does_not_prefill_future_volume_rows(tmp_path, monkeypatch):

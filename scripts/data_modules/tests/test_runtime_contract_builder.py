@@ -78,6 +78,7 @@ def test_runtime_contract_builder_creates_volume_and_review_contracts(tmp_path):
     assert "不可提前摊牌" in review_contract["blocking_rules"]
     assert volume_brief["selected_tropes"] == []
     assert review_contract["genre_specific_risks"] == []
+    assert review_contract["review_thresholds"] == {"blocking_count": 0}
     assert volume_brief["volume_goal"]["summary"] == "卷一站稳脚跟"
     assert volume_brief["volume_goal"]["name"] == "立足"
     assert volume_brief["volume_goal"]["chapters_range"] == "1-20"

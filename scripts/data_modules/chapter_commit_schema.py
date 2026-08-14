@@ -22,6 +22,7 @@ from .fact_text import (
     normalize_event_evidence_quote,
     normalize_world_rule_payload,
     sanitize_fact_atom,
+    sanitize_fact_text,
 )
 
 EXTRACTION_CORE_FIELDS = ("accepted_events", "state_deltas", "entity_deltas")
@@ -129,6 +130,12 @@ REVIEW_DIMENSIONS = ("setting", "timeline", "continuity", "character", "logic")
 FAST_REVIEW_DIMENSIONS = REVIEW_DIMENSIONS[:4]
 FACT_COVERAGE_DIMENSIONS = ("knowledge", "presence", "custody")
 FACT_COVERAGE_STATES = {"complete", "partial"}
+FACT_VERIFICATION_STATES = {"verified", "supported", "pending", "unknown"}
+CONSISTENCY_EVENT_TYPES = {
+    "knowledge_state_changed",
+    "presence_observed",
+    "custody_changed",
+}
 
 
 class ReviewDimensionResultSchema(BaseModel):
@@ -148,6 +155,19 @@ class ReviewIssueSchema(BaseModel):
     evidence: str = ""
     fix_hint: str = ""
     blocking: bool = Field(strict=True)
+
+
+class ManualReviewCheckSchema(BaseModel):
+    """A possible issue that requires author judgment and never auto-blocks."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    category: Literal["setting", "timeline", "continuity", "character", "logic"]
+    location: str = ""
+    description: str = Field(min_length=1)
+    evidence: str = ""
+    reason: str = Field(min_length=1)
+    options: list[str] = Field(default_factory=list)
 
 
 class ReviewResult(CommitArtifactModel):
@@ -178,6 +198,7 @@ class ReviewResult(CommitArtifactModel):
         Literal["setting", "timeline", "continuity", "character", "logic"]
     ]
     dimension_results: list[ReviewDimensionResultSchema]
+    manual_checks: list[ManualReviewCheckSchema] = Field(default_factory=list)
     issues: list[ReviewIssueSchema]
     issues_count: int = Field(ge=0, strict=True)
     blocking_count: int = Field(ge=0, strict=True)
@@ -218,8 +239,8 @@ class ReviewResult(CommitArtifactModel):
             raise ValueError("review_skipped 与 review_mode 不一致")
         if self.review_degraded is not expected_degraded:
             raise ValueError("review_degraded 与 review_mode 不一致")
-        if self.review_mode == "minimal" and self.issues:
-            raise ValueError("minimal 模式不能携带问题结论")
+        if self.review_mode == "minimal" and (self.issues or self.manual_checks):
+            raise ValueError("minimal 模式不能携带问题结论或人工确认项")
         if self.issues_count != len(self.issues):
             raise ValueError("issues_count 与 issues 数量不一致")
         actual_blocking = sum(1 for issue in self.issues if issue.blocking)
@@ -239,6 +260,7 @@ class FulfillmentResult(CommitArtifactModel):
     covered_nodes: list[Any]
     missed_nodes: list[Any]
     extra_nodes: list[Any]
+    enforcement: Literal["advisory", "strict"] = "advisory"
 
     @field_validator(*FULFILLMENT_LIST_FIELDS, mode="before")
     @classmethod
@@ -277,6 +299,12 @@ class ExtractionResult(CommitArtifactModel):
     fact_coverage: dict[str, Literal["complete", "partial"]] = Field(
         default_factory=dict
     )
+    # Kept separate from completeness: a full model pass can be complete while
+    # its semantic interpretation is merely supported or pending author review.
+    fact_verification: dict[
+        str,
+        Literal["verified", "supported", "pending", "unknown"],
+    ] = Field(default_factory=dict)
     chapter_meta: Any = Field(default_factory=dict)
     dominant_strand: Any = ""
     summary_text: str = ""
@@ -323,6 +351,32 @@ class ExtractionResult(CommitArtifactModel):
                 raise ValueError(
                     f"extraction_result.fact_coverage.{dimension} "
                     "must be complete or partial"
+                )
+            normalized[dimension] = state
+        return normalized
+
+    @field_validator("fact_verification", mode="before")
+    @classmethod
+    def validate_fact_verification(cls, value: Any) -> Any:
+        if value in (None, {}):
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError(
+                "extraction_result.fact_verification must be a JSON object"
+            )
+        expected = set(FACT_COVERAGE_DIMENSIONS)
+        if set(value) != expected:
+            raise ValueError(
+                "extraction_result.fact_verification must contain exactly: "
+                + ", ".join(FACT_COVERAGE_DIMENSIONS)
+            )
+        normalized: dict[str, str] = {}
+        for dimension in FACT_COVERAGE_DIMENSIONS:
+            state = str(value.get(dimension) or "").strip().lower()
+            if state not in FACT_VERIFICATION_STATES:
+                raise ValueError(
+                    f"extraction_result.fact_verification.{dimension} "
+                    "must be verified, supported, pending, or unknown"
                 )
             normalized[dimension] = state
         return normalized
@@ -381,6 +435,8 @@ class AcceptedEventInput(BaseModel):
 
     event_id: str
     chapter: int = Field(ge=1)
+    sequence: int | None = Field(default=None, ge=1)
+    verification: Literal["supported", "verified"] = "supported"
     event_type: str
     subject: str
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -442,6 +498,7 @@ class AcceptedEventsInput(BaseModel):
 
     def normalize(self, chapter: int) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []
+        seen_consistency_sequences: set[int] = set()
         for index, event in enumerate(self.accepted_events):
             if not isinstance(event, dict):
                 raise ValueError(f"accepted_events[{index}] must be a JSON object")
@@ -465,6 +522,14 @@ class AcceptedEventsInput(BaseModel):
                     **normalized_rule,
                 }
             normalized_event = _normalize_consistency_event(normalized_event, index)
+            if normalized_event.get("event_type") in CONSISTENCY_EVENT_TYPES:
+                sequence = int(normalized_event.get("sequence") or 0)
+                if sequence in seen_consistency_sequences:
+                    raise ValueError(
+                        f"accepted_events[{index}].sequence {sequence} is duplicated "
+                        "within long-term consistency events"
+                    )
+                seen_consistency_sequences.add(sequence)
             normalized.append(_normalize_lifecycle_event(normalized_event))
         return normalized
 
@@ -630,24 +695,47 @@ def _normalize_consistency_event(
 ) -> dict[str, Any]:
     """Close long-term knowledge, presence and custody payloads structurally."""
     event_type = str(event.get("event_type") or "").strip()
-    if event_type not in {
-        "knowledge_state_changed",
-        "presence_observed",
-        "custody_changed",
-    }:
+    if event_type not in CONSISTENCY_EVENT_TYPES:
         return event
+
+    raw_sequence = event.get("sequence")
+    if isinstance(raw_sequence, bool):
+        raise ValueError(
+            f"accepted_events[{index}].sequence must be a positive integer"
+        )
+    try:
+        sequence = int(raw_sequence)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"accepted_events[{index}].sequence must be a positive integer"
+        ) from exc
+    if sequence < 1:
+        raise ValueError(
+            f"accepted_events[{index}].sequence must be a positive integer"
+        )
+    event["sequence"] = sequence
 
     payload = dict(event.get("payload") or {})
     evidence_quote = _event_evidence(payload, index)
 
     if event_type == "knowledge_state_changed":
         information_id = _event_atom(payload, "information_id", index)
-        raw_content = payload.get("content")
-        content = normalize_event_evidence_quote(raw_content)
-        if not content or content not in evidence_quote:
+        canonical_claim = sanitize_fact_text(
+            payload.get("canonical_claim") or payload.get("content"),
+            max_chars=600,
+        )
+        evidence_fragment = normalize_event_evidence_quote(
+            payload.get("evidence_fragment") or payload.get("content")
+        )
+        if not canonical_claim:
             raise ValueError(
-                f"accepted_events[{index}].payload.content must be a non-empty "
-                "verbatim fragment of evidence_quote"
+                f"accepted_events[{index}].payload.canonical_claim must be a "
+                "non-empty declarative fact"
+            )
+        if not evidence_fragment or evidence_fragment not in evidence_quote:
+            raise ValueError(
+                f"accepted_events[{index}].payload.evidence_fragment must be a "
+                "non-empty verbatim fragment of evidence_quote"
             )
         state = str(payload.get("state") or "").strip().lower()
         if state not in _KNOWLEDGE_STATES:
@@ -669,7 +757,9 @@ def _normalize_consistency_event(
         payload.update(
             {
                 "information_id": information_id,
-                "content": content,
+                "canonical_claim": canonical_claim,
+                "content": canonical_claim,
+                "evidence_fragment": evidence_fragment,
                 "state": state,
                 "source_kind": source_kind,
                 "source_entity": source_entity,

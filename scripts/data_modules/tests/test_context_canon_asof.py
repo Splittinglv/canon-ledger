@@ -417,6 +417,7 @@ def test_asof_replays_knowledge_physical_presence_and_custody(tmp_path):
                 {
                     "event_id": "linzhou-learns-door",
                     "chapter": 1,
+                    "sequence": 1,
                     "event_type": "knowledge_state_changed",
                     "subject": "linzhou",
                     "payload": {
@@ -431,6 +432,7 @@ def test_asof_replays_knowledge_physical_presence_and_custody(tmp_path):
                 {
                     "event_id": "linzhou-at-north-city",
                     "chapter": 1,
+                    "sequence": 2,
                     "event_type": "presence_observed",
                     "subject": "linzhou",
                     "payload": {
@@ -445,6 +447,7 @@ def test_asof_replays_knowledge_physical_presence_and_custody(tmp_path):
                 {
                     "event_id": "baizhi-dreams-south-port",
                     "chapter": 1,
+                    "sequence": 3,
                     "event_type": "presence_observed",
                     "subject": "baizhi",
                     "payload": {
@@ -457,6 +460,7 @@ def test_asof_replays_knowledge_physical_presence_and_custody(tmp_path):
                 {
                     "event_id": "linzhou-takes-key",
                     "chapter": 1,
+                    "sequence": 4,
                     "event_type": "custody_changed",
                     "subject": "bronze-key",
                     "payload": {
@@ -473,8 +477,13 @@ def test_asof_replays_knowledge_physical_presence_and_custody(tmp_path):
     adapter = MemoryContractAdapter(DataModulesConfig.from_project_root(tmp_path))
     chapter_two = adapter.export_asof_snapshot(chapter=2)
 
-    assert chapter_two["schema_version"] == "canon-ledger-asof-snapshot/v2"
+    assert chapter_two["schema_version"] == "canon-ledger-asof-snapshot/v3"
     assert chapter_two["coverage"] == full_coverage
+    assert chapter_two["verification"] == {
+        "knowledge": "supported",
+        "presence": "supported",
+        "custody": "supported",
+    }
     assert chapter_two["information"]["clocktower-secret-door"]["content"] == "密门在钟楼下"
     assert chapter_two["knowledge_by_entity"]["linzhou"]["clocktower-secret-door"]["state"] == "known"
     assert chapter_two["presence"]["linzhou"]["location_id"] == "north-city"
@@ -494,20 +503,23 @@ def test_asof_replays_knowledge_physical_presence_and_custody(tmp_path):
                 {
                     "event_id": "baizhi-learns-door",
                     "chapter": 2,
+                    "sequence": 1,
                     "event_type": "knowledge_state_changed",
                     "subject": "baizhi",
                     "payload": {
                         "information_id": "clocktower-secret-door",
-                        "content": "密门在钟楼下",
+                        "canonical_claim": "钟楼下方藏有密门",
+                        "evidence_fragment": "密门就在钟楼下面",
                         "state": "known",
                         "source_kind": "told",
                         "source_entity": "linzhou",
-                        "evidence_quote": "林舟告诉白芷：密门在钟楼下。",
+                        "evidence_quote": "林舟告诉白芷：密门就在钟楼下面。",
                     },
                 },
                 {
                     "event_id": "linzhou-at-south-port",
                     "chapter": 2,
+                    "sequence": 2,
                     "event_type": "presence_observed",
                     "subject": "linzhou",
                     "payload": {
@@ -521,6 +533,7 @@ def test_asof_replays_knowledge_physical_presence_and_custody(tmp_path):
                 {
                     "event_id": "key-to-baizhi",
                     "chapter": 2,
+                    "sequence": 3,
                     "event_type": "custody_changed",
                     "subject": "bronze-key",
                     "payload": {
@@ -548,6 +561,88 @@ def test_asof_replays_knowledge_physical_presence_and_custody(tmp_path):
     assert context["presence"]["current"]["linzhou"]["location_id"] == "south-port"
     assert context["custody"]["current"]["bronze-key"]["holder_id"] == "baizhi"
     assert context["fact_coverage"] == full_coverage
+    assert context["fact_verification"] == {
+        "knowledge": "supported",
+        "presence": "supported",
+        "custody": "supported",
+    }
+
+
+def test_consistency_replay_uses_sequence_instead_of_array_order(tmp_path):
+    (tmp_path / ".canon-ledger").mkdir(parents=True)
+    (tmp_path / ".canon-ledger" / "state.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    _write_contracts(tmp_path, 1, 2)
+    _accepted_commit(
+        tmp_path,
+        1,
+        {
+            "fact_coverage": {
+                "knowledge": "complete",
+                "presence": "complete",
+                "custody": "complete",
+            },
+            # Deliberately reverse the causal order in the JSON array.
+            "accepted_events": [
+                {
+                    "event_id": "alice-at-south",
+                    "chapter": 1,
+                    "sequence": 2,
+                    "event_type": "presence_observed",
+                    "subject": "alice",
+                    "payload": {
+                        "location_id": "south-port",
+                        "presence_kind": "physical",
+                        "evidence_quote": "随后，爱丽丝抵达南港。",
+                    },
+                },
+                {
+                    "event_id": "key-to-carol",
+                    "chapter": 1,
+                    "sequence": 4,
+                    "event_type": "custody_changed",
+                    "subject": "bronze-key",
+                    "payload": {
+                        "from_holder": "bob",
+                        "to_holder": "carol",
+                        "evidence_quote": "鲍勃把铜钥匙交给卡萝。",
+                    },
+                },
+                {
+                    "event_id": "alice-at-north",
+                    "chapter": 1,
+                    "sequence": 1,
+                    "event_type": "presence_observed",
+                    "subject": "alice",
+                    "payload": {
+                        "location_id": "north-city",
+                        "presence_kind": "physical",
+                        "evidence_quote": "爱丽丝先抵达北城。",
+                    },
+                },
+                {
+                    "event_id": "key-to-bob",
+                    "chapter": 1,
+                    "sequence": 3,
+                    "event_type": "custody_changed",
+                    "subject": "bronze-key",
+                    "payload": {
+                        "from_holder": "alice",
+                        "to_holder": "bob",
+                        "evidence_quote": "爱丽丝把铜钥匙交给鲍勃。",
+                    },
+                },
+            ],
+        },
+    )
+
+    snapshot = MemoryContractAdapter(
+        DataModulesConfig.from_project_root(tmp_path)
+    ).export_asof_snapshot(chapter=2)
+
+    assert snapshot["presence"]["alice"]["location_id"] == "south-port"
+    assert snapshot["custody"]["bronze-key"]["holder_id"] == "carol"
 
 
 def test_legacy_commits_report_partial_long_term_fact_coverage(tmp_path):

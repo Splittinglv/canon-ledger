@@ -14,7 +14,6 @@ CanonLedger 统一入口（面向 skills / agents 的稳定 CLI）
   python "<SCRIPTS_DIR>/canon_ledger.py" use "<PROJECT_ROOT>"
   python "<SCRIPTS_DIR>/canon_ledger.py" --project-root "<PROJECT_ROOT>" index stats
   python "<SCRIPTS_DIR>/canon_ledger.py" --project-root "<PROJECT_ROOT>" state get-entity --id xiaoyan
-  python "<SCRIPTS_DIR>/canon_ledger.py" --project-root "<PROJECT_ROOT>" extract-context --chapter 100 --format json
 
 也支持（不推荐，容易踩 PYTHONPATH/cd/参数顺序坑）：
   python -m data_modules.canon_ledger where
@@ -76,9 +75,7 @@ PASSTHROUGH_TOOLS = {
     "index",
     "state",
     "rag",
-    "style",
     "entity",
-    "context",
     "memory",
     "status",
     "update-state",
@@ -463,6 +460,42 @@ def cmd_use(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_human_review(args: argparse.Namespace) -> int:
+    from .human_review import HumanReviewService
+
+    root = _resolve_root(args.project_root)
+    service = HumanReviewService(root)
+    if args.human_review_action == "list":
+        items = service.list_items(chapter=args.chapter)
+        payload = {
+            "schema_version": "canon-ledger-human-review-list/v1",
+            "chapter": args.chapter,
+            "pending": [
+                item for item in items if item.get("status") == "pending"
+            ],
+            "resolved": [
+                item for item in items if item.get("status") != "pending"
+            ],
+        }
+    else:
+        decision_path = Path(args.input_file).expanduser()
+        if not decision_path.is_absolute():
+            decision_path = root / decision_path
+        decision_path = decision_path.resolve()
+        try:
+            decision_path.relative_to(root.resolve())
+        except ValueError as exc:
+            raise ValueError(
+                "human-review input-file 必须位于 project_root 内"
+            ) from exc
+        payload = service.record(
+            json.loads(decision_path.read_text(encoding="utf-8"))
+        )
+        payload["next_action"] = "重新运行本章 chapter-commit 使裁决生效"
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="CanonLedger 统一 CLI")
     parser.add_argument("--project-root", help="书项目根目录或工作区根目录（可选，默认自动检测）")
@@ -554,6 +587,27 @@ def main() -> None:
     p_use.add_argument("project_root", help="书项目根目录（必须包含 .canon-ledger/state.json）")
     p_use.add_argument("--workspace-root", help="工作区根目录（可选；默认由运行环境推断）")
     p_use.set_defaults(func=cmd_use)
+
+    p_human_review = sub.add_parser(
+        "human-review",
+        help="查看或裁决不会自动写入 canon 的候选事实",
+    )
+    human_review_sub = p_human_review.add_subparsers(
+        dest="human_review_action",
+        required=True,
+    )
+    p_human_review_list = human_review_sub.add_parser(
+        "list",
+        help="列出人工确认队列",
+    )
+    p_human_review_list.add_argument("--chapter", type=int, default=None)
+    p_human_review_list.set_defaults(func=cmd_human_review)
+    p_human_review_resolve = human_review_sub.add_parser(
+        "resolve",
+        help="从项目内 JSON 文件写入 confirm/ignore/replace 裁决",
+    )
+    p_human_review_resolve.add_argument("--input-file", required=True)
+    p_human_review_resolve.set_defaults(func=cmd_human_review)
 
     # Pass-through to data modules
     p_index = sub.add_parser("index", help="转发到 index_manager")

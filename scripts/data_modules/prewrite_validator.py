@@ -31,6 +31,11 @@ class PrewriteValidator:
             )
         )
         pending = state.get("disambiguation_pending") or []
+        blocking_pending = [
+            item
+            for item in pending
+            if isinstance(item, dict) and bool(item.get("blocking", False))
+        ]
         warnings = state.get("disambiguation_warnings") or []
         contract_provided = story_contract is not None
         story_contract = story_contract or {}
@@ -42,8 +47,8 @@ class PrewriteValidator:
                 if not story_contract.get(name)
             ]
         blocking_reasons = []
-        if pending:
-            blocking_reasons.append("存在高优先级 disambiguation_pending")
+        if blocking_pending:
+            blocking_reasons.append("存在显式 blocking 的 disambiguation_pending")
         if missing_contracts:
             blocking_reasons.append(
                 "缺少 Story System 合同: " + ", ".join(missing_contracts)
@@ -53,13 +58,16 @@ class PrewriteValidator:
             blocking_reasons.append("当前章节相关设定存在未补齐占位")
         return {
             "chapter": chapter,
-            "blocking": bool(pending) or bool(missing_contracts) or bool(related_placeholders),
+            "blocking": bool(blocking_pending)
+            or bool(missing_contracts)
+            or bool(related_placeholders),
             "blocking_reasons": blocking_reasons,
             "missing_contracts": missing_contracts,
             "related_placeholders": related_placeholders,
             "forbidden_zones": list(plot_structure.get("forbidden_zones") or []),
             "disambiguation_domain": {
                 "pending_count": len(pending),
+                "blocking_pending_count": len(blocking_pending),
                 "warning_count": len(warnings),
                 "allowed_mentions": [
                     item.get("mention", "")

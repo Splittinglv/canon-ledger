@@ -114,6 +114,28 @@ def test_extraction_fact_coverage_is_explicit_and_closed():
         ExtractionResult.model_validate(bad)
 
 
+def test_extraction_fact_verification_is_separate_and_closed():
+    payload = {
+        "accepted_events": [],
+        "state_deltas": [],
+        "entity_deltas": [],
+        "fact_verification": {
+            "knowledge": "verified",
+            "presence": "supported",
+            "custody": "pending",
+        },
+        "chapter_binding": _binding(),
+    }
+
+    extraction = ExtractionResult.model_validate(payload)
+    assert extraction.fact_verification == payload["fact_verification"]
+
+    bad = deepcopy(payload)
+    bad["fact_verification"]["presence"] = "confident"
+    with pytest.raises(ValueError, match="must be verified, supported, pending"):
+        ExtractionResult.model_validate(bad)
+
+
 def test_artifact_models_reject_nested_wrappers_and_missing_core_fields():
     with pytest.raises(ValueError, match="nested under fulfillment"):
         FulfillmentResult.model_validate({"fulfillment": {"missed_nodes": []}})
@@ -270,6 +292,7 @@ def test_long_term_consistency_events_are_normalized():
             {
                 "event_id": "learn-secret",
                 "event_type": "information_learned",
+                "sequence": 1,
                 "subject": "alice",
                 "payload": {
                     "information_id": "secret-door",
@@ -283,6 +306,7 @@ def test_long_term_consistency_events_are_normalized():
             {
                 "event_id": "alice-north",
                 "event_type": "location_changed",
+                "sequence": 2,
                 "subject": "alice",
                 "payload": {
                     "location_id": "north-city",
@@ -295,6 +319,7 @@ def test_long_term_consistency_events_are_normalized():
             {
                 "event_id": "key-transfer",
                 "event_type": "artifact_transferred",
+                "sequence": 3,
                 "subject": "bronze-key",
                 "payload": {
                     "from_holder": "alice",
@@ -317,12 +342,35 @@ def test_long_term_consistency_events_are_normalized():
     assert events[2]["payload"]["location_id"] == ""
 
 
+def test_long_term_consistency_events_require_unique_positive_sequences():
+    event = {
+        "event_type": "presence_observed",
+        "subject": "alice",
+        "payload": {
+            "location_id": "north-city",
+            "presence_kind": "physical",
+            "evidence_quote": "爱丽丝抵达北城。",
+        },
+    }
+
+    with pytest.raises(ValueError, match="sequence must be a positive integer"):
+        normalize_accepted_events(3, [event])
+
+    duplicate = [
+        {**event, "event_id": "arrival-1", "sequence": 1},
+        {**event, "event_id": "arrival-2", "sequence": 1},
+    ]
+    with pytest.raises(ValueError, match="sequence 1 is duplicated"):
+        normalize_accepted_events(3, duplicate)
+
+
 @pytest.mark.parametrize(
     ("event", "message"),
     [
         (
             {
                 "event_type": "knowledge_state_changed",
+                "sequence": 1,
                 "subject": "alice",
                 "payload": {
                     "information_id": "secret-door",
@@ -337,6 +385,7 @@ def test_long_term_consistency_events_are_normalized():
         (
             {
                 "event_type": "presence_observed",
+                "sequence": 1,
                 "subject": "alice",
                 "payload": {
                     "presence_kind": "dream",
@@ -348,6 +397,7 @@ def test_long_term_consistency_events_are_normalized():
         (
             {
                 "event_type": "custody_changed",
+                "sequence": 1,
                 "subject": "bronze-key",
                 "payload": {
                     "to_holder": "bob",

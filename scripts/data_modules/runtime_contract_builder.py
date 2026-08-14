@@ -47,7 +47,9 @@ class RuntimeContractBuilder:
                 "genre_specific_risks": [],
                 "anti_patterns": volume_brief["anti_patterns"],
                 "system_constraints": volume_brief["system_constraints"],
-                "review_thresholds": {"blocking_count": 0, "missed_nodes": 0},
+                # Outline fulfillment is advisory by default.  The review
+                # contract only hard-gates proven factual contradictions.
+                "review_thresholds": {"blocking_count": 0},
                 "overrides": {"locked": {}, "append_only": {}, "override_allowed": {}},
             }
         ).model_dump()

@@ -339,6 +339,19 @@ def _add_artifact_validation_result(
                 path=_rel(Path(report["project_root"]), path),
                 message=str(issue["message"] or ""),
             )
+    for item in result.get("warnings") or []:
+        _add_manual_issue(
+            report,
+            "needs_confirmation",
+            code=str(item.get("type") or item.get("code") or "artifact_warning"),
+            title=str(item.get("message") or "存在非阻断提示"),
+            reason=str(item.get("impact") or "该项需要作者按需确认。"),
+            impact="不阻断当前章节提交。",
+            next_action=str(item.get("repair") or "需要时查看对应 artifact。"),
+            source=artifact,
+            path=_rel(Path(report["project_root"]), path),
+            message=str(item.get("message") or ""),
+        )
     return result
 
 
@@ -760,13 +773,14 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
             and binding_ok
         )
         blocking_count = int(review_result.get("blocking_count") or 0)
+        manual_checks_count = len(review_result.get("manual_checks") or [])
         _add_file(
             report,
             label="审查结果",
             path=_rel(project_root, review_path),
             status="completed" if review_trusted else "failed",
             note=(
-                f"阻断数={blocking_count}"
+                f"阻断数={blocking_count}，待人工确认={manual_checks_count}"
                 if review_trusted
                 else f"stale={binding_code if review_chapter == int(chapter) else 'artifact_chapter_mismatch'}"
             ),
@@ -829,6 +843,19 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
                 reason=f"本章有 {blocking_count} 个阻断问题。",
                 impact="不处理会影响继续写作、提交或事实一致性。",
                 next_action="先按审查报告处理阻断问题；如果要保留当前版本，需要用户明确裁决。",
+                command="/canon-ledger-review",
+                source="review",
+                path=_rel(project_root, review_path),
+            )
+        if review_trusted and manual_checks_count > 0:
+            _add_manual_issue(
+                report,
+                "needs_confirmation",
+                code="review_manual_checks",
+                title="有些事实疑点需要作者判断",
+                reason=f"本章有 {manual_checks_count} 项容易误判的检查内容。",
+                impact="这些项目不会自动修改正文，也不阻断当前提交。",
+                next_action="需要时查看审查报告中的“待作者确认”。",
                 command="/canon-ledger-review",
                 source="review",
                 path=_rel(project_root, review_path),

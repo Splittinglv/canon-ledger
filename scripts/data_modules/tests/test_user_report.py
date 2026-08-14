@@ -73,6 +73,7 @@ def _write_review(
     blocking_count: int = 0,
     review_skipped: bool = False,
     chapter_binding: dict | None = None,
+    manual_checks: list[dict] | None = None,
 ) -> None:
     if chapter_binding is None:
         chapter_binding = build_chapter_binding(project_root, chapter)
@@ -81,6 +82,7 @@ def _write_review(
         if review_skipped
         else standard_review(chapter_binding, blocking_count=blocking_count)
     )
+    review["manual_checks"] = list(manual_checks or [])
     _write_json(project_root / ".canon-ledger" / "tmp" / "review_results.json", review)
     _write_json(
         project_root / ".canon-ledger" / "tmp" / "review_audit.json",
@@ -95,6 +97,7 @@ def _write_review(
             "skipped_dimensions": review["skipped_dimensions"],
             "issues_count": review["issues_count"],
             "blocking_count": blocking_count,
+            "manual_checks_count": len(manual_checks or []),
             "report_file": f"审查报告/第{chapter}章审查报告.md",
         },
     )
@@ -337,6 +340,40 @@ def test_render_review_report_blocking(tmp_path: Path) -> None:
     assert report["overall_status"] == "needs_user"
     assert report["review_author_view"]["status"] == "must_fix"
     assert any(item["code"] == "blocking_review" for item in report["issues"]["must_handle"])
+
+
+def test_render_review_report_surfaces_manual_checks_without_blocking(
+    tmp_path: Path,
+) -> None:
+    _make_project(tmp_path)
+    chapter_file = tmp_path / "正文" / "第0004章.md"
+    chapter_file.write_text("第4章正文\n", encoding="utf-8")
+    binding = build_chapter_binding(tmp_path, 4)
+    _write_review(
+        tmp_path,
+        chapter=4,
+        chapter_binding=binding,
+        manual_checks=[
+            {
+                "category": "character",
+                "location": "第3段",
+                "description": "角色是否已知暗门位置",
+                "evidence": "前文只有模糊暗示",
+                "reason": "插件无法可靠判断代词指向",
+                "options": ["确认已知", "改写消歧"],
+            }
+        ],
+    )
+
+    report = build_user_report(tmp_path, stage="review", chapter=4)
+
+    assert report["overall_status"] == "partial"
+    assert report["review_author_view"]["status"] == "manual_check"
+    assert not report["issues"]["must_handle"]
+    assert any(
+        item["code"] == "review_manual_checks"
+        for item in report["issues"]["needs_confirmation"]
+    )
 
 
 def test_review_report_rejects_review_after_manuscript_edit(tmp_path: Path) -> None:

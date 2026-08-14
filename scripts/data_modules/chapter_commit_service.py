@@ -45,6 +45,47 @@ class ChapterCommitService:
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
 
+    def _validate_custody_transitions(
+        self,
+        chapter: int,
+        accepted_events: list[dict[str, Any]],
+    ) -> None:
+        """Reject a mechanically impossible holder chain before projection.
+
+        The first recorded transition for an artifact may seed an existing
+        off-page holder. Once custody has been recorded, every later transfer
+        must start from that exact holder, including an explicitly unheld item.
+        """
+        from .canonical_history import load_canonical_history
+
+        history = load_canonical_history(self.project_root, max(0, chapter - 1))
+        holders: dict[str, str] = {
+            artifact_id: str((row or {}).get("holder_id") or "")
+            for artifact_id, row in history.custody.items()
+        }
+        recorded = set(history.custody)
+        ordered = sorted(
+            accepted_events,
+            key=lambda event: int(event.get("sequence") or 0),
+        )
+        for event in ordered:
+            if str(event.get("event_type") or "") != "custody_changed":
+                continue
+            artifact_id = str(event.get("subject") or "").strip()
+            raw_payload = event.get("payload")
+            payload = raw_payload if isinstance(raw_payload, dict) else {}
+            from_holder = str(payload.get("from_holder") or "").strip()
+            to_holder = str(payload.get("to_holder") or "").strip()
+            prior_holder = holders.get(artifact_id, "")
+            if artifact_id in recorded and prior_holder != from_holder:
+                raise ValueError(
+                    "custody_transition_conflict:"
+                    f"{artifact_id}:expected_from={prior_holder or '<none>'}:"
+                    f"actual_from={from_holder or '<none>'}"
+                )
+            recorded.add(artifact_id)
+            holders[artifact_id] = to_holder
+
     def build_commit(
         self,
         chapter: int,
@@ -104,13 +145,29 @@ class ChapterCommitService:
         )
         if fulfillment_errors:
             raise ValueError(fulfillment_errors[0])
-        rejected = bool(review.blocking_count) or bool(
-            fulfillment.missed_nodes
-        ) or bool(disambiguation.pending)
+
+        from .human_review import HumanReviewService
+
+        human_review = HumanReviewService(self.project_root).apply_decisions(
+            chapter,
+            chapter_binding,
+            list(disambiguation.pending),
+            list(extraction.accepted_events),
+        )
+        unresolved = list(human_review["unresolved"])
+        blocking_pending = [
+            item for item in unresolved if bool(item.get("blocking", False))
+        ]
+        outline_strict = fulfillment.enforcement == "strict"
+        rejected = (
+            bool(review.blocking_count)
+            or bool(blocking_pending)
+            or (outline_strict and bool(fulfillment.missed_nodes))
+        )
         status = "rejected" if rejected else "accepted"
         volume = volume_num_for_chapter_from_state(self.project_root, chapter) or 1
         accepted_events = EventLogStore(self.project_root).normalize_events(
-            chapter, extraction.accepted_events
+            chapter, human_review["events"]
         )
         evidence_envelope = {
             "meta": {"chapter": chapter},
@@ -133,8 +190,42 @@ class ChapterCommitService:
                         f"accepted_events[{index}].payload.evidence_quote "
                         "is not present in the bound chapter"
                     )
+            self._validate_custody_transitions(chapter, accepted_events)
         extraction_payload = extraction.model_dump()
         extraction_payload["accepted_events"] = accepted_events
+        coverage = dict(extraction_payload.get("fact_coverage") or {})
+        # fact_verification is extractor output at this boundary.  As with
+        # individual events, a model cannot promote its own interpretation to
+        # human-verified merely by emitting the enum value.
+        verification = {
+            dimension: (
+                "supported" if state == "verified" else state
+            )
+            for dimension, state in dict(
+                extraction_payload.get("fact_verification") or {}
+            ).items()
+        }
+        if coverage and not verification:
+            verification = {
+                dimension: (
+                    "supported" if state == "complete" else "pending"
+                )
+                for dimension, state in coverage.items()
+            }
+        for dimension in human_review["resolved_dimensions"]:
+            if verification.get(dimension) == "pending":
+                verification[dimension] = "supported"
+        for dimension in human_review["affected_dimensions"]:
+            if dimension in coverage:
+                coverage[dimension] = "partial"
+            if verification and dimension in {
+                "knowledge",
+                "presence",
+                "custody",
+            }:
+                verification[dimension] = "pending"
+        extraction_payload["fact_coverage"] = coverage
+        extraction_payload["fact_verification"] = verification
         extraction_payload["timeline_events"] = normalize_timeline_events(
             chapter, extraction.timeline_events
         )
@@ -165,6 +256,13 @@ class ChapterCommitService:
                 "write_fact_role": "chapter_commit",
                 "projection_role": "derived_read_models",
                 "chapter_binding": chapter_binding,
+                "human_review": {
+                    "resolved_decision_ids": human_review[
+                        "resolved_decision_ids"
+                    ],
+                    "verified_event_ids": human_review["verified_event_ids"],
+                    "unresolved_count": len(unresolved),
+                },
             },
             "outline_snapshot": {
                 "goal": authoritative_goal,
@@ -175,7 +273,10 @@ class ChapterCommitService:
             },
             "review_result": review.model_dump(),
             "fulfillment_result": fulfillment.model_dump(),
-            "disambiguation_result": disambiguation.model_dump(),
+            "disambiguation_result": {
+                **disambiguation.model_dump(),
+                "pending": unresolved,
+            },
             "extraction_result": extraction_payload,
             "projection_status": {
                 "state": "pending",

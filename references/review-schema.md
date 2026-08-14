@@ -8,8 +8,10 @@
 
 ## 核心约束
 
-- **只查五维事实**：`setting`、`timeline`、`continuity`、`character`、`logic`
+- **只查五维事实**：`setting`、`timeline`、`continuity`、`character`、`logic`；其中 logic 只含明确规则下的机械矛盾
 - **不评分**：不输出总分，不输出通过或失败总评
+- **不确定转人工**：需要解释语义、猜动机、补隐含转场或判断规则例外时写 `manual_checks`，不得输出确定 issue
+- **计划不冒充事实**：大纲节点、剧情禁区和一般写作偏离由 fulfillment 报告，默认不阻断事实提交
 - **非法分类整单拒绝**：`category` 必须是上述五维之一。其它值会触发 `ValueError`，整份审查作废，不会静默改写或落入缺省分类
 - **单 agent**：由 `reviewer` 输出；主流程不得口头总结代替 JSON
 
@@ -25,20 +27,21 @@ reviewer 输出顶层必须包含调用方传入的 `chapter_binding`（`schema_
 | review_mode | standard / fast / minimal | ✅ | 审查范围 |
 | chapter_binding | object | ✅ | 正文绑定，原样回传 |
 | issues | array | ✅ | 问题清单；无问题则为 `[]` |
+| manual_checks | array | ✅ | 证据不足、容易误判、需要作者判断的检查项；永不自动阻断 |
 | dimension_results | array | ✅ | 已审维度结论；顺序与模式绑定 |
 | summary | string | ✅ | 中文摘要，不是评分 |
 
 `standard` 的 `dimension_results` 必须按顺序且只能覆盖 setting / timeline / continuity / character / logic。
 
 `fast` 必须按顺序且只能覆盖 setting / timeline / continuity / character；知识边界是默认长期一致性检查，不能跳过。
-`minimal` 不得携带问题结论，`dimension_results` 必须为空。
+`minimal` 不得携带 issue 或 `manual_checks`，`dimension_results` 必须为空。
 
 每条维度结论：
 
 | 字段 | 说明 |
 |------|------|
 | dimension | 上述合法维度名 |
-| conclusion | 覆盖完整且无问题写「未发现事实问题」；有问题写「发现N个问题：简述」；依赖的历史覆盖为 partial / none 时必须明确写覆盖不完整，不得伪装成完整通过 |
+| conclusion | 证据充分且无问题写「未发现已证实的事实问题」；有问题写「发现N个已证实问题：简述」；有人工项或覆盖/可信度不足时必须明确说明，不得伪装成完整通过 |
 
 ## Issue Schema
 
@@ -56,21 +59,40 @@ reviewer 输出顶层必须包含调用方传入的 `chapter_binding`（`schema_
 
 - `setting`：与设定集 / `setting_canon` / 世界规则矛盾
 - `timeline`：时间顺序、跨度、倒计时，以及有明确物理在场证据的地点矛盾；梦境、回忆、远程通信和提及不更新当前位置
-- `continuity`：已接受提交中的未闭合问题、伏笔、承诺、状态、物品持有，以及章合同 `must_cover_nodes` / `forbidden_zones`
+- `continuity`：已接受提交中的未闭合问题、伏笔、承诺、状态和物品持有；不含章纲履约
 - `character`：只查知识边界；不评价性格、动机、口吻或文笔
-- `logic`：因果、力量对比、决策前提不成立
+- `logic`：只查明确次数、冷却、互斥状态、物理前提等可逐字段对照的硬规则；不评价一般因果、力量观感或决策动机
 
 文笔、钩子、场景过渡、情绪弧、对话是否书面都不是合法分类。
 
-## 长期事实覆盖
+## Manual Check Schema
 
-as-of v2 快照提供 `information`、`knowledge_by_entity`、`presence` / `presence_history`、`custody` / `custody_history` 和 `coverage`。`coverage.knowledge|presence|custody` 只有 `complete` 时，字段缺失才可作为否定证据；`partial` 或 `none` 只能核对明确存在的正向记录，不能据此断言某角色不知道、不在场或不持有物品。
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| category | 五维枚举 | ✅ | 疑点所属事实维度 |
+| location | string | ✅ | 正文位置 |
+| description | string | ✅ | 作者需要确认什么 |
+| evidence | string | ✅ | 当前已有证据；允许明确写“证据不足” |
+| reason | string | ✅ | 为什么插件无法可靠自动判断 |
+| options | string[] | ✅ | 供作者参考的有限判断方向，不是强制修复 |
+
+`manual_checks` 不计入 `issues_count`、`blocking_count`，也不会让 chapter commit rejected。
+
+## 长期事实覆盖与可信度
+
+as-of v3 快照提供 `information`、`knowledge_by_entity`、`presence` / `presence_history`、`custody` / `custody_history`、`coverage` 和 `verification`。
+
+- `coverage` 是完整度：`complete|partial|none`。
+- `verification` 是可信度：`verified|supported|pending|unknown|legacy`。
+- 只有覆盖 `complete` 且可信度 `verified` 时，字段缺失才可作为否定证据。
+- `supported` 的正向记录可用于提醒一致性；只要判断需要语义解释，就转 `manual_checks`。
+- `pending|unknown|legacy` 禁止据缺失断言角色不知道、不在场或不持有物品。
 
 ## 阻断规则
 
 - 存在任何 `blocking=true` 的 issue → 不得提交章节
-- `severity=critical` 自动 `blocking=true`
-- 其余 severity 由审查 agent 根据是否破坏已接受事实判断
+- 只有能与作者原始设定或 `verified` 事实逐字段对照、且两者不能同时成立的矛盾才可 blocking
+- `supported` 事实引出的语义疑点默认转人工，不自动阻断
 - 读不到上章摘要不是错误；第一章或无已接受上章时禁止因此 blocking
 
 ## 落库
@@ -81,7 +103,7 @@ as-of v2 快照提供 `information`、`knowledge_by_entity`、`presence` / `pres
 
 - `chapter` / `review_mode` / `review_status` / `review_degraded`
 - `reviewed_dimensions` / `skipped_dimensions` / `dimension_results`
-- `issues_count` / `blocking_count` / `severity_counts` / `categories`
+- `issues_count` / `blocking_count` / `manual_checks_count` / `severity_counts` / `categories`
 - `critical_issues` / `report_file` / `notes` / `timestamp`
 
 说明：

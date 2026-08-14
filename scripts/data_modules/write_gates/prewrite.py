@@ -161,11 +161,29 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
                 "prewrite_validator_blocking",
                 message="写前校验发现阻断问题",
                 impact="当前章节写作输入不可信。",
-                repair="按 blocking_reasons 补齐合同、消歧 pending 或相关占位符。",
+                repair="按 blocking_reasons 补齐合同、处理显式阻断项或相关占位符。",
                 details=validation,
             )
         )
-    elif runtime.fallback_sources:
+    if int(
+        (validation.get("disambiguation_domain") or {}).get("pending_count") or 0
+    ) > int(
+        (validation.get("disambiguation_domain") or {}).get(
+            "blocking_pending_count"
+        )
+        or 0
+    ):
+        warnings.append(
+            issue(
+                "disambiguation_pending_advisory",
+                message="存在可稍后人工确认的消歧项",
+                severity="warning",
+                impact="插件不会用这些未决项作否定推断或写入确定事实。",
+                repair="需要时查看人工队列；不影响本章继续写作。",
+                details=validation.get("disambiguation_domain") or {},
+            )
+        )
+    if runtime.fallback_sources:
         warnings.append(
             issue(
                 "story_runtime_fallback",

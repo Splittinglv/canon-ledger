@@ -46,9 +46,22 @@ def _action_from_issue(issue: dict[str, Any]) -> str:
     return f"{prefix}{description}"
 
 
+def _action_from_manual_check(check: dict[str, Any]) -> str:
+    description = str(check.get("description") or "需要作者确认").strip()
+    reason = str(check.get("reason") or "插件无法可靠自动判断").strip()
+    location = str(check.get("location") or "").strip()
+    prefix = f"{location}：" if location else ""
+    return f"{prefix}{description}（{reason}）"
+
+
 def build_review_author_view(payload: dict[str, Any]) -> ReviewAuthorView:
     result = payload.get("review_result") or {}
     issues = [item for item in result.get("issues") or [] if isinstance(item, dict)]
+    manual_checks = [
+        item
+        for item in result.get("manual_checks") or []
+        if isinstance(item, dict)
+    ]
     blocking_issues = [issue for issue in issues if issue.get("blocking")]
     sorted_issues = sorted(issues, key=_issue_priority)
 
@@ -67,6 +80,17 @@ def build_review_author_view(payload: dict[str, Any]) -> ReviewAuthorView:
         return ReviewAuthorView(
             verdict="⚠️建议改",
             status="suggest_fix",
+            actions=actions,
+        )
+
+    if manual_checks:
+        actions = tuple(
+            _action_from_manual_check(check)
+            for check in manual_checks[:MAX_ACTIONS]
+        )
+        return ReviewAuthorView(
+            verdict="👀可以继续，建议确认",
+            status="manual_check",
             actions=actions,
         )
 

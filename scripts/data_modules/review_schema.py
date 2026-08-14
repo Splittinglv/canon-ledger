@@ -66,6 +66,29 @@ class ReviewIssue:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class ManualReviewCheck:
+    """A plausible concern that lacks enough evidence for an issue verdict."""
+
+    category: str
+    description: str
+    reason: str
+    location: str = ""
+    evidence: str = ""
+    options: List[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.category not in VALID_CATEGORIES:
+            raise ValueError(f"未知人工检查分类：{self.category}")
+        if not self.description.strip() or not self.reason.strip():
+            raise ValueError("人工检查项必须包含 description 和 reason")
+        if any(not str(option).strip() for option in self.options):
+            raise ValueError("人工检查项 options 不能包含空字符串")
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass
 class ReviewResult:
     chapter: int
@@ -73,6 +96,7 @@ class ReviewResult:
     chapter_binding: Dict[str, Any] = field(default_factory=dict)
     issues: List[ReviewIssue] = field(default_factory=list)
     dimension_results: List[ReviewDimensionResult] = field(default_factory=list)
+    manual_checks: List[ManualReviewCheck] = field(default_factory=list)
     summary: str = ""
 
     def __post_init__(self) -> None:
@@ -85,8 +109,8 @@ class ReviewResult:
                 f"{self.review_mode} 模式必须按顺序审查维度 {expected_text}，"
                 f"实际为 {actual_text}"
             )
-        if self.review_mode == "minimal" and self.issues:
-            raise ValueError("minimal 模式跳过审查，不能携带问题结论")
+        if self.review_mode == "minimal" and (self.issues or self.manual_checks):
+            raise ValueError("minimal 模式跳过审查，不能携带问题或人工检查结论")
 
     @property
     def issues_count(self) -> int:
@@ -165,6 +189,7 @@ class ReviewResult:
             "reviewed_dimensions": self.reviewed_dimensions,
             "skipped_dimensions": self.skipped_dimensions,
             "dimension_results": [item.to_dict() for item in self.dimension_results],
+            "manual_checks": [item.to_dict() for item in self.manual_checks],
             "issues": [issue.to_dict() for issue in self.issues],
             "issues_count": self.issues_count,
             "blocking_count": self.blocking_count,
@@ -184,6 +209,7 @@ class ReviewResult:
             "reviewed_dimensions": self.reviewed_dimensions,
             "skipped_dimensions": self.skipped_dimensions,
             "dimension_results": [item.to_dict() for item in self.dimension_results],
+            "manual_checks_count": len(self.manual_checks),
             "severity_counts": self.severity_counts,
             "critical_issues": self.critical_issues,
             "report_file": report_file,
@@ -213,6 +239,35 @@ def _parse_dimension_results(raw: Any) -> List[ReviewDimensionResult]:
             )
         )
     return results
+
+
+def _parse_manual_checks(raw: Any) -> List[ManualReviewCheck]:
+    if raw in (None, []):
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("review_result.manual_checks 必须是数组")
+    checks: List[ManualReviewCheck] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"review_result.manual_checks[{index}] 必须是对象")
+        raw_options = item.get("options")
+        if raw_options is None:
+            raw_options = []
+        if not isinstance(raw_options, list):
+            raise ValueError(
+                f"review_result.manual_checks[{index}].options 必须是数组"
+            )
+        checks.append(
+            ManualReviewCheck(
+                category=str(item.get("category") or "").strip(),
+                location=str(item.get("location") or ""),
+                description=str(item.get("description") or "").strip(),
+                evidence=str(item.get("evidence") or ""),
+                reason=str(item.get("reason") or "").strip(),
+                options=[str(option).strip() for option in raw_options],
+            )
+        )
+    return checks
 
 
 def parse_review_output(
@@ -268,6 +323,7 @@ def parse_review_output(
         chapter_binding=binding,
         issues=issues,
         dimension_results=_parse_dimension_results(raw.get("dimension_results")),
+        manual_checks=_parse_manual_checks(raw.get("manual_checks")),
         summary=str(raw.get("summary") or ""),
     )
     if result.review_mode == "minimal" and raw.get("review_skipped") is not True:

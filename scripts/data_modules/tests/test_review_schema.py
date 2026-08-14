@@ -8,6 +8,7 @@ import pytest
 from data_modules.review_schema import (
     FAST_REVIEW_DIMENSIONS,
     REVIEW_DIMENSIONS,
+    ManualReviewCheck,
     ReviewDimensionResult,
     ReviewIssue,
     ReviewResult,
@@ -100,6 +101,47 @@ def test_最简模式显式记录全部跳过():
     assert payload["skipped_dimensions"] == list(REVIEW_DIMENSIONS)
 
 
+def test_容易误判的内容进入人工检查而不计为问题():
+    result = ReviewResult(
+        chapter=12,
+        review_mode="standard",
+        dimension_results=_dimensions(),
+        manual_checks=[
+            ManualReviewCheck(
+                category="character",
+                location="第六段",
+                description="此处是否超出角色当前认知",
+                reason="代词指向有两种合理解释，插件无法可靠判定",
+                evidence="她说自己早已知道。",
+                options=["角色确实知道", "改写以避免歧义"],
+            )
+        ],
+    )
+
+    payload = result.to_dict()
+
+    assert payload["issues_count"] == 0
+    assert payload["blocking_count"] == 0
+    assert len(payload["manual_checks"]) == 1
+    assert result.to_audit_dict()["manual_checks_count"] == 1
+
+
+def test_最简模式不能伪装成人工检查():
+    with pytest.raises(ValueError, match="不能携带问题或人工检查结论"):
+        ReviewResult(
+            chapter=12,
+            review_mode="minimal",
+            dimension_results=[],
+            manual_checks=[
+                ManualReviewCheck(
+                    category="continuity",
+                    description="需要确认",
+                    reason="证据不足",
+                )
+            ],
+        )
+
+
 def test_标准模式缺少任一维度时拒绝():
     with pytest.raises(ValueError, match="standard 模式必须"):
         ReviewResult(
@@ -133,6 +175,31 @@ def test_解析标准模式并复核正文绑定():
     assert result.chapter == 5
     assert result.review_mode == "standard"
     assert result.blocking_count == 1
+
+
+def test_解析人工检查项并保持非阻断():
+    raw = {
+        "chapter": 5,
+        "chapter_binding": _binding(5),
+        "review_mode": "standard",
+        "dimension_results": _raw_dimensions(),
+        "issues": [],
+        "manual_checks": [
+            {
+                "category": "logic",
+                "location": "第二段",
+                "description": "机关是否允许从内部开启",
+                "reason": "现有设定没有明确说明机关结构",
+                "options": ["允许", "不允许", "补充设定"],
+            }
+        ],
+    }
+
+    result = parse_review_output(chapter=5, raw=raw, expected_binding=_binding(5))
+
+    assert result.blocking_count == 0
+    assert result.issues_count == 0
+    assert result.manual_checks[0].description == "机关是否允许从内部开启"
 
 
 def test_解析结果缺少模式时拒绝():

@@ -108,7 +108,7 @@ def test_load_context_cli_passes_budget_tokens(tmp_path, capsys):
     assert output["budget"]["requested_tokens"] == 7
     assert output["budget_used_tokens"] > 0
     assert "context_budget" not in output["sections"]
-    assert output["schema_version"] == "canon-ledger-context-pack/v2"
+    assert output["schema_version"] == "canon-ledger-context-pack/v3"
 
 
 def test_query_entity_not_found(tmp_path, capsys):
@@ -268,7 +268,7 @@ def test_export_asof_empty_project(tmp_path, capsys):
         sys.argv = old_argv
 
     output = json.loads(capsys.readouterr().out)
-    assert output["schema_version"] == "canon-ledger-asof-snapshot/v2"
+    assert output["schema_version"] == "canon-ledger-asof-snapshot/v3"
     assert output["chapter"] == 1
     assert output["as_of_chapter"] == 0
     saved = json.loads(out.read_text(encoding="utf-8"))

@@ -341,6 +341,92 @@ def test_preflight_fails_when_required_scripts_are_missing(monkeypatch, tmp_path
     assert '"name": "entry_script"' in captured.out
 
 
+def test_human_review_cli_lists_and_records_decisions(
+    monkeypatch, tmp_path, capsys
+):
+    module = _load_canon_ledger_module()
+    project_root = tmp_path / "book"
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    chapter_path = project_root / "正文" / "第0003章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("爱丽丝抵达北城。", encoding="utf-8")
+
+    from data_modules.chapter_content_binding import build_chapter_binding
+    from data_modules.human_review import HumanReviewService
+
+    binding = build_chapter_binding(project_root, 3)
+    service = HumanReviewService(project_root)
+    service.persist_queue(
+        3,
+        binding,
+        [
+            {
+                "decision_id": "alice-location-check",
+                "category": "presence",
+                "reason": "需要作者确认是否实际抵达",
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "canon-ledger",
+            "--project-root",
+            str(project_root),
+            "human-review",
+            "list",
+            "--chapter",
+            "3",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+    assert int(exc.value.code or 0) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["pending"][0]["decision_id"] == "alice-location-check"
+
+    decisions_path = project_root / "human-decisions.json"
+    decisions_path.write_text(
+        json.dumps(
+            {
+                "decisions": [
+                    {
+                        "decision_id": "alice-location-check",
+                        "action": "ignore",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "canon-ledger",
+            "--project-root",
+            str(project_root),
+            "human-review",
+            "resolve",
+            "--input-file",
+            "human-decisions.json",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+    assert int(exc.value.code or 0) == 0
+    resolved = json.loads(capsys.readouterr().out)
+    assert resolved["recorded"] == ["alice-location-check"]
+    assert "chapter-commit" in resolved["next_action"]
+    assert service.list_items(3)[0]["status"] == "ignore"
+
+
 def test_preflight_includes_story_runtime_health(monkeypatch, tmp_path, capsys):
     module = _load_canon_ledger_module()
 

@@ -67,7 +67,7 @@ def _estimate_context_pack_tokens(
             "chapter": int(chapter),
             "sections": sections,
             "budget_used_tokens": used,
-            "schema_version": "canon-ledger-context-pack/v2",
+            "schema_version": "canon-ledger-context-pack/v3",
             "budget": {**budget, "used_tokens": used},
             "completeness": completeness,
         }
@@ -279,8 +279,10 @@ class MemoryContractAdapter:
             "current": dict(canonical_history.custody),
         }
         mandatory["fact_coverage"] = dict(canonical_history.coverage)
+        mandatory["fact_verification"] = dict(canonical_history.verification)
 
-        # Context Pack v2 exposes one canonical hard set.  Optional evidence
+        # Context Pack v3 exposes one canonical hard set plus explicit fact
+        # completeness/confidence. Optional evidence
         # never repeats it, and aliases that duplicated the same prose were
         # intentionally retired with the schema-version bump.
         if memory_pack:

@@ -125,27 +125,35 @@ def _policy_issues(artifact: str, payload: dict[str, Any], path: str) -> list[di
     elif artifact == "fulfillment_result":
         missed = payload.get("missed_nodes") or []
         if missed:
+            strict = str(payload.get("enforcement") or "advisory") == "strict"
             issues.append(
                 _issue(
                     ERROR_MISSED_OUTLINE_NODE,
                     message=f"fulfillment_result 遗漏 {len(missed)} 个计划节点",
+                    severity="blocker" if strict else "warning",
                     path=path,
                     field="missed_nodes",
-                    impact="大纲必须节点未覆盖，提交会把偏离章节固化为事实。",
-                    repair="补写遗漏节点，或经用户裁决修改本章规划。",
+                    impact="本章与写作计划存在偏差，但这不是事实穿帮结论。",
+                    repair="由作者决定是否补写；只有显式 strict 模式才阻断。",
                 )
             )
     elif artifact == "disambiguation_result":
         pending = payload.get("pending") or []
         if pending:
+            blocking = [
+                item
+                for item in pending
+                if isinstance(item, dict) and bool(item.get("blocking", False))
+            ]
             issues.append(
                 _issue(
                     ERROR_PENDING_DISAMBIGUATION,
                     message=f"disambiguation_result 含 {len(pending)} 个待消歧项",
+                    severity="blocker" if blocking else "warning",
                     path=path,
                     field="pending",
-                    impact="未消歧实体会污染角色、关系和事件投影。",
-                    repair="人工确认 pending 项，或把低置信实体从 extraction 中移除。",
+                    impact="候选事实会留在人工队列，确认前不会进入权威 canon。",
+                    repair="运行 human-review 查看并裁决；普通待确认项不阻断提交。",
                 )
             )
     return issues
@@ -174,8 +182,12 @@ def validate_artifact_payload(artifact: str, payload: Any, *, path: str = "") ->
 
     normalized = model.model_dump()
     report["payload"] = normalized
-    report["errors"].extend(_policy_issues(artifact, normalized, path))
-    report["ok"] = not any(item.get("severity") == "blocker" for item in report["errors"])
+    for issue in _policy_issues(artifact, normalized, path):
+        if issue.get("severity") == "blocker":
+            report["errors"].append(issue)
+        else:
+            report["warnings"].append(issue)
+    report["ok"] = not report["errors"]
     return report
 
 

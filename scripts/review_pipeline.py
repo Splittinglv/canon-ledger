@@ -66,10 +66,25 @@ def _format_issue(issue: Dict[str, Any], index: int) -> List[str]:
     ]
 
 
+def _format_manual_check(check: Dict[str, Any], index: int) -> List[str]:
+    options = [str(item) for item in (check.get("options") or []) if str(item)]
+    lines = [
+        f"{index}. **{check.get('description') or '需要作者确认'}**",
+        f"   - 分类：{check.get('category') or '未填写分类'}",
+        f"   - 位置：{check.get('location') or '未标注位置'}",
+        f"   - 现有证据：{check.get('evidence') or '证据不足'}",
+        f"   - 转人工原因：{check.get('reason') or '无法可靠自动判断'}",
+    ]
+    if options:
+        lines.append(f"   - 可选判断：{' / '.join(options)}")
+    return lines
+
+
 def render_review_report(payload: Dict[str, Any]) -> str:
     result = payload["review_result"]
     audit = payload["review_audit"]
     issues = list(result.get("issues", []))
+    manual_checks = list(result.get("manual_checks", []))
     blocking_issues = [issue for issue in issues if issue.get("blocking")]
     non_blocking_issues = [issue for issue in issues if not issue.get("blocking")]
     severity_counts = audit.get("severity_counts", {})
@@ -83,6 +98,7 @@ def render_review_report(payload: Dict[str, Any]) -> str:
         "",
         f"- 问题数：{result.get('issues_count', 0)}",
         f"- 阻断数：{result.get('blocking_count', 0)}",
+        f"- 待人工确认：{len(manual_checks)}",
         f"- 审查模式：{result.get('review_mode', '')}",
         f"- 审查状态：{result.get('review_status', '')}",
         f"- 结论：{'需修复后重审' if result.get('has_blocking') else '无阻断问题'}",
@@ -113,6 +129,15 @@ def render_review_report(payload: Dict[str, Any]) -> str:
     if non_blocking_issues:
         for index, issue in enumerate(non_blocking_issues, start=1):
             lines.extend(_format_issue(issue, index))
+            lines.append("")
+    else:
+        lines.append("无。")
+        lines.append("")
+
+    lines.extend(["## 待作者确认", ""])
+    if manual_checks:
+        for index, check in enumerate(manual_checks, start=1):
+            lines.extend(_format_manual_check(check, index))
             lines.append("")
     else:
         lines.append("无。")

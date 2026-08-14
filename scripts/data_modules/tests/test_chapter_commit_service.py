@@ -72,7 +72,7 @@ def _build_commit(service, project_root, **kwargs):
     return service.build_commit(**bound)
 
 
-def test_commit_service_rejects_when_missed_nodes_exist(tmp_path):
+def test_commit_service_treats_missed_nodes_as_advisory_by_default(tmp_path):
     service = ChapterCommitService(tmp_path)
     payload = _build_commit(service, tmp_path,
         chapter=3,
@@ -86,6 +86,160 @@ def test_commit_service_rejects_when_missed_nodes_exist(tmp_path):
         disambiguation_result={"pending": []},
         extraction_result={"state_deltas": [], "entity_deltas": [], "accepted_events": []},
     )
+    assert payload["meta"]["status"] == "accepted"
+
+
+def test_commit_service_rejects_missed_nodes_in_explicit_strict_mode(tmp_path):
+    service = ChapterCommitService(tmp_path)
+    payload = _build_commit(
+        service,
+        tmp_path,
+        chapter=3,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": ["发现陷阱"],
+            "covered_nodes": [],
+            "missed_nodes": ["发现陷阱"],
+            "extra_nodes": [],
+            "enforcement": "strict",
+        },
+        disambiguation_result={"pending": []},
+        extraction_result={
+            "state_deltas": [],
+            "entity_deltas": [],
+            "accepted_events": [],
+        },
+    )
+
+    assert payload["meta"]["status"] == "rejected"
+
+
+def test_commit_service_accepts_ordinary_pending_but_excludes_candidate_fact(
+    tmp_path,
+):
+    chapter_path = tmp_path / "正文" / "第0003章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("爱丽丝抵达北城。", encoding="utf-8")
+    service = ChapterCommitService(tmp_path)
+    pending = [
+        {
+            "decision_id": "alice-location-check",
+            "category": "presence",
+            "candidate_event_id": "alice-location",
+            "reason": "这是否是实际抵达需要作者确认",
+        }
+    ]
+    event = {
+        "event_id": "alice-location",
+        "chapter": 3,
+        "sequence": 1,
+        "event_type": "presence_observed",
+        "subject": "alice",
+        "payload": {
+            "location_id": "north-city",
+            "presence_kind": "physical",
+            "evidence_quote": "爱丽丝抵达北城。",
+        },
+    }
+    extraction = {
+        "state_deltas": [],
+        "entity_deltas": [],
+        "accepted_events": [event],
+        "fact_coverage": {
+            "knowledge": "complete",
+            "presence": "complete",
+            "custody": "complete",
+        },
+        "fact_verification": {
+            "knowledge": "supported",
+            "presence": "supported",
+            "custody": "supported",
+        },
+    }
+    fulfillment = {
+        "planned_nodes": [],
+        "covered_nodes": [],
+        "missed_nodes": [],
+        "extra_nodes": [],
+    }
+
+    first = _build_commit(
+        service,
+        tmp_path,
+        chapter=3,
+        review_result={"blocking_count": 0},
+        fulfillment_result=fulfillment,
+        disambiguation_result={"pending": pending},
+        extraction_result=extraction,
+    )
+
+    assert first["meta"]["status"] == "accepted"
+    assert first["extraction_result"]["accepted_events"] == []
+    assert first["extraction_result"]["fact_coverage"]["presence"] == "partial"
+    assert first["extraction_result"]["fact_verification"]["presence"] == "pending"
+    assert first["provenance"]["human_review"]["unresolved_count"] == 1
+
+    from data_modules.human_review import HumanReviewService
+
+    HumanReviewService(tmp_path).record(
+        {
+            "decisions": [
+                {
+                    "decision_id": "alice-location-check",
+                    "action": "confirm",
+                }
+            ]
+        }
+    )
+    second = _build_commit(
+        service,
+        tmp_path,
+        chapter=3,
+        review_result={"blocking_count": 0},
+        fulfillment_result=fulfillment,
+        disambiguation_result={"pending": pending},
+        extraction_result=extraction,
+    )
+
+    assert second["meta"]["status"] == "accepted"
+    assert second["disambiguation_result"]["pending"] == []
+    assert second["extraction_result"]["accepted_events"][0]["verification"] == (
+        "verified"
+    )
+    assert second["provenance"]["human_review"]["verified_event_ids"] == [
+        "alice-location"
+    ]
+
+
+def test_commit_service_rejects_only_explicit_blocking_pending(tmp_path):
+    payload = _build_commit(
+        ChapterCommitService(tmp_path),
+        tmp_path,
+        chapter=3,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+        },
+        disambiguation_result={
+            "pending": [
+                {
+                    "decision_id": "unsafe-missing-owner",
+                    "category": "custody",
+                    "reason": "当前持有人缺失，无法安全写入",
+                    "blocking": True,
+                }
+            ]
+        },
+        extraction_result={
+            "state_deltas": [],
+            "entity_deltas": [],
+            "accepted_events": [],
+        },
+    )
+
     assert payload["meta"]["status"] == "rejected"
 
 
@@ -107,6 +261,43 @@ def test_commit_service_accepts_when_all_checks_pass(tmp_path):
     assert "accepted_events" not in payload
     assert "state_deltas" not in payload
     assert "entity_deltas" not in payload
+
+
+def test_commit_service_downgrades_model_claimed_dimension_verification(tmp_path):
+    payload = _build_commit(
+        ChapterCommitService(tmp_path),
+        tmp_path,
+        chapter=3,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+        },
+        disambiguation_result={"pending": []},
+        extraction_result={
+            "state_deltas": [],
+            "entity_deltas": [],
+            "accepted_events": [],
+            "fact_coverage": {
+                "knowledge": "complete",
+                "presence": "complete",
+                "custody": "complete",
+            },
+            "fact_verification": {
+                "knowledge": "verified",
+                "presence": "verified",
+                "custody": "verified",
+            },
+        },
+    )
+
+    assert payload["extraction_result"]["fact_verification"] == {
+        "knowledge": "supported",
+        "presence": "supported",
+        "custody": "supported",
+    }
 
 
 def test_commit_service_rejects_world_rule_without_matching_prose_evidence(tmp_path):
@@ -176,6 +367,7 @@ def test_commit_service_rejects_long_term_event_without_matching_prose_evidence(
                     {
                         "event_id": "false-secret",
                         "chapter": 3,
+                        "sequence": 1,
                         "event_type": "knowledge_state_changed",
                         "subject": "linzhou",
                         "payload": {
@@ -187,6 +379,60 @@ def test_commit_service_rejects_long_term_event_without_matching_prose_evidence(
                             "evidence_quote": "守门人告诉林舟：密门在钟楼下。",
                         },
                     }
+                ],
+            },
+        )
+
+
+def test_commit_service_rejects_inconsistent_custody_chain(tmp_path):
+    chapter_path = tmp_path / "正文" / "第0003章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text(
+        "爱丽丝把铜钥匙交给鲍勃。\n爱丽丝又把铜钥匙交给卡萝。",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="custody_transition_conflict"):
+        _build_commit(
+            ChapterCommitService(tmp_path),
+            tmp_path,
+            chapter=3,
+            review_result={"blocking_count": 0},
+            fulfillment_result={
+                "planned_nodes": [],
+                "covered_nodes": [],
+                "missed_nodes": [],
+                "extra_nodes": [],
+            },
+            disambiguation_result={"pending": []},
+            extraction_result={
+                "state_deltas": [],
+                "entity_deltas": [],
+                "accepted_events": [
+                    {
+                        "event_id": "key-to-bob",
+                        "chapter": 3,
+                        "sequence": 1,
+                        "event_type": "custody_changed",
+                        "subject": "bronze-key",
+                        "payload": {
+                            "from_holder": "alice",
+                            "to_holder": "bob",
+                            "evidence_quote": "爱丽丝把铜钥匙交给鲍勃。",
+                        },
+                    },
+                    {
+                        "event_id": "key-to-carol",
+                        "chapter": 3,
+                        "sequence": 2,
+                        "event_type": "custody_changed",
+                        "subject": "bronze-key",
+                        "payload": {
+                            "from_holder": "alice",
+                            "to_holder": "carol",
+                            "evidence_quote": "爱丽丝又把铜钥匙交给卡萝。",
+                        },
+                    },
                 ],
             },
         )

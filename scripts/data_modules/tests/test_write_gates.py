@@ -186,7 +186,7 @@ def test_prewrite_gate_rejects_invalid_current_forbidden_zones(tmp_path):
     )
 
 
-def test_prewrite_gate_wraps_existing_prewrite_validator_blocking(tmp_path):
+def test_prewrite_gate_reports_ordinary_pending_as_advisory(tmp_path):
     _make_init_ready(tmp_path)
     _make_current_contracts(tmp_path, chapter=1)
     state_path = tmp_path / ".canon-ledger" / "state.json"
@@ -196,9 +196,31 @@ def test_prewrite_gate_wraps_existing_prewrite_validator_blocking(tmp_path):
 
     report = run_write_gate(tmp_path, chapter=1, stage="prewrite")
 
-    assert report["ok"] is False
-    assert any(item["code"] == "prewrite_validator_blocking" for item in report["errors"])
+    assert report["ok"] is True
+    assert any(
+        item["code"] == "disambiguation_pending_advisory"
+        for item in report["warnings"]
+    )
     assert report["details"]["prewrite_validation"]["disambiguation_domain"]["pending_count"] == 1
+
+
+def test_prewrite_gate_blocks_only_explicit_blocking_pending(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=1)
+    state_path = tmp_path / ".canon-ledger" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["disambiguation_pending"] = [
+        {"mention": "遗失钥匙", "blocking": True}
+    ]
+    state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+
+    report = run_write_gate(tmp_path, chapter=1, stage="prewrite")
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "prewrite_validator_blocking"
+        for item in report["errors"]
+    )
 
 
 def test_precommit_gate_reports_missing_artifacts(tmp_path):

@@ -10,6 +10,12 @@ from pydantic import BaseModel, Field
 class StoryEvent(BaseModel):
     event_id: str
     chapter: int = Field(ge=1)
+    # Optional for persisted v1 commits. Producers of new long-term fact
+    # events are required to provide it by chapter_commit_schema.
+    sequence: int | None = Field(default=None, ge=1)
+    # Model-extracted events are evidence-backed but not author-verified.
+    # HumanReviewService upgrades only explicitly confirmed candidates.
+    verification: Literal["supported", "verified"] = "supported"
     event_type: Literal[
         "character_state_changed",
         "relationship_changed",
