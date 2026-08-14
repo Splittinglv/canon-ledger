@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Regression tests for default, fact-only writing-context retrieval."""
+"""默认仅检索事实型写作上下文的回归测试。"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -87,7 +87,7 @@ def _trusted_commit(chapter: int = 3) -> dict:
 
 
 def _write_trusted_commit(project_root: Path, chapter: int = 3) -> dict:
-    """Persist a complete, manuscript-bound commit for read-path trust tests."""
+    """持久化一个完整且已绑定正文的提交，用于读取路径可信性测试。"""
     from data_modules.chapter_commit_service import ChapterCommitService
     from data_modules.chapter_content_binding import build_chapter_binding
 
@@ -146,7 +146,7 @@ def _stub_read_only_bm25(monkeypatch, adapter: _FakeAdapter) -> None:
 
 
 def test_neutral_outline_queries_prior_facts_through_bm25(monkeypatch, tmp_path):
-    """Quiet outlines must not need a genre/topic keyword to be retrievable."""
+    """平静的章纲无需题材或主题关键词也应能够被检索。"""
     adapter = _FakeAdapter(bm25_rows=[_hit()])
     _permit_test_hits(monkeypatch, tmp_path)
     _stub_read_only_bm25(monkeypatch, adapter)
@@ -160,7 +160,7 @@ def test_neutral_outline_queries_prior_facts_through_bm25(monkeypatch, tmp_path)
     )
 
     assert len(adapter.bm25_calls) == 1
-    assert adapter.bm25_calls[0]["chapter"] == 3  # only accepted facts through N - 1
+    assert adapter.bm25_calls[0]["chapter"] == 3  # 只读取截至第 N-1 章已接受的事实
     assert "交付药箱并问清去向" in payload["query"]
     assert "晨雾里，阿青整理药箱" in payload["query"]
     assert "人物关系与动机" not in payload["query"]
@@ -172,7 +172,7 @@ def test_neutral_outline_queries_prior_facts_through_bm25(monkeypatch, tmp_path)
 
 
 def test_first_chapter_is_non_blocking_empty_prior_index(monkeypatch, tmp_path):
-    """Chapter one must never query a possibly stale same-chapter index row."""
+    """第一章绝不能查询可能过期的同章索引记录。"""
     payload = load_rag_assist(
         tmp_path,
         chapter=1,
@@ -277,8 +277,7 @@ def test_valid_retrieval_store_does_not_create_structured_index(monkeypatch, tmp
     )
     assert not cfg.index_db.exists()
 
-    # This row lacks a commit marker, so it is filtered, but the default
-    # context lookup must still be read-only with respect to index.db.
+    # 该记录缺少提交标记，因此会被过滤；默认上下文查询对 index.db 仍必须保持只读。
     payload = load_rag_assist(
         tmp_path,
         chapter=4,
@@ -472,7 +471,7 @@ def test_read_path_rejects_commit_file_whose_meta_chapter_does_not_match(
     payload = load_rag_assist(
         tmp_path,
         chapter=4,
-        outline="secret leader",
+        outline="暗线首领",
         config=_config(tmp_path),
     )
 
@@ -480,7 +479,7 @@ def test_read_path_rejects_commit_file_whose_meta_chapter_does_not_match(
 
 
 def test_missing_goal_and_outline_skips_generic_chapter_only_query(monkeypatch, tmp_path):
-    """A bare `第N章` must not recall arbitrary facts via Chinese characters."""
+    """只有“第N章”时，不得仅凭汉字召回任意事实。"""
     payload = load_rag_assist(tmp_path, chapter=4, outline="", chapter_goal="", config=_config(tmp_path))
 
     assert payload["query"] == ""
@@ -492,7 +491,7 @@ def test_missing_goal_and_outline_skips_generic_chapter_only_query(monkeypatch, 
 
 @pytest.mark.asyncio
 async def test_rag_assist_works_inside_an_active_event_loop(monkeypatch, tmp_path):
-    """Synchronous context assembly must remain usable from async hosts."""
+    """同步上下文组装在异步宿主中也必须可用。"""
     semantic_calls = []
 
     async def _semantic_result():
@@ -518,7 +517,7 @@ async def test_rag_assist_works_inside_an_active_event_loop(monkeypatch, tmp_pat
 
 
 def test_embed_internal_bm25_fallback_is_marked_degraded(monkeypatch, tmp_path):
-    """An adapter-internal embedding failure must not masquerade as semantic RAG."""
+    """适配器内部的嵌入失败不得伪装成语义检索。"""
     monkeypatch.setattr(
         rag_context_module,
         "_semantic_search_read_only",
@@ -539,7 +538,7 @@ def test_embed_internal_bm25_fallback_is_marked_degraded(monkeypatch, tmp_path):
 
 
 def test_bm25_result_source_marks_hidden_embed_fallback(monkeypatch, tmp_path):
-    """Older adapters may expose fallback only through result.source."""
+    """旧版适配器可能只通过 result.source 暴露降级信息。"""
     monkeypatch.setattr(
         rag_context_module,
         "_semantic_search_read_only",
@@ -591,7 +590,7 @@ def test_disabled_and_error_rag_payloads_keep_the_complete_envelope(monkeypatch,
 
 
 def test_load_context_exposes_rag_assist_and_uses_runtime_directive_goal(monkeypatch, tmp_path):
-    """The default memory-contract entry point passes the real goal key."""
+    """默认 memory-contract 入口必须传递真实目标字段。"""
     cfg = _config(tmp_path)
     captured = {}
 
@@ -605,7 +604,7 @@ def test_load_context_exposes_rag_assist_and_uses_runtime_directive_goal(monkeyp
         contracts={
             "chapter": {
                 "chapter_directive": {"goal": "让掌柜承认旧约"},
-                "override_allowed": {"chapter_focus": "不应覆盖 directive goal"},
+                "override_allowed": {"chapter_focus": "不应覆盖章纲目标"},
             }
         },
         latest_commit=None,
@@ -623,8 +622,7 @@ def test_load_context_exposes_rag_assist_and_uses_runtime_directive_goal(monkeyp
 
     assert pack.sections["rag_assist"]["reason"] == "no_hit"
     assert captured["chapter"] == 7
-    # The typed chapter directive is the authoritative plan. It must survive
-    # persistence/context sanitization and lead the factual retrieval query.
+    # 类型化章纲指令是权威计划，必须穿过持久化和上下文净化，并用于事实检索查询。
     assert captured["chapter_goal"] == "让掌柜承认旧约"
     assert (
         pack.sections["story_contracts"]["chapter"]["chapter_directive"]["goal"]
@@ -633,7 +631,7 @@ def test_load_context_exposes_rag_assist_and_uses_runtime_directive_goal(monkeyp
 
 
 def test_extract_context_delegates_to_the_same_helper_and_goal_key(monkeypatch, tmp_path):
-    """The legacy extract-context path must not grow a second RAG policy."""
+    """旧版 extract-context 路径不得形成第二套 RAG 策略。"""
     import extract_chapter_context as extract_context_module
 
     captured = {}
@@ -642,8 +640,8 @@ def test_extract_context_delegates_to_the_same_helper_and_goal_key(monkeypatch, 
         captured.update(kwargs)
         return empty_rag_assist(enabled=True, reason="no_hit")
 
-    # Some integration tests reload data_modules; patch the module object the
-    # wrapper will resolve at call time rather than a potentially stale alias.
+    # 某些集成测试会重新加载 data_modules；应修补包装器调用时解析到的模块对象，
+    # 避免使用可能过期的别名。
     import sys
 
     monkeypatch.setattr(

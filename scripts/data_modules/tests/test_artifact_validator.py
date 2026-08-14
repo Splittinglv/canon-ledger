@@ -289,7 +289,7 @@ def test_validate_chapter_commit_checks_expected_chapter(tmp_path):
     assert report["ok"] is False
     assert any(
         item.get("field") == "meta.chapter"
-        and "does not match expected chapter 2" in item["message"]
+        and "与预期章节 2 不一致" in item["message"]
         for item in report["errors"]
     )
 

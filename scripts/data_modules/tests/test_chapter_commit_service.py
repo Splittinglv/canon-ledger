@@ -353,7 +353,7 @@ def test_commit_service_rejects_non_object_extraction_items(tmp_path):
             disambiguation_result={"pending": []},
             extraction_result={
                 "accepted_events": [],
-                "state_deltas": ["realm changed"],
+                "state_deltas": ["境界变化"],
                 "entity_deltas": [],
             },
         )

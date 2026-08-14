@@ -151,7 +151,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" \
 
 必须使用 `Task` 工具调用 `context-agent`，不得由主流程自行整理任务书。
 
-Use the Task tool to run the plugin agent `context-agent`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/context-agent.md`, then execute that spec. Pass Task `model` only when `subagent-models` says `agents["context-agent"].pass_to_task` is true.
+使用 `Task` 工具调用插件 agent `context-agent`。如果 `Task` 不能按名称调用插件 agent，则启动 `generalPurpose` 子代理：先 `Read` `${WEBNOVEL_PLUGIN_ROOT}/agents/context-agent.md`，再严格执行该规范。仅当 `subagent-models` 中 `agents["context-agent"].pass_to_task=true` 时才给 `Task` 传 `model`。
 
 Task:
 - chapter={chapter_num}
@@ -201,7 +201,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" cha
   --format json
 ```
 
-Use the Task tool to run the plugin agent `reviewer`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/reviewer.md`, then execute that spec. Pass Task `model` only when `subagent-models` says `agents["reviewer"].pass_to_task` is true.
+使用 `Task` 工具调用插件 agent `reviewer`。如果 `Task` 不能按名称调用插件 agent，则启动 `generalPurpose` 子代理：先 `Read` `${WEBNOVEL_PLUGIN_ROOT}/agents/reviewer.md`，再严格执行该规范。仅当 `subagent-models` 中 `agents["reviewer"].pass_to_task=true` 时才给 `Task` 传 `model`。
 
 Task:
 - chapter={chapter_num}
@@ -212,6 +212,7 @@ Task:
 - project_root=${PROJECT_ROOT}
 - scripts_dir=${SCRIPTS_DIR}
 - 只返回严格的 reviewer schema JSON，不写任何文件。
+- 除 JSON 字段、固定枚举、路径和正文原样引用外，所有自然语言审查内容使用中文。
 - 不评分、不口头总结。
 
 reviewer 只返回 JSON；主流程负责用 `Write` 把返回的 JSON 写入 `${PROJECT_ROOT}/.webnovel/tmp/review_results.json`（reviewer 不持 Write，是这份 artifact 的非写入方）。随后必须运行 review-pipeline；review-pipeline 会把同一路径覆盖为标准 review_result artifact（含 `blocking_count`），供 precommit gate 与后续提交命令使用。
@@ -248,7 +249,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" rev
 `--minimal` 不调用 reviewer 与 `review-pipeline`，但必须**覆盖写入**本章新的 no-review `review_results.json`（禁止复用旧 artifact），使 Step 5 提交链有有效 `--review-result`（成功标准“审查已落库”对 `--minimal` 的豁免仍成立）：
 
 ```bash
-python -X utf8 -c "import json,os; from pathlib import Path; root=Path(os.environ['PROJECT_ROOT']); ch=int('{chapter_num}'); b=json.loads((root/'.webnovel'/'tmp'/'chapter_binding.json').read_text(encoding='utf-8')); p=root/'.webnovel'/'tmp'/'review_results.json'; p.parent.mkdir(parents=True,exist_ok=True); p.write_text(json.dumps({'chapter':ch,'chapter_binding':b,'issues':[],'issues_count':0,'blocking_count':0,'has_blocking':False,'summary':'minimal mode: reviewer skipped by user-selected --minimal flow','review_skipped':True,'review_mode':'minimal'},ensure_ascii=False,indent=2),encoding='utf-8')"
+python -X utf8 -c "import json,os; from pathlib import Path; root=Path(os.environ['PROJECT_ROOT']); ch=int('{chapter_num}'); b=json.loads((root/'.webnovel'/'tmp'/'chapter_binding.json').read_text(encoding='utf-8')); p=root/'.webnovel'/'tmp'/'review_results.json'; p.parent.mkdir(parents=True,exist_ok=True); p.write_text(json.dumps({'chapter':ch,'chapter_binding':b,'issues':[],'issues_count':0,'blocking_count':0,'has_blocking':False,'summary':'用户选择 minimal 模式，本轮跳过 reviewer','review_skipped':True,'review_mode':'minimal'},ensure_ascii=False,indent=2),encoding='utf-8')"
 ```
 
 ### Step 4：事实修补
@@ -263,7 +264,7 @@ python -X utf8 -c "import json,os; from pathlib import Path; root=Path(os.enviro
 
 必须使用 `Task` 工具调用 `data-agent`，产出 fulfillment_result / disambiguation_result / extraction_result 三份 JSON，并复用 Step 3 的 review_results。
 
-Use the Task tool to run the plugin agent `data-agent`. If Task cannot target a named plugin agent, launch a generalPurpose subagent: first Read `${WEBNOVEL_PLUGIN_ROOT}/agents/data-agent.md`, then execute that spec. Pass Task `model` only when `subagent-models` says `agents["data-agent"].pass_to_task` is true.
+使用 `Task` 工具调用插件 agent `data-agent`。如果 `Task` 不能按名称调用插件 agent，则启动 `generalPurpose` 子代理：先 `Read` `${WEBNOVEL_PLUGIN_ROOT}/agents/data-agent.md`，再严格执行该规范。仅当 `subagent-models` 中 `agents["data-agent"].pass_to_task=true` 时才给 `Task` 传 `model`。
 
 Task:
 - chapter={chapter_num}

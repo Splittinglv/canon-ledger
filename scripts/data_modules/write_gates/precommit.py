@@ -52,12 +52,11 @@ def _binding_issue_for_artifact(
     artifact: str,
     path: Path,
 ) -> dict | None:
-    """Return a blocker when an artifact is not bound to the current manuscript."""
+    """当产物没有绑定当前正文时返回阻断问题。"""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, json.JSONDecodeError):
-        # The authoritative artifact validator reports these failures with more
-        # specific repair instructions.
+        # 权威产物校验器会为这些失败给出更具体的修复说明。
         return None
     if not isinstance(payload, dict):
         return None
@@ -66,7 +65,7 @@ def _binding_issue_for_artifact(
     if not isinstance(binding, dict):
         return issue(
             "artifact.chapter_binding_missing",
-            message=f"{artifact} is not bound to chapter {chapter} manuscript",
+            message=f"{artifact} 未绑定第 {chapter} 章正文",
             path=str(path),
             impact="无法证明审查或事实提取针对当前正文，继续提交可能固化旧稿事实。",
             repair="基于当前正文重新运行 reviewer/data-agent，生成带 chapter_binding 的 artifact。",
@@ -78,7 +77,7 @@ def _binding_issue_for_artifact(
         return None
     return issue(
         "artifact.chapter_binding_invalid",
-        message=f"{artifact} chapter binding is not current: {code}",
+        message=f"{artifact} 的正文绑定不是当前版本：{code}",
         path=str(path),
         impact="artifact 对应的正文与当前磁盘正文不一致，不能作为本次 commit 输入。",
         repair="重新审查当前正文并重新生成全部 data artifacts 后再提交。",
@@ -95,7 +94,7 @@ def run_precommit_gate(project_root: Path, chapter: int) -> dict:
         errors.append(
             issue(
                 "phase_not_ready_for_precommit",
-                message=f"phase {snapshot.phase} is not ready for precommit",
+                message=f"项目阶段 {snapshot.phase} 尚未达到提交前校验条件",
                 impact="项目骨架、规划合同或上一轮投影状态不完整，继续提交会固化不可靠事实。",
                 repair="先运行 project-status/doctor，并按 next_action 修复当前阶段问题。",
                 details=snapshot.to_dict(),
@@ -107,7 +106,7 @@ def run_precommit_gate(project_root: Path, chapter: int) -> dict:
         errors.append(
             issue(
                 "chapter_file_missing",
-                message=f"chapter {chapter} file missing",
+                message=f"缺少第 {chapter} 章正文文件",
                 path=str(project_root / "正文"),
                 impact="没有可提交的正文文件。",
                 repair="先完成正文起草并保存到 正文/。",
@@ -117,7 +116,7 @@ def run_precommit_gate(project_root: Path, chapter: int) -> dict:
         errors.append(
             issue(
                 "chapter_file_empty",
-                message=f"chapter {chapter} file is empty",
+                message=f"第 {chapter} 章正文为空",
                 path=str(chapter_file),
                 impact="空正文不能提交为章节事实。",
                 repair="补齐正文内容后再提交。",
@@ -171,8 +170,7 @@ def run_precommit_gate(project_root: Path, chapter: int) -> dict:
             fulfillment_path.read_text(encoding="utf-8")
         )
     except (FileNotFoundError, OSError, json.JSONDecodeError):
-        # Missing/malformed artifacts are reported by the authoritative
-        # artifact validator above.
+        # 缺失或损坏的产物由上方权威产物校验器报告。
         node_errors = []
     else:
         try:
@@ -191,7 +189,7 @@ def run_precommit_gate(project_root: Path, chapter: int) -> dict:
         errors.append(
             issue(
                 "chapter_contract.must_cover_nodes_invalid",
-                message=f"chapter must-cover nodes are invalid: {contract_error}",
+                message=f"章合同必达节点无效：{contract_error}",
                 path=str(
                     project_root
                     / ".story-system"
@@ -207,7 +205,7 @@ def run_precommit_gate(project_root: Path, chapter: int) -> dict:
         errors.append(
             issue(
                 f"artifact.{code}",
-                message="fulfillment_result does not match chapter must-cover nodes",
+                message="fulfillment_result 与章合同必达节点不一致",
                 path=str(fulfillment_path),
                 impact="章纲必达节点可能被空列表或不完整分类绕过。",
                 repair="重新运行 data-agent，并将章合同 must_cover_nodes 原样复制到 planned_nodes；每项必须归入 covered_nodes 或 missed_nodes。",

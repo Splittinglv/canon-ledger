@@ -15,7 +15,11 @@ from data_modules.chapter_content_binding import (
 )
 
 
-def _write_chapter(project_root, chapter: int, raw: bytes = b"final chapter bytes"):
+def _write_chapter(
+    project_root,
+    chapter: int,
+    raw: bytes = "最终章节正文".encode("utf-8"),
+):
     chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
     chapter_path.write_bytes(raw)
@@ -59,9 +63,9 @@ def test_verify_chapter_binding_returns_stable_artifact_codes(
 
 
 def test_verify_detects_content_change_even_when_byte_length_is_unchanged(tmp_path):
-    chapter_path = _write_chapter(tmp_path, 3, b"old content")
+    chapter_path = _write_chapter(tmp_path, 3, "旧版正文".encode("utf-8"))
     binding = build_chapter_binding(tmp_path, 3)
-    chapter_path.write_bytes(b"new content")
+    chapter_path.write_bytes("新版正文".encode("utf-8"))
 
     assert verify_chapter_binding(tmp_path, 3, binding) == (
         False,
@@ -82,7 +86,7 @@ def test_build_and_verify_report_missing_empty_and_missing_binding(tmp_path):
         build_chapter_binding(tmp_path, 3)
     assert empty.value.code == "chapter_file_empty"
 
-    _write_chapter(tmp_path, 3, b"now populated")
+    _write_chapter(tmp_path, 3, "已经补入正文".encode("utf-8"))
     assert verify_chapter_binding(tmp_path, 3, None) == (
         False,
         "chapter_binding_missing",
@@ -90,10 +94,10 @@ def test_build_and_verify_report_missing_empty_and_missing_binding(tmp_path):
 
 
 def test_build_rejects_ambiguous_flat_and_volume_chapter_files(tmp_path):
-    _write_chapter(tmp_path, 3, b"flat")
+    _write_chapter(tmp_path, 3, "平铺正文".encode("utf-8"))
     volume = tmp_path / "正文" / "第1卷" / "第003章-别稿.md"
     volume.parent.mkdir(parents=True, exist_ok=True)
-    volume.write_bytes(b"volume")
+    volume.write_bytes("分卷正文".encode("utf-8"))
 
     with pytest.raises(ChapterBindingError) as exc_info:
         build_chapter_binding(tmp_path, 3)

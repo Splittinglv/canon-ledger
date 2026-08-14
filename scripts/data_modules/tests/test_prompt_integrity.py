@@ -278,7 +278,7 @@ def test_webnovel_review_skill_uses_unified_reviewer_pipeline():
     skill_text = _read_text(SKILLS_DIR / "webnovel-review" / "SKILL.md")
 
     assert "`reviewer`" in skill_text
-    assert "Use the Task tool to run the plugin agent `reviewer`" in skill_text
+    assert "使用 `Task` 工具调用插件 agent `reviewer`" in skill_text
     assert "subagent_type:" not in skill_text
     assert "review-pipeline" in skill_text
     assert ".webnovel/tmp/review_results.json" in skill_text
@@ -297,13 +297,27 @@ def test_webnovel_review_skill_uses_unified_reviewer_pipeline():
     assert " workflow " not in skill_text
 
 
+def test_reviewer_chain_requires_chinese_natural_language():
+    """审查代理与两个调用入口都必须要求自然语言审查内容使用中文。"""
+    reviewer_text = _read_text(AGENTS_DIR / "reviewer.md")
+    review_skill = _read_text(SKILLS_DIR / "webnovel-review" / "SKILL.md")
+    write_skill = _read_text(SKILLS_DIR / "webnovel-write" / "SKILL.md")
+
+    assert "正文证据引用保持原文" in reviewer_text
+    assert "除 JSON 字段、固定枚举、路径和正文原样引用外" in review_skill
+    assert "除 JSON 字段、固定枚举、路径和正文原样引用外" in write_skill
+    assert "所有自然语言审查内容使用中文" in review_skill
+    assert "所有自然语言审查内容使用中文" in write_skill
+    assert "用户选择 minimal 模式，本轮跳过 reviewer" in write_skill
+
+
 def test_active_skills_use_cursor_task_tool():
     """Cursor 移植：关键 skill 用 Task 调用插件 agent，不再依赖 Claude Agent 工具名。"""
     for skill_file in SKILL_FILES:
         text = _read_text(skill_file)
         fm = _extract_frontmatter(text)
         assert "allowed-tools" not in fm, f"{skill_file.parent.name}: Cursor skill 不应保留 Claude allowed-tools"
-        assert "Use the Agent tool to run `webnovel-writer:" not in text, f"{skill_file.parent.name}: 仍使用 Claude Agent 注册名"
+        assert "webnovel-writer:" not in text, f"{skill_file.parent.name}: 仍使用 Claude Agent 注册名"
 
 
 def test_webnovel_write_skill_uses_explicit_agent_invocation_templates():
@@ -311,7 +325,7 @@ def test_webnovel_write_skill_uses_explicit_agent_invocation_templates():
     text = _read_text(SKILLS_DIR / "webnovel-write" / "SKILL.md")
 
     for subagent in ("context-agent", "reviewer", "data-agent"):
-        assert f"plugin agent `{subagent}`" in text, f"缺少 {subagent} 的插件 agent 显式调用"
+        assert f"插件 agent `{subagent}`" in text, f"缺少 {subagent} 的插件 agent 显式调用"
         assert f"agents/{subagent}.md" in text or (
             subagent == "reviewer" and "agents/reviewer.md" in text
         )
@@ -645,7 +659,7 @@ def test_no_direct_state_writes_in_agents():
 
 
 def test_deconstruction_agent_preserves_init_handoff_and_boundaries():
-    """reference deconstruction must remain extraction-only and init-scoped."""
+    """参考作品拆解必须只做提取，并限定在初始化阶段。"""
     text = _read_text(AGENTS_DIR / "deconstruction-agent.md")
 
     assert "init_reference_research" in text
@@ -693,14 +707,15 @@ def test_deconstruction_agent_preserves_init_handoff_and_boundaries():
 
     assert "不写 `idea_bank.json`" in text
     assert "用户确认后" in text
-    assert "MIT License attribution" not in text
+    forbidden_marker = " ".join(("MIT", "License", "attribution"))
+    assert forbidden_marker not in text
 
 
 def test_webnovel_init_deconstruction_wiring_keeps_confirmation_gate():
-    """init may consume only confirmed, transformed reference patterns."""
+    """初始化流程只能使用已经确认并完成变形的参考模式。"""
     text = _read_text(SKILLS_DIR / "webnovel-init" / "SKILL.md")
 
-    assert "Use the Task tool to run the plugin agent `deconstruction-agent`" in text
+    assert "使用 `Task` 工具调用插件 agent `deconstruction-agent`" in text
     assert "subagent_type:" not in text
     assert "Step 1.5：灵感来源询问" in text
     assert "进入故事核采集前" in text

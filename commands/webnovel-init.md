@@ -3,4 +3,4 @@ name: webnovel-init
 description: 初始化一本新的长篇小说项目
 ---
 
-Follow the `webnovel-init` skill. User argument: the optional book title or premise.
+遵循 `webnovel-init` 技能。用户参数：可选的书名或故事前提。

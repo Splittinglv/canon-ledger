@@ -76,7 +76,7 @@ def _read_json_artifact(path: str | Path) -> tuple[Any, dict[str, Any] | None]:
     if not artifact_path.is_file():
         return None, _issue(
             ERROR_MISSING,
-            message=f"artifact missing: {artifact_path}",
+            message=f"缺少产物：{artifact_path}",
             path=str(artifact_path),
             impact="提交前 artifact 不完整，无法可靠生成 chapter commit。",
             repair="重新运行 reviewer/data-agent，或按 schema 补齐该 JSON 文件。",
@@ -86,7 +86,7 @@ def _read_json_artifact(path: str | Path) -> tuple[Any, dict[str, Any] | None]:
     except json.JSONDecodeError as exc:
         return None, _issue(
             ERROR_SCHEMA,
-            message=f"invalid JSON: {exc}",
+            message=f"JSON 无效：{exc}",
             path=str(artifact_path),
             impact="artifact 无法被 runtime 读取。",
             repair="修复 JSON 格式，确保文件为 UTF-8。",
@@ -94,7 +94,7 @@ def _read_json_artifact(path: str | Path) -> tuple[Any, dict[str, Any] | None]:
     except OSError as exc:
         return None, _issue(
             ERROR_SCHEMA,
-            message=f"artifact read failed: {exc}",
+            message=f"读取产物失败：{exc}",
             path=str(artifact_path),
             impact="artifact 无法被 runtime 读取。",
             repair="检查文件权限和路径是否正确。",
@@ -115,7 +115,7 @@ def _policy_issues(artifact: str, payload: dict[str, Any], path: str) -> list[di
             issues.append(
                 _issue(
                     ERROR_BLOCKING_REVIEW,
-                    message=f"review_result has {blocking_count} blocking issue(s)",
+                    message=f"review_result 含 {blocking_count} 个阻断问题",
                     path=path,
                     field="blocking_count",
                     impact="存在阻断级审查问题时不应进入提交。",
@@ -128,7 +128,7 @@ def _policy_issues(artifact: str, payload: dict[str, Any], path: str) -> list[di
             issues.append(
                 _issue(
                     ERROR_MISSED_OUTLINE_NODE,
-                    message=f"fulfillment_result missed {len(missed)} planned node(s)",
+                    message=f"fulfillment_result 遗漏 {len(missed)} 个计划节点",
                     path=path,
                     field="missed_nodes",
                     impact="大纲必须节点未覆盖，提交会把偏离章节固化为事实。",
@@ -141,7 +141,7 @@ def _policy_issues(artifact: str, payload: dict[str, Any], path: str) -> list[di
             issues.append(
                 _issue(
                     ERROR_PENDING_DISAMBIGUATION,
-                    message=f"disambiguation_result has {len(pending)} pending item(s)",
+                    message=f"disambiguation_result 含 {len(pending)} 个待消歧项",
                     path=path,
                     field="pending",
                     impact="未消歧实体会污染角色、关系和事件投影。",
@@ -153,7 +153,7 @@ def _policy_issues(artifact: str, payload: dict[str, Any], path: str) -> list[di
 
 def validate_artifact_payload(artifact: str, payload: Any, *, path: str = "") -> dict[str, Any]:
     if artifact not in ARTIFACT_SCHEMAS:
-        raise ValueError(f"unknown artifact: {artifact}")
+        raise ValueError(f"未知产物：{artifact}")
 
     report = _empty_report(artifact, path)
     schema = ARTIFACT_SCHEMAS[artifact]
@@ -258,7 +258,7 @@ def validate_chapter_commit(
         report["errors"].append(
             _issue(
                 ERROR_SCHEMA,
-                message="chapter_commit must be a JSON object",
+                message="chapter_commit 必须是 JSON 对象",
                 path=str(commit_path),
                 impact="commit 文件无法作为事实主链读取。",
                 repair="从备份恢复 commit，或重新执行 chapter-commit。",
@@ -273,7 +273,7 @@ def validate_chapter_commit(
         report["errors"].append(
             _issue(
                 ERROR_SCHEMA,
-                message=f"invalid chapter commit envelope: {_schema_error_message(exc)}",
+                message=f"chapter commit 信封无效：{_schema_error_message(exc)}",
                 path=str(commit_path),
                 impact="commit 顶层、provenance 与四份 artifact 必须绑定同一份正文。",
                 repair="基于当前正文重新运行 review、data 和 chapter-commit。",
@@ -295,8 +295,8 @@ def validate_chapter_commit(
                 _issue(
                     ERROR_SCHEMA,
                     message=(
-                        f"chapter_commit chapter {declared_chapter or 'missing'} "
-                        f"does not match expected chapter {expected}"
+                        f"chapter_commit 章节 {declared_chapter or '缺失'} "
+                        f"与预期章节 {expected} 不一致"
                     ),
                     path=str(commit_path),
                     field="meta.chapter",
@@ -311,7 +311,7 @@ def validate_chapter_commit(
             report["errors"].append(
                 _issue(
                     ERROR_SCHEMA,
-                    message=f"chapter_commit missing {artifact}",
+                    message=f"chapter_commit 缺少 {artifact}",
                     path=str(commit_path),
                     field=artifact,
                     impact="commit 文件缺少提交 artifact 快照。",
@@ -330,7 +330,7 @@ def validate_chapter_commit(
             report["errors"].append(
                 _issue(
                     ERROR_PROJECTION_INCOMPLETE,
-                    message=f"projection {writer} status missing",
+                    message=f"投影 {writer} 缺少状态",
                     path=str(commit_path),
                     field=f"projection_status.{writer}",
                     impact="postcommit 必须确认 state/index/summary/memory/vector 五项投影状态。",
@@ -341,7 +341,7 @@ def validate_chapter_commit(
             report["errors"].append(
                 _issue(
                     ERROR_PROJECTION_FAILURE,
-                    message=f"projection {writer} failed: {status}",
+                    message=f"投影 {writer} 失败：{status}",
                     path=str(commit_path),
                     field=f"projection_status.{writer}",
                     impact="提交事实已生成，但 read-model 投影不完整。",
@@ -352,7 +352,7 @@ def validate_chapter_commit(
             report["errors"].append(
                 _issue(
                     ERROR_PROJECTION_INCOMPLETE,
-                    message=f"projection {writer} status is {status}",
+                    message=f"投影 {writer} 的状态为 {status}",
                     path=str(commit_path),
                     field=f"projection_status.{writer}",
                     impact="postcommit 只接受 projection 状态 done 或 skipped。",

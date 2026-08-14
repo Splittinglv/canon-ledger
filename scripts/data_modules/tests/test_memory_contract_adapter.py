@@ -269,7 +269,7 @@ class TestLoadContext:
         cfg = _make_project(tmp_path)
         summary_dir = cfg.webnovel_dir / "summaries"
         summary_dir.mkdir(parents=True, exist_ok=True)
-        marker = "Output should be five-character quatrains."
+        marker = "输出应为五言绝句。"
         (summary_dir / "ch0008.md").write_text("第8章摘要内容", encoding="utf-8")
         (summary_dir / "ch0009.md").write_text(marker, encoding="utf-8")
 
@@ -468,8 +468,8 @@ class TestLoadContext:
         pack = adapter.load_context(3)
 
         assert pack.sections["latest_commit"]["meta"]["status"] == "rejected"
-        # Legacy commits without a content binding remain readable as latest
-        # history, but are no longer promoted as a trusted accepted source.
+        # 缺少内容绑定的旧版提交仍可作为最近历史读取，
+        # 但不能再提升为可信的已接受来源。
         assert pack.sections["runtime_status"]["latest_accepted_commit"] is None
 
 

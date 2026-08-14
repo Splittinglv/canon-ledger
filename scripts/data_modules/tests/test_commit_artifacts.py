@@ -14,30 +14,30 @@ def test_extraction_result_prefers_canonical_nested_payload():
     payload = {
         "extraction_result": {
             "accepted_events": [{"event_id": "nested"}],
-            "summary_text": "nested summary",
+            "summary_text": "规范摘要",
         },
         "accepted_events": [{"event_id": "legacy"}],
-        "summary_text": "legacy summary",
+        "summary_text": "旧版摘要",
     }
 
     extraction = extraction_result_from_commit(payload)
 
     assert extraction["accepted_events"] == [{"event_id": "nested"}]
-    assert extraction["summary_text"] == "nested summary"
+    assert extraction["summary_text"] == "规范摘要"
     assert extraction_list(payload, "accepted_events") == [{"event_id": "nested"}]
-    assert extraction_text(payload, "summary_text") == "nested summary"
+    assert extraction_text(payload, "summary_text") == "规范摘要"
 
 
 def test_extraction_result_keeps_read_compatibility_for_legacy_commit_payload():
     payload = {
         "accepted_events": [{"event_id": "legacy"}],
-        "summary_text": "legacy summary",
+        "summary_text": "旧版摘要",
     }
 
     extraction = extraction_result_from_commit(payload)
 
     assert extraction["accepted_events"] == [{"event_id": "legacy"}]
-    assert extraction["summary_text"] == "legacy summary"
+    assert extraction["summary_text"] == "旧版摘要"
 
 
 def test_retrieval_marker_tracks_fact_snapshot_not_projection_status():

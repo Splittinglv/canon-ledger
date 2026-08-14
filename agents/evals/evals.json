@@ -19,7 +19,8 @@
         "每个 issue 都有 severity、category、location、description 字段",
         "每个 issue 都有 evidence 字段且非空",
         "没有输出 overall_score（reviewer 不评分）",
-        "没有输出 pass/fail 判定（reviewer 只列问题）"
+        "没有输出 pass/fail 判定（reviewer 只列问题）",
+        "除 JSON 字段、固定枚举、路径和正文原样引用外，所有审查说明都使用自然中文，没有英文句子"
       ]
     },
     {
@@ -34,7 +35,8 @@
       "expectations": [
         "输出是合法 JSON",
         "不会把萧炎的斗者九星报告为设定冲突（与 state.json 一致）",
-        "不会虚构 state.json 中不存在的信息来报告问题"
+        "不会虚构 state.json 中不存在的信息来报告问题",
+        "除 JSON 字段、固定枚举、路径和正文原样引用外，所有审查说明都使用自然中文，没有英文句子"
       ]
     },
     {
@@ -47,7 +49,8 @@
       ],
       "expectations": [
         "输出是合法 JSON",
-        "至少有 1 个 continuity 或 timeline 类型的 issue 提到时间跳跃（上章黄昏，本章晨光）"
+        "至少有 1 个 continuity 或 timeline 类型的 issue 提到时间跳跃（上章黄昏，本章晨光）",
+        "除 JSON 字段、固定枚举、路径和正文原样引用外，所有审查说明都使用自然中文，没有英文句子"
       ]
     }
   ]

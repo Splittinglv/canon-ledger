@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-RAGAdapter tests
-"""
+"""RAGAdapter 测试。"""
 
 import sys
 import json
@@ -159,8 +157,8 @@ async def test_no_key_storage_updates_bm25_content_and_clears_stale_embedding(tm
     initial = await adapter.store_chunks([chunk])
     assert initial.mode == "vector"
 
-    # Switch to the real no-key client.  Its session methods are guarded so
-    # every retrieval path proves it degrades before any HTTP setup/retry.
+    # 切换为实际的无密钥客户端。会话方法已设置防护，确保每条检索路径
+    # 都会在任何 HTTP 初始化或重试前完成降级。
     adapter.api_client = ModalAPIClient(cfg)
     session_calls = {"embed": 0, "rerank": 0}
 

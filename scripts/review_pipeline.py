@@ -156,7 +156,7 @@ def build_review_artifacts(
     chapter_binding_path: Path | None = None,
 ) -> Dict[str, Any]:
     if chapter_binding_path is None:
-        raise ValueError("--chapter-binding is required")
+        raise ValueError("必须提供 --chapter-binding")
     expected_binding = json.loads(chapter_binding_path.read_text(encoding="utf-8"))
     expected_binding = require_chapter_binding(
         project_root,
@@ -170,8 +170,8 @@ def build_review_artifacts(
         expected_binding=expected_binding,
     )
     if not chapter_bindings_equal(result.chapter_binding, expected_binding):
-        raise ValueError("review_result.chapter_binding does not match expected manuscript")
-    # Rehash immediately before any report/metrics/anti-pattern side effect.
+        raise ValueError("review_result.chapter_binding 与预期正文不一致")
+    # 在写入报告、指标或反模式前立即重新校验正文摘要。
     require_chapter_binding(project_root, chapter, expected_binding)
     anti_patterns_added = append_ai_flavor_anti_patterns(project_root, result)
     metrics = result.to_metrics_dict(report_file=report_file)
@@ -191,7 +191,7 @@ def build_review_artifacts(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Review pipeline v6")
+    parser = argparse.ArgumentParser(description="审查流水线 v6")
     parser.add_argument("--project-root", required=True)
     parser.add_argument("--chapter", type=int, required=True)
     parser.add_argument("--review-results", required=True)
@@ -213,8 +213,7 @@ def main() -> None:
         chapter_binding_path=Path(args.chapter_binding),
     )
 
-    # The report and database metrics must describe the same bytes that were
-    # reviewed, even if the manuscript was edited while the pipeline ran.
+    # 即使流水线运行期间正文被编辑，报告和数据库指标也必须对应同一份已审正文。
     require_chapter_binding(
         project_root,
         args.chapter,

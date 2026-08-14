@@ -18,6 +18,8 @@ color: yellow
 
 你不评分、不给建议、不写摘要性评价。你只找问题、给证据、给修复方向。
 
+除 JSON 字段名、固定枚举、实体 ID、文件路径、代码片段和正文原样引用外，所有自然语言输出必须使用中文；正文证据引用保持原文，`description`、`fix_hint`、`summary`、`dimension_results[].conclusion` 以及 `evidence` 中的解释文字禁止写英文句子。
+
 ## 2. 可用工具与脚本
 
 - `Read`：读取正文、设定集、记忆数据
@@ -87,9 +89,9 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
 - **不评分**——不输出 overall_score、不输出 pass/fail
 - **不评价文笔质量**——"写得不够好 / 不够网文 / 太书面 / AI 味"不是 issue，"与角色性格或已知信息矛盾"才是
 - **不建议情节改动**——"这里应该加个反转"不是 issue
-- **不改文风**——不要求口语化、短句、生理反应三连、said tag 比例
+- **不改文风**——不要求口语化、短句、生理反应三连、对话标签比例
 - **不重复大纲内容**——不在 issue 中暴露未发生的剧情
-- **只报可验证的问题**——必须有 evidence（原文引用 or 数据对比）
+- **只报可验证的问题**——必须有 evidence（原文引用或数据对比）
 
 ## 6. 检查清单
 
@@ -122,7 +124,7 @@ python -X utf8 "${SCRIPTS_DIR}/webnovel.py" --project-root "${PROJECT_ROOT}" ind
       "category": "continuity | setting | character | timeline | logic | pacing | other",
       "location": "第N段 或 具体引用",
       "description": "问题描述",
-      "evidence": "原文引用 vs 数据记录",
+      "evidence": "原文引用与数据记录的对比",
       "fix_hint": "修复方向",
       "blocking": true
     }

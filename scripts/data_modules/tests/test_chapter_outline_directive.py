@@ -24,7 +24,7 @@ def test_load_chapter_execution_directive_from_volume_outline(tmp_path):
                 "- **目标：搞清楚借据条款的荒谬**",
                 "**阻力**：杂役不能随意离开宗门",
                 "**代价**：暴露自己懂账",
-                "- 时间锚点：D-Day 清晨",
+                "- 时间锚点：决战日清晨",
                 "- 章内时间跨度：一炷香",
                 "- 与上章间隔：紧接上章",
                 "- 倒计时状态：三日内还债",
@@ -57,7 +57,7 @@ def test_load_chapter_execution_directive_from_volume_outline(tmp_path):
     assert directive["goal"] == "搞清楚借据条款的荒谬"
     assert directive["obstacles"] == "杂役不能随意离开宗门"
     assert directive["cost"] == "暴露自己懂账"
-    assert directive["time_anchor"] == "D-Day 清晨"
+    assert directive["time_anchor"] == "决战日清晨"
     assert directive["chapter_span"] == "一炷香"
     assert directive["previous_chapter_gap"] == "紧接上章"
     assert directive["countdown"] == "三日内还债"

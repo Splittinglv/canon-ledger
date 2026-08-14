@@ -14,7 +14,7 @@ from data_modules.review_schema import (
 
 
 def _binding(chapter: int) -> dict:
-    raw = b"reviewed"
+    raw = "待审正文".encode("utf-8")
     return {
         "schema_version": "webnovel-chapter-content-binding/v1",
         "chapter": chapter,
@@ -30,7 +30,7 @@ def test_review_issue_blocking_defaults():
         severity="critical",
         category="continuity",
         location="第3段",
-        description="主角使用了已失去的能力",
+        description="主角在上章已经失去灵力，本章却直接施展了御剑术。",
     )
     assert issue.blocking is True
 
@@ -41,7 +41,7 @@ def test_review_issue_non_critical_not_blocking():
         severity="high",
         category="setting",
         location="第7段",
-        description="时间线矛盾",
+        description="倒计时从三天无故回到了五天。",
     )
     assert issue.blocking is False
 
@@ -51,11 +51,27 @@ def test_review_result_counts():
     result = ReviewResult(
         chapter=10,
         issues=[
-            ReviewIssue(severity="critical", category="continuity", location="p1", description="d1"),
-            ReviewIssue(severity="high", category="setting", location="p2", description="d2"),
-            ReviewIssue(severity="high", category="timeline", location="p3", description="d3", blocking=True),
+            ReviewIssue(
+                severity="critical",
+                category="continuity",
+                location="第1段",
+                description="主角在上章已经失去灵力，本章却直接施展了御剑术。",
+            ),
+            ReviewIssue(
+                severity="high",
+                category="setting",
+                location="第4段",
+                description="宗门禁地被写成任何弟子都能随意进入。",
+            ),
+            ReviewIssue(
+                severity="high",
+                category="timeline",
+                location="第7段",
+                description="倒计时从三天无故回到了五天。",
+                blocking=True,
+            ),
         ],
-        summary="测试",
+        summary="本章共发现三处事实一致性问题。",
     )
     assert result.blocking_count == 2
     assert result.issues_count == 3
@@ -63,7 +79,7 @@ def test_review_result_counts():
 
 
 def test_review_result_no_issues():
-    result = ReviewResult(chapter=10, issues=[], summary="无问题")
+    result = ReviewResult(chapter=10, issues=[], summary="本章未发现需要处理的问题。")
     assert result.blocking_count == 0
     assert result.has_blocking is False
 
@@ -72,17 +88,23 @@ def test_review_result_to_dict_roundtrip():
     result = ReviewResult(
         chapter=10,
         issues=[
-            ReviewIssue(severity="medium", category="ai_flavor", location="p5", description="AI味重",
-                        evidence="'稳住心神'出现3次", fix_hint="替换为具体动作描写"),
+            ReviewIssue(
+                severity="medium",
+                category="ai_flavor",
+                location="第5段",
+                description="同一句“稳住心神”在相邻段落中重复出现了三次。",
+                evidence="“稳住心神”在相邻三段中各出现一次。",
+                fix_hint="把其中两处改成角色当时采取的具体动作。",
+            ),
         ],
-        summary="1个AI味问题",
+        summary="本章发现一处重复句式问题。",
     )
     d = result.to_dict()
     assert d["chapter"] == 10
     assert d["blocking_count"] == 0
     assert len(d["issues"]) == 1
     assert d["issues"][0]["category"] == "ai_flavor"
-    assert d["issues"][0]["fix_hint"] == "替换为具体动作描写"
+    assert d["issues"][0]["fix_hint"] == "把其中两处改成角色当时采取的具体动作。"
 
 
 def test_parse_review_output_from_dict():
@@ -90,10 +112,16 @@ def test_parse_review_output_from_dict():
         "chapter": 5,
         "chapter_binding": _binding(5),
         "issues": [
-            {"severity": "critical", "category": "continuity", "location": "p1",
-             "description": "矛盾", "evidence": "证据", "fix_hint": "修复"},
+            {
+                "severity": "critical",
+                "category": "continuity",
+                "location": "第1段",
+                "description": "上章写明木桥已经坠入河中，本章众人却直接从桥上通过。",
+                "evidence": "上章末尾写着“木桥坠入河中”，本章第1段却写着“众人踏桥过河”。",
+                "fix_hint": "补充木桥被修复的经过，或改用其他过河方式。",
+            },
         ],
-        "summary": "1个严重问题",
+        "summary": "本章发现一处严重的连贯性问题。",
     }
     result = parse_review_output(chapter=5, raw=raw)
     assert result.chapter == 5
@@ -105,9 +133,9 @@ def test_parse_review_output_tolerates_missing_fields():
         "chapter": 1,
         "chapter_binding": _binding(1),
         "issues": [
-            {"severity": "low", "description": "小问题"},
+            {"severity": "low", "description": "同一封信在本章被重复拆开了两次。"},
         ],
-        "summary": "轻微",
+        "summary": "本章发现一处轻微的事实问题。",
     }
     result = parse_review_output(chapter=1, raw=raw)
     assert result.issues[0].category == "other"
@@ -118,10 +146,20 @@ def test_review_result_to_metrics_dict():
     result = ReviewResult(
         chapter=10,
         issues=[
-            ReviewIssue(severity="critical", category="continuity", location="p1", description="d1"),
-            ReviewIssue(severity="high", category="ai_flavor", location="p2", description="d2"),
+            ReviewIssue(
+                severity="critical",
+                category="continuity",
+                location="第1段",
+                description="上章写明木桥已经坠入河中，本章众人却直接从桥上通过。",
+            ),
+            ReviewIssue(
+                severity="high",
+                category="ai_flavor",
+                location="第5段",
+                description="同一句“稳住心神”在相邻段落中重复出现了三次。",
+            ),
         ],
-        summary="测试",
+        summary="本章发现两处需要处理的问题。",
     )
     metrics = result.to_metrics_dict()
     assert metrics["chapter"] == 10
@@ -133,7 +171,9 @@ def test_review_result_to_metrics_dict():
     assert "ai_flavor" in metrics["categories"]
     assert metrics["severity_counts"]["critical"] == 1
     assert metrics["severity_counts"]["high"] == 1
-    assert metrics["critical_issues"] == ["d1"]
+    assert metrics["critical_issues"] == [
+        "上章写明木桥已经坠入河中，本章众人却直接从桥上通过。"
+    ]
     assert metrics["report_file"] == ""
     assert metrics["overall_score"] < 100
     assert metrics["dimension_scores"]["continuity"] < 100

@@ -80,12 +80,12 @@ def test_sanitize_story_contracts_leaves_empty_contracts_empty():
 
 def test_sanitize_story_contracts_rebuilds_only_consistency_fields():
     markers = {
-        "master": "Write with a spare, muscular rhythm.",
+        "master": "采用简练有力的短句文风。",
         "row": "让叙述像水一样流动。",
-        "chapter": "Render conversations as a screenplay.",
-        "volume": "Choose concrete imagery over abstractions.",
+        "chapter": "把对白改写成剧本格式。",
+        "volume": "多用具体意象，少用抽象表达。",
         "scene": "所有场面呈现出黑色电影气息。",
-        "review": "Keep every scene sparse and visual.",
+        "review": "每个场景都保持简洁并具画面感。",
     }
     cleaned = sanitize_story_contracts(
         {
@@ -133,7 +133,7 @@ def test_sanitize_story_contracts_rebuilds_only_consistency_fields():
 
 def test_sanitize_story_contracts_drops_non_object_contract_aliases():
     cleaned = sanitize_story_contracts(
-        {"master": "Write with a spare, muscular rhythm."}
+        {"master": "采用简练有力的短句文风。"}
     )
 
     assert cleaned == {"master": {}}
@@ -189,7 +189,7 @@ def test_sanitize_story_contracts_does_not_reinterpret_authorized_plot_language(
         "反派覆盖旧合同上的印章",
         "确认第一人称证词存在矛盾",
         "找到负责旁白的失踪演员",
-        "The AI must override the reactor constraints before meltdown.",
+        "人工智能必须在熔毁前解除反应堆限制。",
     ]
     cleaned = sanitize_story_contracts(
         {

@@ -230,9 +230,9 @@ def test_hard_constraint_text_is_never_silently_truncated(tmp_path):
 @pytest.mark.parametrize(
     "directive",
     [
-        "Write like Hemingway.",
-        "Make it lyrical.",
-        "Favor an omniscient voice.",
+        "请模仿海明威的文风。",
+        "请用抒情诗意的笔调写。",
+        "采用全知视角叙述。",
         "请以冷峻克制的笔调描述故事。",
         "文字要简洁有力。",
         "只使用简单语言。",
@@ -252,7 +252,7 @@ def test_soft_index_evidence_is_bounded_before_target_chapter(tmp_path):
         StateChangeMeta("hero", "identity", "trusted", "FUTURE_SECRET", "future", 10)
     )
     index.upsert_relationship(
-        RelationshipMeta("hero", "ally", "盟友", "prior relation", 1)
+        RelationshipMeta("hero", "ally", "盟友", "此前关系", 1)
     )
     index.upsert_relationship(
         RelationshipMeta("hero", "future", "FUTURE_RELATION", "future", 10)
@@ -264,7 +264,7 @@ def test_soft_index_evidence_is_bounded_before_target_chapter(tmp_path):
     serialized = str(pack)
 
     assert "trusted" in serialized
-    assert "prior relation" in serialized
+    assert "此前关系" in serialized
     assert "prior-person" in serialized
     assert "FUTURE_SECRET" not in serialized
     assert "FUTURE_RELATION" not in serialized

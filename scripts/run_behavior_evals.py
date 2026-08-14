@@ -71,7 +71,7 @@ def _eval_skill_frontmatter(root: Path, case: dict[str, Any]) -> dict[str, Any]:
     return _result(
         case,
         passed=not missing,
-        reason="all skills have name and description" if not missing else "skill frontmatter missing",
+        reason="所有技能都包含 name 和 description。" if not missing else "技能前置元数据不完整。",
         evidence=missing,
     )
 
@@ -80,13 +80,13 @@ def _eval_skill_contract(root: Path, case: dict[str, Any]) -> dict[str, Any]:
     skill_name = str(case.get("skill") or "").strip()
     path = _plugin_root(root) / "skills" / skill_name / "SKILL.md"
     if not path.is_file():
-        return _result(case, passed=False, reason="skill missing", evidence=[str(path)])
+        return _result(case, passed=False, reason="技能文件不存在。", evidence=[str(path)])
     text = _read(path)
     missing = [str(item) for item in case.get("required") or [] if str(item) not in text]
     for group in case.get("required_any") or []:
         options = [str(item) for item in group]
         if options and not any(option in text for option in options):
-            missing.append("one of: " + " | ".join(options))
+            missing.append("至少需要其中一项：" + " | ".join(options))
 
     ordering_errors: list[str] = []
     for pair in case.get("ordered") or []:
@@ -96,7 +96,7 @@ def _eval_skill_contract(root: Path, case: dict[str, Any]) -> dict[str, Any]:
         left_pos = text.find(left)
         right_pos = text.find(right)
         if left_pos < 0 or right_pos < 0 or left_pos >= right_pos:
-            ordering_errors.append(f"{left} before {right}")
+            ordering_errors.append(f"{left} 应位于 {right} 之前")
 
     forbidden = [
         str(pattern)
@@ -107,7 +107,7 @@ def _eval_skill_contract(root: Path, case: dict[str, Any]) -> dict[str, Any]:
     return _result(
         case,
         passed=passed,
-        reason=f"{skill_name} contract holds" if passed else f"{skill_name} contract drifted",
+        reason=f"{skill_name} 契约符合预期。" if passed else f"{skill_name} 契约发生偏移。",
         evidence=missing + ordering_errors + forbidden or [str(path.relative_to(root))],
     )
 
@@ -127,11 +127,11 @@ def _eval_write_blocking_gate(root: Path, case: dict[str, Any]) -> dict[str, Any
     commit_pos = text.find("chapter-commit")
     ordering_ok = precommit_pos >= 0 and commit_pos >= 0 and precommit_pos < commit_pos
     if not ordering_ok:
-        missing.append("precommit gate must appear before chapter-commit")
+        missing.append("提交前闸门必须位于 chapter-commit 之前")
     return _result(
         case,
         passed=not missing,
-        reason="write flow keeps blocking and runtime gates" if not missing else "write flow contract missing",
+        reason="写作流程保留了阻断规则和运行时闸门。" if not missing else "写作流程契约不完整。",
         evidence=missing or [str(path.relative_to(root))],
     )
 
@@ -155,7 +155,7 @@ def _eval_data_agent_boundary(root: Path, case: dict[str, Any]) -> dict[str, Any
     return _result(
         case,
         passed=not missing and not forbidden,
-        reason="data-agent boundary is artifact-only" if not missing and not forbidden else "data-agent boundary drifted",
+        reason="data-agent 只负责生成产物，职责边界符合预期。" if not missing and not forbidden else "data-agent 职责边界发生偏移。",
         evidence=missing + forbidden or [str(path.relative_to(root))],
     )
 
@@ -184,7 +184,7 @@ def _eval_artifact_ownership(root: Path, case: dict[str, Any]) -> dict[str, Any]
     return _result(
         case,
         passed=not missing,
-        reason="artifact ownership matches tools and prompts" if not missing else "artifact ownership drifted",
+        reason="产物写入权与工具及提示词一致。" if not missing else "产物写入权发生偏移。",
         evidence=missing or ["reviewer→主流程 review_results.json；data-agent→tmp artifacts"],
     )
 
@@ -233,7 +233,7 @@ def _eval_commit_projection_runtime(root: Path, case: dict[str, Any]) -> dict[st
     return _result(
         case,
         passed=ok,
-        reason="chapter commit drives state projection" if ok else "chapter commit projection failed",
+        reason="章节提交能够驱动状态投影。" if ok else "章节提交未能正确驱动状态投影。",
         evidence=[str(projected.get("projection_status"))],
     )
 
@@ -244,12 +244,12 @@ def _eval_dashboard_read_only(root: Path, case: dict[str, Any]) -> dict[str, Any
     forbidden = re.findall(r"@app\.(post|put|delete|patch)\b", text)
     get_only = 'allow_methods=["GET"]' in text or 'allow_methods=[\n        "GET"' in text
     ok = not forbidden and get_only and "strictly read" not in text.lower()
-    # The module's Chinese docstring is the authoritative local signal.
+    # 模块中的中文说明是权威的本地判据。
     ok = ok or (not forbidden and "仅提供 GET 接口" in text)
     return _result(
         case,
         passed=ok,
-        reason="dashboard is GET-only" if ok else "dashboard write endpoint detected",
+        reason="仪表盘只提供 GET 接口。" if ok else "仪表盘中发现了写入接口。",
         evidence=forbidden or [str(path.relative_to(root))],
     )
 
@@ -300,7 +300,7 @@ def _write_report_artifacts(project_root: Path, *, chapter: int = 1, review_skip
         "issues_count": len(issues),
         "blocking_count": 1 if blocking else 0,
         "has_blocking": bool(blocking),
-        "summary": "minimal mode: reviewer skipped" if review_skipped else "ok",
+        "summary": "用户选择最简模式，本章未执行完整审查。" if review_skipped else "本章审查未发现阻断问题。",
         "chapter_binding": binding,
     }
     if review_skipped:
@@ -410,7 +410,7 @@ def _eval_user_report_probe(root: Path, case: dict[str, Any]) -> dict[str, Any]:
                         "blocking_count": 0,
                         "review_skipped": True,
                         "review_mode": "minimal",
-                        "summary": "minimal mode: reviewer skipped",
+                        "summary": "用户选择最简模式，本章未执行完整审查。",
                     }
                 ),
             )
@@ -456,11 +456,11 @@ def _eval_user_report_probe(root: Path, case: dict[str, Any]) -> dict[str, Any]:
             ok = report["overall_status"] == "needs_user" and any(item.get("code") == "blocking_review" for item in report["issues"]["must_handle"])
             evidence = [json.dumps(report["issues"], ensure_ascii=False)]
         else:
-            return _result(case, passed=False, reason=f"unknown user_report scenario: {scenario}")
+            return _result(case, passed=False, reason=f"未知的用户报告场景：{scenario}")
     return _result(
         case,
         passed=ok,
-        reason=f"user-report probe {scenario} passed" if ok else f"user-report probe {scenario} failed",
+        reason=f"用户报告场景 {scenario} 检查通过。" if ok else f"用户报告场景 {scenario} 检查失败。",
         evidence=evidence,
     )
 
@@ -489,12 +489,12 @@ def run_behavior_evals(root: str | Path | None = None, *, suite: str = "fast") -
     for case in payload.get("cases") or []:
         evaluator = EVALUATORS.get(str(case.get("type") or ""))
         if evaluator is None:
-            results.append(_result(case, passed=False, reason="unknown eval type"))
+            results.append(_result(case, passed=False, reason="未知的评估类型。"))
             continue
         try:
             results.append(evaluator(repo_root, case))
         except Exception as exc:
-            results.append(_result(case, passed=False, reason=f"exception: {exc}"))
+            results.append(_result(case, passed=False, reason=f"评估执行异常：{exc}"))
     failed = [item for item in results if not item.get("passed")]
     return {
         "schema_version": SCHEMA_VERSION,
@@ -511,10 +511,10 @@ def run_behavior_evals(root: str | Path | None = None, *, suite: str = "fast") -
 def format_report(report: dict[str, Any], output_format: str = "text") -> str:
     if output_format == "json":
         return json.dumps(report, ensure_ascii=False, indent=2)
-    status = "OK" if report.get("ok") else "ERROR"
-    lines = [f"{status} behavior evals {report.get('suite')}: {report.get('passed')}/{report.get('total')} passed"]
+    status = "通过" if report.get("ok") else "失败"
+    lines = [f"{status} 行为评估 {report.get('suite')}：通过 {report.get('passed')}/{report.get('total')}"]
     for item in report.get("results") or []:
-        marker = "PASS" if item.get("passed") else "FAIL"
+        marker = "通过" if item.get("passed") else "失败"
         lines.append(f"{marker} {item.get('id')}: {item.get('reason')}")
     return "\n".join(lines)
 
@@ -522,7 +522,7 @@ def format_report(report: dict[str, Any], output_format: str = "text") -> str:
 def main() -> int:
     if sys.platform == "win32":
         enable_windows_utf8_stdio()
-    parser = argparse.ArgumentParser(description="Run deterministic webnovel-writer behavior evals")
+    parser = argparse.ArgumentParser(description="运行可重复的网文写作插件行为评估")
     parser.add_argument("--root", default="", help="仓库根目录，默认自动推断")
     parser.add_argument("--suite", default="fast", choices=["fast"])
     parser.add_argument("--format", choices=["text", "json"], default="text")

@@ -173,25 +173,25 @@ def parse_review_output(
     expected_binding: Dict[str, Any] | None = None,
 ) -> ReviewResult:
     if not isinstance(raw, dict):
-        raise ValueError("review output must be a JSON object")
+        raise ValueError("审查输出必须是 JSON 对象")
     try:
         declared_chapter = int(raw.get("chapter") or 0)
     except (TypeError, ValueError) as exc:
-        raise ValueError("review_result.chapter must be an integer") from exc
+        raise ValueError("review_result.chapter 必须是整数") from exc
     if declared_chapter != int(chapter):
         raise ValueError(
-            f"review_result.chapter {declared_chapter} does not match requested chapter {chapter}"
+            f"review_result.chapter 为 {declared_chapter}，与请求章节 {chapter} 不一致"
         )
     raw_binding = raw.get("chapter_binding")
     try:
         binding = ChapterContentBinding.model_validate(raw_binding).model_dump()
     except Exception as exc:
-        raise ValueError("review_result.chapter_binding is missing or invalid") from exc
+        raise ValueError("review_result.chapter_binding 缺失或无效") from exc
     if expected_binding is not None and not chapter_bindings_equal(
         binding,
         expected_binding,
     ):
-        raise ValueError("review_result.chapter_binding does not match expected manuscript")
+        raise ValueError("review_result.chapter_binding 与预期正文不一致")
     issues = []
     for item in raw.get("issues", []):
         if not isinstance(item, dict):
@@ -219,7 +219,7 @@ def _read_json_if_exists(path: Path) -> Any | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Bad JSON in {path}") from exc
+        raise ValueError(f"文件 {path} 中的 JSON 无效") from exc
 
 
 def _write_json(path: Path, payload: Any) -> None:

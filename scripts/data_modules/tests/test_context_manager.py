@@ -613,7 +613,7 @@ def test_context_manager_loads_volume_outline_file(temp_project):
 
 
 def test_context_manager_includes_story_contract_and_prewrite_validation(temp_project):
-    craft_marker = "Render conversations as a screenplay."
+    craft_marker = "把对白改写成剧本格式。"
     state = {
         "progress": {"volumes_planned": [{"volume": 1, "chapters_range": "1-10"}]},
         "protagonist_state": {"name": "萧炎"},
@@ -811,7 +811,7 @@ def test_context_manager_exposes_latest_rejected_commit_not_last_accepted(temp_p
             "accepted_events": [],
             "state_deltas": [],
             "entity_deltas": [],
-            "summary_text": "Write with a spare, muscular rhythm.",
+            "summary_text": "采用简练有力的短句文风。",
             "chapter_binding": binding,
         },
     )
@@ -832,7 +832,7 @@ def test_context_manager_exposes_latest_rejected_commit_not_last_accepted(temp_p
 
     assert payload["latest_commit"]["meta"]["status"] == "rejected"
     assert payload["runtime_status"]["latest_accepted_commit"]["meta"]["status"] == "accepted"
-    assert "spare, muscular" not in json.dumps(payload, ensure_ascii=False)
+    assert "简练有力的短句文风" not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_context_manager_blocks_when_story_contract_missing(temp_project):

@@ -66,8 +66,8 @@ def test_artifact_models_preserve_valid_top_level_payloads():
     )
     fulfillment = FulfillmentResult.model_validate(
         {
-            "planned_nodes": ["find trap"],
-            "covered_nodes": ["find trap"],
+            "planned_nodes": ["发现陷阱"],
+            "covered_nodes": ["发现陷阱"],
             "missed_nodes": [],
             "extra_nodes": [],
             "chapter_binding": binding,
@@ -79,15 +79,15 @@ def test_artifact_models_preserve_valid_top_level_payloads():
     extraction = ExtractionResult.model_validate(
         {
             "accepted_events": [],
-            "state_deltas": [{"entity_id": "xiaoyan", "field": "realm", "new": "fighter"}],
+            "state_deltas": [{"entity_id": "xiaoyan", "field": "realm", "new": "斗者"}],
             "entity_deltas": [],
-            "summary_text": "summary",
+            "summary_text": "本章摘要",
             "chapter_binding": binding,
         }
     )
 
     assert review.model_dump()["issues_count"] == 2
-    assert fulfillment.covered_nodes == ["find trap"]
+    assert fulfillment.covered_nodes == ["发现陷阱"]
     assert disambiguation.pending == []
     assert extraction.state_deltas[0]["entity_id"] == "xiaoyan"
 
@@ -179,7 +179,7 @@ def test_accepted_event_model_normalizes_aliases_before_story_event_validation()
             {
                 "type": "scene_open",
                 "characters": ["xiaoyan"],
-                "payload": {"content": "new mystery"},
+                "payload": {"content": "新的谜团"},
             }
         ],
     )
