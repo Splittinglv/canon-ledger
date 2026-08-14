@@ -186,3 +186,18 @@ def test_审计记录不包含评分字段():
     assert audit["report_file"] == "审查报告/第10章.md"
     assert "overall_score" not in audit
     assert "dimension_scores" not in audit
+
+
+def test_审查报告缺省分类不是非法枚举():
+    import review_pipeline
+
+    lines = review_pipeline._format_issue(
+        {
+            "severity": "low",
+            "description": "缺少分类时不得回落到旧枚举。",
+        },
+        1,
+    )
+    joined = "\n".join(lines)
+    assert "other" not in joined
+    assert "未填写分类" in joined

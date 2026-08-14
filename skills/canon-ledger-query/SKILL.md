@@ -7,7 +7,7 @@ description: 查询书项目中的角色、伏笔、力量体系、势力与运�
 
 ## Use when
 
-用户询问关于故事设定、角色、力量体系、势力、伏笔、金手指、节奏等项目内信息时触发。
+用户询问关于故事设定、角色、力量体系、势力、伏笔、金手指、时间线等项目内信息时触发。
 
 ## 项目根保护
 
@@ -129,9 +129,9 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py"
 
 1. **识别查询类型**：按「查询分类 → 最窄工具」表匹配关键词。
 2. **按优先级定位写前真源**（写前真源 → 写后真源 → 投影层）：
-   1. `.story-system/MASTER_SETTING.json` - 全书主设定（题材、调性、核心禁忌）
-   2. `.story-system/volumes/*.json` - 卷级合同（本卷目标、节奏策略）
-   3. `.story-system/chapters/*.json` - 章级合同（本章焦点、动态上下文）
+   1. `.story-system/MASTER_SETTING.json` - 全书合同：题材路由、`setting_canon` 设定快照、`initial_canon` 初始化角色事实。写前清洗后 `master_constraints` 为空，文风不在合同里
+   2. `.story-system/volumes/*.json` - 卷级合同：有效事实在 `volume_goal`（卷名、摘要、本卷目标、预期结束状态、核心冲突、章节范围）。`selected_pacing`、`selected_tropes`、`selected_scenes` 写前清洗后为空，不是合同事实
+   3. `.story-system/chapters/*.json` - 章级合同：权威在 `chapter_directive`（`goal`、`must_cover_nodes`、`forbidden_zones`、时间锚点等章纲事实）。`override_allowed.chapter_focus` 只是 `goal` 的别名；`dynamic_context` 固定为空，不是检索到的写法材料
    4. latest accepted `.story-system/commits/chapter_XXX.commit.json` - 写后事实（已发布章节的定稿状态）
    5. `memory-contract` 系列查询 - 记忆编排结果（长期记忆、伏笔、时间线）
    6. `.canon-ledger/state.json` / `index.db` - 只读投影层（角色卡、章节列表）

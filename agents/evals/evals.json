@@ -15,7 +15,7 @@
         "输出是合法 JSON，包含 issues 数组和 summary 字符串",
         "包含 dimension_results，逐项覆盖 setting/timeline/continuity/character/logic 五个维度",
         "每个维度的 conclusion 非空（无问题时为 pass）",
-        "每个 issue 的 category 属于 setting/timeline/continuity/character/logic/pacing/other 之一",
+        "每个 issue 的 category 属于 setting/timeline/continuity/character/logic 之一",
         "每个 issue 都有 severity、category、location、description 字段",
         "每个 issue 都有 evidence 字段且非空",
         "没有输出 overall_score（reviewer 不评分）",

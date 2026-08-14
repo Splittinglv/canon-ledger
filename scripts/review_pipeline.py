@@ -49,7 +49,7 @@ def _resolve_report_path(project_root: Path, report_file: str) -> Path:
 def _format_issue(issue: Dict[str, Any], index: int) -> List[str]:
     description = str(issue.get("description") or "未填写问题描述")
     severity = str(issue.get("severity") or "medium")
-    category = str(issue.get("category") or "other")
+    category = str(issue.get("category") or "未填写分类")
     location = str(issue.get("location") or "未标注位置")
     evidence = str(issue.get("evidence") or "未提供证据")
     fix_hint = str(issue.get("fix_hint") or "未提供修复方向")

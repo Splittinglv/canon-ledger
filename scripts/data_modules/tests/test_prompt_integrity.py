@@ -240,6 +240,35 @@ def test_review_schema_consistency():
     assert "issues_count" in reviewer_text
 
 
+def test_review_schema_md_matches_code_categories():
+    """审查 skill 每轮必读的 schema 必须与代码五维分类一致。"""
+    from data_modules.review_schema import REVIEW_DIMENSIONS, VALID_CATEGORIES
+
+    schema_md = _read_text(REFERENCES_DIR / "review-schema.md")
+
+    assert VALID_CATEGORIES == set(REVIEW_DIMENSIONS)
+    for name in REVIEW_DIMENSIONS:
+        assert name in schema_md
+    for stale in ("ai_flavor", "pacing", "other"):
+        assert stale not in schema_md
+    assert "overall_score" not in schema_md
+    assert "dimension_scores" not in schema_md
+    assert "review_audit" in schema_md
+    assert "review_audits" in schema_md
+
+
+def test_query_skill_describes_current_contracts():
+    """查询 skill 对合同的描述必须对准当前写前真源，而不是已掏空的写法字段。"""
+    text = _read_text(SKILLS_DIR / "canon-ledger-query" / "SKILL.md")
+    for stale in ("节奏策略", "动态上下文", "本章焦点", "核心禁忌"):
+        assert stale not in text, f"查询 skill 仍在用旧合同口径：{stale}"
+    assert "volume_goal" in text
+    assert "chapter_directive" in text
+    assert "setting_canon" in text
+    assert "must_cover_nodes" in text
+    assert "forbidden_zones" in text
+
+
 def test_reviewer_consumes_chapter_contract_obligations():
     reviewer_text = _read_text(AGENTS_DIR / "reviewer.md")
     write_text = _read_text(SKILLS_DIR / "canon-ledger-write" / "SKILL.md")
