@@ -13,6 +13,7 @@ from ..project_phase import (
     resolve_project_phase,
 )
 from ..story_runtime_sources import load_runtime_sources
+from ..commit_lineage import prior_chapters_needing_revalidation
 from ..outline_fulfillment import (
     load_authoritative_chapter_goal,
     merged_planned_nodes,
@@ -65,6 +66,25 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
                 impact="写前合同或项目骨架不完整，继续写作容易使用旧上下文或缺失约束。",
                 repair="先运行 project-status/doctor，根据 next_action 补齐 init、plan 或 Story System 合同。",
                 details=snapshot.to_dict(),
+            )
+        )
+
+    stale_prior = prior_chapters_needing_revalidation(project_root, chapter)
+    if stale_prior:
+        earliest = stale_prior[0]
+        errors.append(
+            issue(
+                "prior_chapter_needs_revalidation",
+                message=(
+                    f"第 {earliest} 章及后续已提交事实因前文被改写而失效，"
+                    f"不能直接写第 {chapter} 章"
+                ),
+                impact="后续章节仍按旧前文抽取，长期记忆会保留过期事实。",
+                repair=(
+                    f"先重新审查并提交第 {earliest} 章："
+                    f" /canon-ledger-write {earliest}"
+                ),
+                details={"chapters": stale_prior},
             )
         )
 

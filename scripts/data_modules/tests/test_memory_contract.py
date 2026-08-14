@@ -101,6 +101,8 @@ class _FakeMemory:
         return []
     def get_timeline(self, from_ch: int, to_ch: int):
         return []
+    def export_asof_snapshot(self, chapter: int | None = None, as_of_chapter: int | None = None):
+        return {"chapter": chapter or 0, "as_of_chapter": as_of_chapter or 0}
 
 
 class TestProtocol:
@@ -118,3 +120,4 @@ class TestProtocol:
         assert m.get_open_loops() == []
         assert m.get_lifecycle_obligations() == []
         assert m.get_timeline(1, 10) == []
+        assert m.export_asof_snapshot(chapter=1)["as_of_chapter"] == 0

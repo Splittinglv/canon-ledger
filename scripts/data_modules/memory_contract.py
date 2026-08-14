@@ -172,3 +172,9 @@ class MemoryContract(Protocol):
     ) -> List[TimelineEvent]:
         """查询章节范围内的时间线事件。"""
         ...
+
+    def export_asof_snapshot(
+        self, chapter: int | None = None, as_of_chapter: int | None = None
+    ) -> Dict[str, Any]:
+        """导出截至 N-1 的不可变事实快照，供 reviewer / data-agent 使用。"""
+        ...

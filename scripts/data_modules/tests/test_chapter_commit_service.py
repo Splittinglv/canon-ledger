@@ -300,6 +300,8 @@ def test_accepted_commit_persists_authoritative_goal_in_outline_snapshot(tmp_pat
 
     assert payload["meta"]["status"] == "accepted"
     assert payload["outline_snapshot"]["goal"] == "在子时前找到账簿并确认伪造者"
+    assert payload["meta"]["validation_status"] == "valid"
+    assert len(payload["meta"]["predecessor_context_hash"]) == 64
 
 
 def test_commit_service_rejects_outline_nodes_missing_from_contract(tmp_path):

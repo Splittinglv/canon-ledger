@@ -29,6 +29,7 @@ from .projection_log import (
     projection_run_pending,
 )
 from .story_runtime_health import build_story_runtime_health
+from .commit_lineage import list_needs_revalidation
 
 
 SCHEMA_VERSION = "canon-ledger-doctor/v1"
@@ -522,6 +523,36 @@ def _dashboard_checks(plugin_root: Path | None = None) -> list[dict[str, Any]]:
     return checks
 
 
+def _revalidation_checks(project_root: Path) -> list[dict[str, Any]]:
+    chapters = list_needs_revalidation(project_root)
+    if not chapters:
+        return [
+            _check(
+                "commits.revalidation",
+                status=CHECK_OK,
+                severity="info",
+                message="no chapters waiting for revalidation",
+                expected="later chapters remain valid after earlier rewrites",
+                actual="none",
+            )
+        ]
+    earliest = chapters[0]
+    listed = "、".join(str(item) for item in chapters)
+    return [
+        _check(
+            "commits.revalidation",
+            status=CHECK_WARNING,
+            severity="warning",
+            message="later chapters need revalidation after an earlier rewrite",
+            path=str(project_root / ".story-system" / "commits"),
+            expected="accepted commits match current predecessor context",
+            actual=f"chapters={listed}",
+            impact="这些章节仍按旧前文抽取，长期记忆不能当作当前真源。",
+            repair=f"从最早失效章开始重新审查并提交：/canon-ledger-write {earliest}",
+        )
+    ]
+
+
 def build_doctor_report(
     project_root: str | Path | None,
     *,
@@ -580,6 +611,7 @@ def build_doctor_report(
                 )
             )
         checks.extend(_sqlite_checks(root))
+        checks.extend(_revalidation_checks(root))
         checks.extend(_projection_log_checks(root, snapshot))
         checks.extend(_rag_checks(root))
 

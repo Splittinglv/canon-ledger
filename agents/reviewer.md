@@ -22,22 +22,28 @@ color: yellow
 
 ## 2. 可用工具与脚本
 
-- `Read`：读取正文、设定集、记忆数据
+- `Read`：读取正文、设定集、以及调用方提供的 as-of 快照
 - `Grep`：在正文中搜索关键词
-- `Bash`：调用记忆模块查询
+- `Bash`：只允许按截止章节查询记忆契约，禁止读取当前投影
+
+审查第 N 章时，事实截止点是 **N-1**。调用方会先导出不可变快照；你必须先读这份快照。禁止 `state get-entity`、`index get-*` 或直接读取 `.canon-ledger/state.json` / `index.db`——那些是当前投影，重审旧章时会混入未来事实。
 
 ```bash
-# 查询角色当前状态
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" state get-entity --id "{entity_id}"
+# 调用方已生成的不可变 as-of N-1 快照（优先 Read 此文件）
+# ${PROJECT_ROOT}/.canon-ledger/tmp/asof_snapshot.json
 
-# 查询最近状态变更
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" index get-state-changes --limit 20
+# 快照不足时按需补查；NNNN_MINUS_1 = max(0, chapter-1)，四类查询都必须带 --as-of-chapter
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" memory-contract query-entity --id "{entity_id}" --as-of-chapter {NNNN_MINUS_1}
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" memory-contract query-rules --domain "{domain}" --as-of-chapter {NNNN_MINUS_1}
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" memory-contract get-obligations --as-of-chapter {NNNN_MINUS_1}
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" memory-contract get-timeline --from {N} --to {M} --as-of-chapter {NNNN_MINUS_1}
 ```
 
 ## 3. 输入
 
 - `chapter`：章节号
 - `chapter_file`：正文文件路径
+- `asof_snapshot_file`：截至第 N-1 章的不可变事实快照；人物状态、伏笔、时间线只来自这里
 - `chapter_contract_file`：本章已净化的章合同；读取 `chapter_directive` 的必须节点与禁区
 - `review_contract_file`：本章已净化的审查合同；读取 `must_check` / `blocking_rules`
 - `chapter_binding`：调用方在审查开始前生成的正文内容绑定；输出时必须原样回传
@@ -49,7 +55,8 @@ color: yellow
 
 `standard` 必须完成 setting / timeline / continuity / character / logic 五个维度。`fast` 只完成 setting / timeline / continuity 三个维度，不能暗示角色与逻辑已经检查；后端会把它记录为 `partial` 并列出两个跳过维度。
 
-### 0. 加载章纲硬约束
+### 0. 加载章纲硬约束与 as-of 快照
+- 先读取 `asof_snapshot_file`：人物状态、状态变更、伏笔/承诺、时间线、别名只使用这份截至 N-1 的快照。文件缺失、损坏或 `as_of_chapter` 不是 N-1 时，输出 blocking 的 `setting` issue，禁止改读当前 state/index 投影。
 - 先读取 `chapter_contract_file` 与 `review_contract_file`；缺失、损坏或章号不符时，输出 blocking 的 `setting` issue，禁止把合同不可读当作“没有约束”。
 - 权威必须节点只按 `chapter_directive.must_cover_nodes` 的顺序读取，权威禁区只读取 `chapter_directive.forbidden_zones`。两个字段缺失、类型错误或包含空字符串时输出 blocking 问题。审查合同的 `must_check` / `blocking_rules` 只作补充，不得覆盖或替代章合同。
 - 对每个必须节点逐项核对正文：未发生则输出 blocking 的 `continuity` issue。对每个禁区逐项核对：正文违反则输出 blocking 的 `logic` issue。不要把合同里的口吻、句式、文风或写法建议当成约束。
@@ -165,6 +172,6 @@ color: yellow
 
 ## 9. 错误处理
 
-- 无法读取角色状态 → 输出 blocking 的 setting 问题，并把该维度结论写成“无法完成校验：角色状态读取失败”，不得把未检查写成“未发现事实问题”
+- 无法读取 as-of 快照或角色状态 → 输出 blocking 的 setting 问题，并把该维度结论写成“无法完成校验：角色状态读取失败”，不得把未检查写成“未发现事实问题”，也不得改读当前投影
 - 读不到上章摘要 → 不是错误。摘要不是真源。第一章或尚无已接受上章提交时，连贯维写“无上章已接受事实，未发现与既有提交矛盾”，禁止因此输出 blocking
 - 正文为空 → 输出单条 critical issue："正文为空"

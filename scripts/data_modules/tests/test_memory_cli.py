@@ -242,3 +242,35 @@ def test_get_timeline_empty(tmp_path, capsys):
 
     output = json.loads(capsys.readouterr().out)
     assert output == []
+
+
+def test_export_asof_empty_project(tmp_path, capsys):
+    _ensure_scripts_on_path()
+    import memory_cli
+
+    project = _make_project(tmp_path)
+    out = project / ".canon-ledger" / "tmp" / "asof_snapshot.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    old_argv = sys.argv
+    sys.argv = [
+        "memory_cli",
+        "--project-root",
+        str(project),
+        "export-asof",
+        "--chapter",
+        "1",
+        "--out",
+        str(out),
+    ]
+    try:
+        memory_cli.main()
+    finally:
+        sys.argv = old_argv
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["schema_version"] == "canon-ledger-asof-snapshot/v1"
+    assert output["chapter"] == 1
+    assert output["as_of_chapter"] == 0
+    saved = json.loads(out.read_text(encoding="utf-8"))
+    assert saved["as_of_chapter"] == 0
+    assert saved["obligations"] == []

@@ -138,31 +138,32 @@ CHAPTER_GOAL="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import sys; from pathlib im
 
 审查只对设定、时间线、连贯、角色动机/知识、逻辑。不要加载写法教程或爽点库。
 
-### Step 4：加载投影状态与待审正文
+### Step 4：导出 as-of 快照并确认待审正文
 
-```bash
-cat "${PROJECT_ROOT}/.canon-ledger/state.json"
-```
-
-确认当前章节号与对应正文文件；缺正文或缺投影状态文件立即阻断。
-
-### Step 5：调用统一审查 Agent
-
-必须通过 `Task` 工具调用 `reviewer`。审查方法与维度细则由 reviewer 自带，本 Skill 不展开。
-
-先固化本次待审正文的字节级绑定：
+不要读取 `.canon-ledger/state.json` 或 `index.db` 来核对人物/伏笔——那是当前投影，重审旧章会混入未来事实。
 
 ```bash
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" chapter-binding \
   --chapter {chapter_num} \
   --out "${PROJECT_ROOT}/.canon-ledger/tmp/chapter_binding.json" \
   --format json
+
+mkdir -p "${PROJECT_ROOT}/.canon-ledger/tmp"
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" \
+  memory-contract export-asof --chapter {chapter_num} \
+  --out "${PROJECT_ROOT}/.canon-ledger/tmp/asof_snapshot.json"
 ```
+
+确认对应正文文件存在且非空；缺正文或缺 as-of 快照立即阻断。
+
+### Step 5：调用统一审查 Agent
+
+必须通过 `Task` 工具调用 `reviewer`。审查方法与维度细则由 reviewer 自带，本 Skill 不展开。
 
 ```text
 使用 `Task` 工具调用插件 agent `reviewer`。如果 `Task` 不能按名称调用插件 agent，则启动 `generalPurpose` 子代理：先 `Read` `${CANON_LEDGER_PLUGIN_ROOT}/agents/reviewer.md`，再严格执行该规范。仅当 `subagent-models` 中 `agents["reviewer"].pass_to_task=true` 时才给 `Task` 传 `model`。
 
-任务参数：chapter={chapter_num}; review_mode=standard; chapter_file={chapter_file}; chapter_contract_file=${PROJECT_ROOT}/.story-system/chapters/chapter_{NNN}.json; review_contract_file=${PROJECT_ROOT}/.story-system/reviews/chapter_{NNN}.review.json; chapter_binding_file=${PROJECT_ROOT}/.canon-ledger/tmp/chapter_binding.json; project_root=${PROJECT_ROOT}; scripts_dir=${SCRIPTS_DIR}。先逐项核对章合同 `must_cover_nodes` 与 `forbidden_zones`；读取 binding 后将完整对象原样放入输出 JSON 顶层 `chapter_binding`；逐项覆盖 setting/timeline/continuity/character/logic 五个维度；除 JSON 字段、固定枚举、路径和正文原样引用外，所有自然语言审查内容使用中文，严格输出 reviewer schema JSON，不评分，不口头总结。
+任务参数：chapter={chapter_num}; review_mode=standard; chapter_file={chapter_file}; asof_snapshot_file=${PROJECT_ROOT}/.canon-ledger/tmp/asof_snapshot.json; chapter_contract_file=${PROJECT_ROOT}/.story-system/chapters/chapter_{NNN}.json; review_contract_file=${PROJECT_ROOT}/.story-system/reviews/chapter_{NNN}.review.json; chapter_binding_file=${PROJECT_ROOT}/.canon-ledger/tmp/chapter_binding.json; project_root=${PROJECT_ROOT}; scripts_dir=${SCRIPTS_DIR}。先读取 as-of 快照，禁止查询当前 state/index；先逐项核对章合同 `must_cover_nodes` 与 `forbidden_zones`；读取 binding 后将完整对象原样放入输出 JSON 顶层 `chapter_binding`；逐项覆盖 setting/timeline/continuity/character/logic 五个维度；除 JSON 字段、固定枚举、路径和正文原样引用外，所有自然语言审查内容使用中文，严格输出 reviewer schema JSON，不评分，不口头总结。
 ```
 
 reviewer 返回后，主流程把严格 JSON 写入 `${PROJECT_ROOT}/.canon-ledger/tmp/review_results.json`（reviewer 不持 Write，是这份 artifact 的非写入方）。`review-pipeline` 必须把同一路径覆盖为标准 review_result artifact（含 `blocking_count`）。

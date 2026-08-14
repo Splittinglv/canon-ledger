@@ -366,7 +366,7 @@ def test_failed_stage_does_not_install_half_rebuilt_read_models(tmp_path, monkey
     assert "北岸码头" not in old_summary
 
 
-def test_rewriting_history_keeps_later_canonical_chapter_as_current_head(tmp_path):
+def test_rewriting_history_marks_later_chapters_needs_revalidation(tmp_path):
     chapter_one = _accepted_commit(
         tmp_path,
         chapter=1,
@@ -399,10 +399,10 @@ def test_rewriting_history_keeps_later_canonical_chapter_as_current_head(tmp_pat
     revised_one = _accepted_commit(
         tmp_path,
         chapter=1,
-        body="周宁从柜中取出一柄长剑。",
+        body="周宁从柜中取出一把钥匙。",
         extraction={
             "state_deltas": [
-                {"entity_id": "周宁", "field": "weapon", "new": "长剑"}
+                {"entity_id": "周宁", "field": "weapon", "new": "钥匙"}
             ],
             "entity_deltas": [
                 {"entity_id": "周宁", "canonical_name": "周宁", "entity_type": "角色"}
@@ -412,7 +412,13 @@ def test_rewriting_history_keeps_later_canonical_chapter_as_current_head(tmp_pat
     _commit_and_project(tmp_path, revised_one)
 
     state = json.loads((tmp_path / ".canon-ledger" / "state.json").read_text(encoding="utf-8"))
-    assert state["entity_state"]["周宁"]["weapon"] == "无"
+    assert state["entity_state"]["周宁"]["weapon"] == "钥匙"
+    later = json.loads(
+        (tmp_path / ".story-system" / "commits" / "chapter_002.commit.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert later["meta"]["validation_status"] == "needs_revalidation"
     with sqlite3.connect(tmp_path / ".canon-ledger" / "index.db") as conn:
         values = [
             str(row[0])
@@ -420,10 +426,13 @@ def test_rewriting_history_keeps_later_canonical_chapter_as_current_head(tmp_pat
                 "SELECT new_value FROM state_changes WHERE entity_id = '周宁' ORDER BY chapter"
             )
         ]
-    assert len(values) == 2
-    assert "长剑" in values[0]
-    assert "无" in values[1]
-    assert all("短刀" not in value for value in values)
+        indexed_chapters = [
+            int(row[0])
+            for row in conn.execute("SELECT chapter FROM chapters ORDER BY chapter")
+        ]
+    assert values == ["钥匙"] or (len(values) == 1 and "钥匙" in values[0])
+    assert all("无" not in value and "短刀" not in value for value in values)
+    assert indexed_chapters == [1]
 
 
 def test_full_replay_keeps_author_confirmed_consistency_rule(tmp_path):
@@ -449,3 +458,68 @@ def test_full_replay_keeps_author_confirmed_consistency_rule(tmp_path):
         DataModulesConfig.from_project_root(tmp_path)
     ).query(category="world_rule", status="active")
     assert any(item.value == rule for item in rows)
+
+
+def test_export_asof_for_chapter_two_excludes_chapter_two_facts(tmp_path):
+    from data_modules.canonical_history import export_asof_snapshot
+
+    _commit_and_project(
+        tmp_path,
+        _accepted_commit(
+            tmp_path,
+            chapter=1,
+            body="周宁从柜中取出一把钥匙。",
+            extraction={
+                "state_deltas": [
+                    {"entity_id": "周宁", "field": "weapon", "new": "钥匙"}
+                ],
+                "entity_deltas": [
+                    {"entity_id": "周宁", "canonical_name": "周宁", "entity_type": "角色"}
+                ],
+                "accepted_events": [
+                    {
+                        "event_id": "evt-ch001-loop",
+                        "chapter": 1,
+                        "event_type": "open_loop_created",
+                        "subject": "zhou_ning",
+                        "payload": {
+                            "loop_id": "loop-key",
+                            "content": "钥匙能开哪扇门？",
+                        },
+                    }
+                ],
+            },
+        ),
+    )
+    _commit_and_project(
+        tmp_path,
+        _accepted_commit(
+            tmp_path,
+            chapter=2,
+            body="周宁用钥匙打开暗门，悬念落地。",
+            extraction={
+                "state_deltas": [
+                    {"entity_id": "周宁", "field": "weapon", "new": "无"}
+                ],
+                "accepted_events": [
+                    {
+                        "event_id": "evt-ch002-close",
+                        "chapter": 2,
+                        "event_type": "open_loop_closed",
+                        "subject": "zhou_ning",
+                        "payload": {
+                            "loop_id": "loop-key",
+                            "resolution": "暗门被打开",
+                        },
+                    }
+                ],
+            },
+        ),
+    )
+
+    snapshot = export_asof_snapshot(tmp_path, chapter=2)
+    assert snapshot["as_of_chapter"] == 1
+    assert snapshot["entities"]["周宁"]["attributes"]["weapon"] == "钥匙"
+    obligation_ids = [item.get("id") for item in snapshot["obligations"]]
+    assert "loop-key" in obligation_ids
+    assert all(item.get("status") == "active" for item in snapshot["obligations"])

@@ -17,18 +17,18 @@ color: green
 ## 2. 工具
 
 ```bash
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" index get-core-entities
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" index recent-appearances --limit 20
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" index get-aliases --entity "{entity_id}"
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" index get-by-alias --alias "{alias}"
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" memory-contract get-obligations
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" memory-contract export-asof --chapter {chapter} --out "{project_root}/.canon-ledger/tmp/asof_snapshot.json"
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" memory-contract query-entity --id "{entity_id}" --as-of-chapter {NNNN_MINUS_1}
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "{project_root}" memory-contract get-obligations --as-of-chapter {NNNN_MINUS_1}
 ```
+
+实体名单、别名、状态、伏笔只来自 as-of N-1 快照。`NNNN_MINUS_1 = max(0, chapter-1)`。禁止 `index get-core-entities`、`index recent-appearances`、`index get-aliases`、`index get-by-alias`、`state get-entity`，也禁止调用不带 `--as-of-chapter` 的 `get-obligations`——当前投影在重抽旧章时会混入未来事实。
 
 chapter-commit 由写章主流程运行，data-agent 不在此执行（见 §5 边界）。
 
 ## 3. 流程
 
-**A 加载**：project_root 由调用方传入（已过 preflight），Read 正文和 `chapter_contract_file` + 查实体索引和别名；调用 `memory-contract get-obligations` 取得当前可闭合伏笔/承诺的稳定 ID。将章合同 `chapter_directive.must_cover_nodes` 按原顺序完整复制为 `planned_nodes`；字段缺失、类型错误或包含空字符串时停止并报告章合同错误，不得改读其他字段。
+**A 加载**：project_root 由调用方传入（已过 preflight），Read 正文和 `chapter_contract_file`；先 Read `asof_snapshot_file`（或自行 `export-asof --chapter {chapter}`）取得截至 N-1 的实体、别名和可闭合伏笔/承诺稳定 ID。将章合同 `chapter_directive.must_cover_nodes` 按原顺序完整复制为 `planned_nodes`；字段缺失、类型错误或包含空字符串时停止并报告章合同错误，不得改读其他字段。快照缺失时停止并报告，不得改读当前 index/state。
 
 **B 提取与消歧**：同一轮完成，不额外调 LLM。置信度>0.8 自动采用，0.5-0.8 采用+warning，<0.5 标记待人工。
 
@@ -57,7 +57,7 @@ state_changes: ["萧炎: 斗者9层→准备突破"]
 ## 4. 输入
 
 ```json
-{"chapter": 100, "chapter_file": "正文/第0100章-标题.md", "chapter_contract_file": ".story-system/chapters/chapter_100.json", "chapter_binding_file": ".canon-ledger/tmp/chapter_binding.json", "project_root": "D:/wk/斗破苍穹"}
+{"chapter": 100, "chapter_file": "正文/第0100章-标题.md", "chapter_contract_file": ".story-system/chapters/chapter_100.json", "chapter_binding_file": ".canon-ledger/tmp/chapter_binding.json", "asof_snapshot_file": ".canon-ledger/tmp/asof_snapshot.json", "project_root": "D:/wk/斗破苍穹"}
 ```
 
 ## 5. 边界
@@ -111,7 +111,7 @@ state_changes: ["萧炎: 斗者9层→准备突破"]
 
 只能输出上述规范字段名；未知字段或错误类型必须作为产物错误处理。
 
-闭合/兑现只能复制 `memory-contract get-obligations` 返回的对应 `id`；没有匹配目标时不要生成 close/payoff 事件，禁止按正文相似度猜 ID。
+闭合/兑现只能复制 as-of 快照或 `memory-contract get-obligations --as-of-chapter N-1` 返回的对应 `id`；没有匹配目标时不要生成 close/payoff 事件，禁止按正文相似度猜 ID，禁止用当前投影里的未来闭合状态。
 
 ## 8. 错误处理
 

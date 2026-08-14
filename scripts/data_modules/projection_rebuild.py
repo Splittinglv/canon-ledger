@@ -11,7 +11,6 @@ from a replaced revision safely.
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import os
 import shutil
@@ -24,6 +23,10 @@ from filelock import FileLock
 
 from .chapter_content_binding import verify_commit_content_binding
 from .commit_artifacts import extraction_list, extraction_text
+from .commit_lineage import (
+    canonical_snapshot_hash,
+    stamp_and_partition_commits,
+)
 from .config import DataModulesConfig
 from .event_log_store import EventLogStore
 from .event_projection_router import EventProjectionRouter
@@ -55,20 +58,6 @@ class ProjectionRebuildError(RuntimeError):
         self.code = str(code or "projection_rebuild_failed")
         self.detail = str(detail or "")
         super().__init__(f"{self.code}:{self.detail}" if self.detail else self.code)
-
-
-def canonical_snapshot_hash(payload: dict[str, Any]) -> str:
-    """Hash the immutable commit envelope while ignoring derived statuses."""
-    snapshot = copy.deepcopy(payload)
-    snapshot.pop("projection_status", None)
-    raw = json.dumps(
-        snapshot,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def projection_manifest_path(project_root: str | Path) -> Path:
@@ -585,6 +574,8 @@ def _install_stage(
     stage_root: Path,
     projected: list[dict[str, Any]],
     writer_results: dict[int, dict[str, dict[str, Any]]],
+    *,
+    commit_payloads: list[dict[str, Any]] | None = None,
 ) -> None:
     stage_log = stage_root / ".canon-ledger" / "projection_log.jsonl"
     current_log = root / ".canon-ledger" / "projection_log.jsonl"
@@ -618,7 +609,8 @@ def _install_stage(
     add(Path(".canon-ledger/projection_log.jsonl"))
     add(Path(".canon-ledger/summaries"))
     add(Path(".story-system/events"))
-    for payload in projected:
+    install_commits = commit_payloads if commit_payloads is not None else projected
+    for payload in install_commits:
         chapter = int((payload.get("meta") or {}).get("chapter") or 0)
         relative = Path(".story-system") / "commits" / f"chapter_{chapter:03d}.commit.json"
         add(relative)
@@ -683,13 +675,40 @@ def rebuild_all_projections(
                     "chapters": sorted(int(chapter) for chapter in source_hashes),
                 },
             )
+            previous_manifest = read_json_if_exists(projection_manifest_path(root)) or {}
+            previous_chapters = (
+                previous_manifest.get("chapters")
+                if isinstance(previous_manifest, dict)
+                else {}
+            )
+            if not isinstance(previous_chapters, dict):
+                previous_chapters = {}
+            replayable, stamped, stale_chapters = stamp_and_partition_commits(
+                commits,
+                previous_manifest=previous_chapters,
+            )
             stage_root = _prepare_stage(root, commits)
             from .chapter_commit_service import ChapterCommitService
 
             service = ChapterCommitService(stage_root)
+            for payload in stamped:
+                chapter = int((payload.get("meta") or {}).get("chapter") or 0)
+                if str((payload.get("meta") or {}).get("validation_status") or "") == (
+                    "needs_revalidation"
+                ):
+                    payload["projection_status"] = {
+                        key: "skipped" for key in PROJECTION_STATUS
+                    }
+                write_json(
+                    stage_root
+                    / ".story-system"
+                    / "commits"
+                    / f"chapter_{chapter:03d}.commit.json",
+                    payload,
+                )
             projected: list[dict[str, Any]] = []
             writer_results: dict[int, dict[str, dict[str, Any]]] = {}
-            for original in commits:
+            for original in replayable:
                 payload = copy.deepcopy(original)
                 payload["projection_status"] = dict(PROJECTION_STATUS)
                 _apply_stage_events(stage_root, payload)
@@ -712,11 +731,36 @@ def rebuild_all_projections(
             if _manifest_entries(current) != source_hashes:
                 raise ProjectionRebuildError("canonical_commit_changed_during_rebuild")
 
+            install_commits = list(stamped)
+            projected_by_chapter = {
+                int((payload.get("meta") or {}).get("chapter") or 0): payload
+                for payload in projected
+            }
+            for index, payload in enumerate(install_commits):
+                chapter = int((payload.get("meta") or {}).get("chapter") or 0)
+                if chapter in projected_by_chapter:
+                    install_commits[index] = projected_by_chapter[chapter]
+
+            for payload in install_commits:
+                chapter = int((payload.get("meta") or {}).get("chapter") or 0)
+                write_json(
+                    stage_root
+                    / ".story-system"
+                    / "commits"
+                    / f"chapter_{chapter:03d}.commit.json",
+                    payload,
+                )
             write_json(status_path, {"schema_version": REBUILD_SCHEMA, "status": "installing", "reason": reason})
-            _install_stage(root, stage_root, projected, writer_results)
+            _install_stage(
+                root,
+                stage_root,
+                projected,
+                writer_results,
+                commit_payloads=install_commits,
+            )
             manifest = {
                 "schema_version": MANIFEST_SCHEMA,
-                "chapters": _manifest_entries(projected),
+                "chapters": _manifest_entries(install_commits),
             }
             write_json(projection_manifest_path(root), manifest)
             report = {
@@ -726,13 +770,18 @@ def rebuild_all_projections(
                 "reason": reason,
                 "chapters": [
                     int((payload.get("meta") or {}).get("chapter") or 0)
+                    for payload in install_commits
+                ],
+                "replayed_chapters": [
+                    int((payload.get("meta") or {}).get("chapter") or 0)
                     for payload in projected
                 ],
+                "needs_revalidation": list(stale_chapters),
                 "projection_status": {
                     str(int((payload.get("meta") or {}).get("chapter") or 0)): dict(
                         payload.get("projection_status") or {}
                     )
-                    for payload in projected
+                    for payload in install_commits
                 },
             }
             write_json(status_path, report)

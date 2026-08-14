@@ -116,11 +116,21 @@ class ChapterCommitService:
         extraction_payload["timeline_events"] = normalize_timeline_events(
             chapter, extraction.timeline_events
         )
+        from .commit_lineage import (
+            VALIDATION_VALID,
+            predecessor_context_hash_for_chapter,
+        )
+
         commit_payload = {
             "meta": {
                 "schema_version": "story-system/v1",
                 "chapter": chapter,
                 "status": status,
+                "predecessor_context_hash": predecessor_context_hash_for_chapter(
+                    self.project_root,
+                    chapter,
+                ),
+                "validation_status": VALIDATION_VALID,
             },
             "chapter_binding": chapter_binding,
             "contract_refs": {
@@ -387,6 +397,7 @@ class ChapterCommitService:
         # project root and only installs a read model that was produced from
         # this exact ordered commit set.
         self.persist_commit(payload)
+        from .commit_lineage import is_needs_revalidation
         from .projection_rebuild import (
             projection_snapshot_requires_rebuild,
             rebuild_all_projections,
@@ -417,6 +428,9 @@ class ChapterCommitService:
                     "error": str(report.get("detail") or error),
                 }
             self._persist_projection_run(payload, writer_results)
+            return payload
+
+        if is_needs_revalidation(payload):
             return payload
 
         if status == "accepted":

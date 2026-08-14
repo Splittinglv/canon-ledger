@@ -85,6 +85,19 @@ def cmd_get_obligations(args: argparse.Namespace) -> None:
     _json_out([item.to_dict() for item in obligations])
 
 
+def cmd_export_asof(args: argparse.Namespace) -> None:
+    adapter = _adapter(args.project_root)
+    snapshot = adapter.export_asof_snapshot(
+        chapter=args.chapter,
+        as_of_chapter=args.as_of_chapter,
+    )
+    if args.out:
+        from data_modules.story_contracts import write_json
+
+        write_json(Path(args.out), snapshot)
+    _json_out(snapshot)
+
+
 def cmd_get_timeline(args: argparse.Namespace) -> None:
     adapter = _adapter(args.project_root)
     events = adapter.get_timeline(
@@ -145,6 +158,19 @@ def main() -> None:
         "--as-of-chapter", type=int, default=None, help="禁止读取该章之后的事实"
     )
 
+    p_asof = sub.add_parser(
+        "export-asof",
+        help="导出截至第 N-1 章的不可变事实快照",
+    )
+    p_asof.add_argument("--chapter", type=int, default=None, help="正在审查/抽取的章节号")
+    p_asof.add_argument(
+        "--as-of-chapter",
+        type=int,
+        default=None,
+        help="直接指定截止章节；缺省为 chapter-1",
+    )
+    p_asof.add_argument("--out", default="", help="可选：把快照写入该 JSON 路径")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
@@ -158,7 +184,11 @@ def main() -> None:
         "get-open-loops": cmd_get_open_loops,
         "get-obligations": cmd_get_obligations,
         "get-timeline": cmd_get_timeline,
+        "export-asof": cmd_export_asof,
     }
+    if args.command == "export-asof":
+        if args.chapter is None and args.as_of_chapter is None:
+            parser.error("export-asof 需要 --chapter 或 --as-of-chapter")
     dispatch[args.command](args)
 
 

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from .chapter_commit_service import ChapterCommitService
 from .canonical_history import (
+    export_asof_snapshot,
     latest_canonical_chapter,
     load_canonical_history,
 )
@@ -614,3 +615,15 @@ class MemoryContractAdapter:
             if int(from_ch) <= int(item.get("source_chapter") or 0) <= int(to_ch)
         ]
         return canonical
+
+    def export_asof_snapshot(
+        self,
+        chapter: int | None = None,
+        as_of_chapter: int | None = None,
+    ) -> Dict[str, Any]:
+        """Export an immutable as-of snapshot for reviewer / data-agent."""
+        return export_asof_snapshot(
+            self.config.project_root,
+            chapter=chapter,
+            as_of_chapter=as_of_chapter,
+        )

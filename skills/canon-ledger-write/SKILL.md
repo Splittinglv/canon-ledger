@@ -7,7 +7,7 @@ description: 按上下文→起草→事实审查→提交→备份产出章节�
 
 ## 目标
 
-产出章节到 `正文/第{NNNN}章-{title}.md`。默认只守长期一致性：设定、时间线、伏笔、角色知识边界、章纲事实。文风只读书项目 `设定集/文风提示词.md`（可空）；空则按当前模型默认写。字数跟用户或大纲走，插件不规定章长。
+产出章节到 `正文/第{NNNN}章-{title}.md`。默认只守长期一致性：设定、时间线、伏笔、角色知识边界、章纲事实。文风优先级：本轮用户要求 > 书项目 `设定集/文风提示词.md`（可空）> 当前模型默认。字数跟用户或大纲走，插件不规定章长。
 
 ## 模式
 
@@ -30,7 +30,7 @@ description: 按上下文→起草→事实审查→提交→备份产出章节�
 
 ## 优先级
 
-用户要求 > 用户文风提示词 > 状态机硬门槛 > 项目约束（总纲/设定/记忆）> skill 流程
+本轮用户要求 > 全书文风提示词 > 模型默认能力 > 状态机硬门槛 > 项目约束（总纲/设定/记忆）> skill 流程
 
 ## CSV 检索（Step 2 按需，仅命名区分）
 
@@ -160,12 +160,24 @@ CHAPTER_GOAL="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import sys; from pathlib im
 
 `chapter_{NNN}.json` 必须优先检查顶层 `chapter_directive`。`chapter_focus` 只能来自 `chapter_directive.goal` 或真实 query，不得从 `dynamic_context` 的参考摘要继承。
 
+主流程必须把本轮用户消息里除写章命令/章号/模式开关外的要求写入 `${PROJECT_ROOT}/.canon-ledger/tmp/turn_requirements.md`，格式固定为：
+
+```markdown
+## 本轮写作要求
+{用户原文中的情节、视角、人物、禁区等要求；没有则写「无」}
+
+## 本轮文风覆盖
+{用户明确的人称/口吻/文风，例如「这一章用冷峻第一人称」；没有则写「无」}
+```
+
+没有本轮额外要求时仍要写该文件，两段都写「无」。禁止把本轮要求只留在聊天记录里。
+
 写作任务书排序必须固定为：
 1. 本章硬性约束：完整消费 `chapter_directive`；必查 `goal/obstacles/cost/time_anchor/chapter_span/previous_chapter_gap/countdown/key_entities/chapter_change/core_conflict/viewpoint/chapter_end_open_question`，并携带已有的 `strand/antagonist_tier/hook/hook_type/hook_strength`
 2. 章纲节点（若有 CBN/CPNs/CEN / `must_cover_nodes`）
 3. 本章禁区：`forbidden_zones`，违反即不通过
 4. 剧情/人物事实：上章钩子、伏笔、能力边界、OOC 事实警戒、剧情向 anti_patterns
-5. 文风：只粘贴 `设定集/文风提示词.md` 里作者手写的正文（去掉 HTML 注释）。文件不存在或只有说明文字 → 写「无」
+5. 文风：先粘贴本轮用户明确的人称/口吻/文风覆盖；再粘贴 `设定集/文风提示词.md` 里作者手写的正文（去掉 HTML 注释）。两处都没有 → 写「无」
 
 ### Step 1：context-agent 生成写作任务书
 
@@ -180,8 +192,10 @@ Task:
 - scripts_dir=${SCRIPTS_DIR}
 - storage_path=${PROJECT_ROOT}/.canon-ledger
 - state_file=${PROJECT_ROOT}/.canon-ledger/state.json（只读 projection/read-model）
-- 先 research，再按 本章硬性约束 → 章纲节点（若有）→ 本章禁区 → 剧情/人物事实 → 用户文风提示词 的顺序输出五段写作任务书。
-- 不要把写法教程、句式/口吻建议、题材节奏配方写进任务书。
+- turn_requirements_file=${PROJECT_ROOT}/.canon-ledger/tmp/turn_requirements.md
+- style_override=本轮文风覆盖原文；没有则传空字符串
+- 先 research，再按 本章硬性约束 → 章纲节点（若有）→ 本章禁区 → 剧情/人物事实 → 本轮用户要求与文风 的顺序输出五段写作任务书。
+- 文风优先级：本轮用户要求 > 全书文风提示词 > 模型默认。不要把写法教程、句式/口吻建议、题材节奏配方写进任务书。
 - 上下文不足时返回 blocker。
 
 产物：一份写作任务书，能独立支撑 Step 2 起草。
@@ -207,19 +221,24 @@ Task:
 
 只根据任务书起草。不要加载插件里的写法教程。
 
-只输出纯正文，无占位符。有结构化节点时围绕章纲节点展开，守设定和章纲。文风只服从任务书第 5 段里的用户提示词；没有提示词就按当前模型默认写。
+只输出纯正文，无占位符。有结构化节点时围绕章纲节点展开，守设定和章纲。文风服从任务书第 5 段：本轮用户要求优先于全书文风提示词；两处都没有就按当前模型默认写。
 
 ### Step 3：审查
 
 必须使用 `Task` 工具调用 `reviewer`，不得由主流程伪造审查 JSON。
 
-调用 reviewer 前先固化待审正文的内容绑定：
+调用 reviewer 前先固化待审正文的内容绑定，并导出截至 N-1 的不可变事实快照：
 
 ```bash
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" chapter-binding \
   --chapter {chapter_num} \
   --out "${PROJECT_ROOT}/.canon-ledger/tmp/chapter_binding.json" \
   --format json
+
+mkdir -p "${PROJECT_ROOT}/.canon-ledger/tmp"
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" \
+  memory-contract export-asof --chapter {chapter_num} \
+  --out "${PROJECT_ROOT}/.canon-ledger/tmp/asof_snapshot.json"
 ```
 
 使用 `Task` 工具调用插件 agent `reviewer`。如果 `Task` 不能按名称调用插件 agent，则启动 `generalPurpose` 子代理：先 `Read` `${CANON_LEDGER_PLUGIN_ROOT}/agents/reviewer.md`，再严格执行该规范。仅当 `subagent-models` 中 `agents["reviewer"].pass_to_task=true` 时才给 `Task` 传 `model`。
@@ -228,6 +247,7 @@ Task:
 - chapter={chapter_num}
 - review_mode={review_mode}（本步骤只会传 `standard` 或 `fast`；`minimal` 不调用 reviewer）
 - chapter_file=${CHAPTER_FILE}
+- asof_snapshot_file=${PROJECT_ROOT}/.canon-ledger/tmp/asof_snapshot.json（截至 N-1 的不可变快照；禁止改读当前 state/index）
 - chapter_contract_file=${PROJECT_ROOT}/.story-system/chapters/chapter_{NNN}.json
 - review_contract_file=${PROJECT_ROOT}/.story-system/reviews/chapter_{NNN}.review.json
 - chapter_binding_file=${PROJECT_ROOT}/.canon-ledger/tmp/chapter_binding.json（读取后将完整对象原样写入输出 JSON 顶层 `chapter_binding`）
@@ -289,13 +309,14 @@ reviewer 跳过、失败、输出不完整、`--minimal` 写 no-review artifact�
 
 #### 5.1 Data Agent 提取事实
 
-必须使用 `Task` 工具调用 `data-agent`，产出 fulfillment_result / disambiguation_result / extraction_result 三份 JSON，并复用 Step 3 的 review_results。
+必须使用 `Task` 工具调用 `data-agent`，产出 fulfillment_result / disambiguation_result / extraction_result 三份 JSON，并复用 Step 3 的 review_results。若 Step 3 未导出 as-of 快照，此处补跑 `memory-contract export-asof --chapter {chapter_num}`。
 
 使用 `Task` 工具调用插件 agent `data-agent`。如果 `Task` 不能按名称调用插件 agent，则启动 `generalPurpose` 子代理：先 `Read` `${CANON_LEDGER_PLUGIN_ROOT}/agents/data-agent.md`，再严格执行该规范。仅当 `subagent-models` 中 `agents["data-agent"].pass_to_task=true` 时才给 `Task` 传 `model`。
 
 Task:
 - chapter={chapter_num}
 - chapter_file=${CHAPTER_FILE}
+- asof_snapshot_file=${PROJECT_ROOT}/.canon-ledger/tmp/asof_snapshot.json（实体、别名、伏笔状态只来自这份 N-1 快照）
 - chapter_contract_file=${PROJECT_ROOT}/.story-system/chapters/chapter_{NNN}.json（权威 `must_cover_nodes` 来源）
 - chapter_binding_file=${PROJECT_ROOT}/.canon-ledger/tmp/chapter_binding.json（必须原样复制到三份 artifact 顶层）
 - project_root=${PROJECT_ROOT}

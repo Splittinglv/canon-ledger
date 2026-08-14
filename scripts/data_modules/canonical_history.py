@@ -16,6 +16,7 @@ from typing import Any, Dict, Iterable, List
 
 from .chapter_content_binding import verify_commit_content_binding
 from .commit_artifacts import extraction_list
+from .commit_lineage import VALIDATION_NEEDS_REVALIDATION
 from .consistency_context import sanitize_initial_canon
 from .fact_text import (
     normalize_author_text,
@@ -152,6 +153,10 @@ def _trusted_commits(
         if meta.get("status") != "accepted":
             # Rejected work is not a broken historical source and contributes
             # no canon.  It is therefore ignored rather than surfaced as fact.
+            continue
+        if str(meta.get("validation_status") or "") == VALIDATION_NEEDS_REVALIDATION:
+            # Later chapters after a rewritten prefix stay on disk but are not
+            # currently canonical until they are reviewed and extracted again.
             continue
         trusted, code = verify_commit_content_binding(project_root, chapter, payload)
         if not trusted:
@@ -606,3 +611,62 @@ def latest_canonical_chapter(project_root: Path) -> int:
     """Return the highest trusted canonical chapter without creating files."""
     commits, _invalid = _trusted_commits(Path(project_root), 2**31 - 1)
     return max((int(row["meta"]["chapter"]) for row in commits), default=0)
+
+
+ASOF_SNAPSHOT_SCHEMA = "canon-ledger-asof-snapshot/v1"
+
+
+def history_to_asof_snapshot(
+    history: CanonicalHistory,
+    *,
+    chapter: int,
+) -> Dict[str, Any]:
+    """Serialize an immutable as-of view for reviewer / data-agent."""
+    alias_index: Dict[str, List[str]] = {}
+    for entity in history.entities.values():
+        if not isinstance(entity, dict):
+            continue
+        entity_id = str(entity.get("id") or "").strip()
+        names = [entity.get("name"), *(entity.get("aliases") or [])]
+        for name in names:
+            key = str(name or "").strip()
+            if not key or not entity_id:
+                continue
+            bucket = alias_index.setdefault(key, [])
+            if entity_id not in bucket:
+                bucket.append(entity_id)
+    return {
+        "schema_version": ASOF_SNAPSHOT_SCHEMA,
+        "chapter": int(chapter),
+        "as_of_chapter": int(history.as_of_chapter),
+        "valid_chapters": list(history.valid_chapters),
+        "invalid_sources": list(history.invalid_sources),
+        "omitted_fact_ids": list(history.omitted_fact_ids),
+        "entities": history.entities,
+        "alias_index": alias_index,
+        "state_changes": history.state_changes,
+        "rules": history.rules,
+        "obligations": history.obligations,
+        "timeline": history.timeline,
+        "canonical_facts": history.canonical_facts,
+        "hard_constraints": history.hard_constraints,
+    }
+
+
+def export_asof_snapshot(
+    project_root: str | Path,
+    *,
+    chapter: int | None = None,
+    as_of_chapter: int | None = None,
+) -> Dict[str, Any]:
+    """Export canonical history at N-1 for reviewing or extracting chapter N."""
+    if as_of_chapter is None:
+        if chapter is None:
+            raise ValueError("chapter_or_as_of_required")
+        target = int(chapter)
+        as_of = max(0, target - 1)
+    else:
+        as_of = max(0, int(as_of_chapter))
+        target = int(chapter) if chapter is not None else as_of + 1
+    history = load_canonical_history(Path(project_root), as_of)
+    return history_to_asof_snapshot(history, chapter=target)

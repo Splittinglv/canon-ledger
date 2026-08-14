@@ -586,3 +586,58 @@ def test_postcommit_gate_rejects_commit_with_unbound_nested_artifact(tmp_path):
         and item["details"]["binding_code"] == "commit_schema_invalid"
         for item in report["errors"]
     )
+
+
+def test_prewrite_blocks_when_prior_chapter_needs_revalidation(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=2)
+    commits = tmp_path / ".story-system" / "commits"
+    commits.mkdir(parents=True, exist_ok=True)
+    (commits / "chapter_001.commit.json").write_text(
+        json.dumps(
+            {
+                "meta": {
+                    "schema_version": "story-system/v1",
+                    "chapter": 1,
+                    "status": "accepted",
+                    "validation_status": "needs_revalidation",
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "prior_chapter_needs_revalidation" for item in report["errors"]
+    )
+
+
+def test_prewrite_allows_revalidating_the_earliest_stale_chapter(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=1)
+    commits = tmp_path / ".story-system" / "commits"
+    commits.mkdir(parents=True, exist_ok=True)
+    (commits / "chapter_001.commit.json").write_text(
+        json.dumps(
+            {
+                "meta": {
+                    "schema_version": "story-system/v1",
+                    "chapter": 1,
+                    "status": "accepted",
+                    "validation_status": "needs_revalidation",
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_write_gate(tmp_path, chapter=1, stage="prewrite")
+
+    assert not any(
+        item["code"] == "prior_chapter_needs_revalidation" for item in report["errors"]
+    )

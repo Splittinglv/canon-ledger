@@ -612,7 +612,8 @@ def test_context_agent_consumes_all_hard_constraints_before_budgeted_evidence():
         assert category in text
     assert "不得按“前 N 条”" in text
     assert "数量限制只适用于这些软证据" in text
-    assert "文风唯一来源" in text
+    assert "文风优先级" in text
+    assert "本轮用户要求" in text
     assert "设定集/文风提示词.md" in text
     assert "不要降级到会混入" in text
 
@@ -1046,3 +1047,41 @@ def test_reviewer_does_not_block_on_missing_previous_chapter_summary():
     assert "不要查章末钩子、场景过渡写法、情绪弧" in text
     assert "自由文本摘要不是真源" in text
     assert "不得因为「没有上章」输出 blocking" in text
+
+
+def test_reviewer_and_data_agent_must_use_asof_snapshot_not_live_projection():
+    """审查与抽取不得把当前 state/index 投影写成可运行查询。"""
+    live_commands = (
+        "state get-entity",
+        "index get-state-changes",
+        "index get-core-entities",
+        "index recent-appearances",
+        "index get-aliases",
+        "index get-by-alias",
+    )
+    for filename in ("reviewer.md", "data-agent.md"):
+        text = _read_text(AGENTS_DIR / filename)
+        assert "export-asof" in text or "asof_snapshot" in text, f"{filename}: 缺少 as-of 快照"
+        assert "--as-of-chapter" in text, f"{filename}: 补查必须带 as-of-chapter"
+        bash_blocks = re.findall(r"```bash\n(.*?)```", text, flags=re.DOTALL)
+        joined = "\n".join(bash_blocks)
+        for command in live_commands:
+            assert command not in joined, f"{filename}: bash 示例仍在查询 {command}"
+
+
+def test_write_and_review_skills_pass_asof_snapshot_and_turn_requirements():
+    write_text = _read_text(SKILLS_DIR / "canon-ledger-write" / "SKILL.md")
+    review_text = _read_text(SKILLS_DIR / "canon-ledger-review" / "SKILL.md")
+    context_text = _read_text(AGENTS_DIR / "context-agent.md")
+
+    assert "turn_requirements_file" in write_text
+    assert "style_override" in write_text
+    assert "本轮用户要求" in write_text
+    assert "memory-contract export-asof" in write_text
+    assert "asof_snapshot_file" in write_text
+    assert 'cat "${PROJECT_ROOT}/.canon-ledger/state.json"' not in review_text
+    assert "memory-contract export-asof" in review_text
+    assert "asof_snapshot_file" in review_text
+    assert "turn_requirements_file" in context_text
+    assert "文风优先级" in context_text
+    assert "本轮用户要求 > 全书文风提示词 > 模型默认" in context_text

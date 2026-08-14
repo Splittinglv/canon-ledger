@@ -47,6 +47,7 @@ if __package__ in {None, ""}:  # pragma: no cover - direct script entry
     )
     from data_modules.review_author_view import build_review_author_view
     from data_modules.run_ledger import backup_receipt_trusted
+    from data_modules.commit_lineage import list_needs_revalidation
 else:
     from .artifact_validator import (
         OK_PROJECTION_STATUSES,
@@ -76,6 +77,7 @@ else:
     )
     from .review_author_view import build_review_author_view
     from .run_ledger import backup_receipt_trusted
+    from .commit_lineage import list_needs_revalidation
 
 
 SCHEMA_VERSION = "canon-ledger-user-report/v1"
@@ -653,6 +655,35 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             command=f"/canon-ledger-write {chapter}",
             source="backup",
             path=backup_path,
+        )
+
+    later_stale = [
+        item
+        for item in list_needs_revalidation(project_root)
+        if item > int(chapter)
+    ]
+    if later_stale:
+        earliest = later_stale[0]
+        listed = "、".join(str(item) for item in later_stale)
+        _add_manual_issue(
+            report,
+            "must_handle",
+            code="later_chapters_need_revalidation",
+            title="后续章节需要重新验证",
+            reason=(
+                f"第 {chapter} 章改写后，第 {listed} 章仍按旧前文抽取，"
+                "不能继续当作有效提交。"
+            ),
+            impact="长期记忆会保留过期事实，例如旧武器、旧伏笔闭合状态。",
+            next_action=f"从第 {earliest} 章开始重新审查并提交。",
+            command=f"/canon-ledger-write {earliest}",
+            source="chapter_commit",
+            path=str(
+                project_root
+                / ".story-system"
+                / "commits"
+                / f"chapter_{earliest:03d}.commit.json"
+            ),
         )
 
     report["overall_status"] = _status_from_issues(report, core_file_count=core_files)

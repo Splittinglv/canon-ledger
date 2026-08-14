@@ -3,6 +3,7 @@
 
 import sys
 import sqlite3
+import json
 from pathlib import Path
 
 from .test_project_phase import _make_contracts, _make_init_ready
@@ -165,3 +166,31 @@ def test_doctor_blocks_pending_projection_log_run(tmp_path, monkeypatch):
     assert matches
     assert matches[0]["status"] == "error"
     assert report["ok"] is False
+
+
+def test_doctor_warns_when_later_chapters_need_revalidation(tmp_path, monkeypatch):
+    _make_init_ready(tmp_path)
+    commits = tmp_path / ".story-system" / "commits"
+    commits.mkdir(parents=True, exist_ok=True)
+    (commits / "chapter_002.commit.json").write_text(
+        json.dumps(
+            {
+                "meta": {
+                    "schema_version": "story-system/v1",
+                    "chapter": 2,
+                    "status": "accepted",
+                    "validation_status": "needs_revalidation",
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(doctor_module, "_python_checks", lambda: [])
+
+    report = doctor_module.build_doctor_report(tmp_path)
+
+    matches = [item for item in report["checks"] if item["id"] == "commits.revalidation"]
+    assert matches
+    assert matches[0]["status"] == "warning"
+    assert "2" in matches[0]["actual"]
