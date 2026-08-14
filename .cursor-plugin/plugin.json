@@ -1,12 +1,12 @@
 {
   "name": "webnovel-writer",
-  "version": "6.2.1",
+  "version": "6.2.2",
   "description": "长篇小说长期一致性插件（Cursor 移植）。默认只守设定/时间线/伏笔；文风由设定集/文风提示词.md 或模型默认决定。",
   "author": {
     "name": "lingfengQAQ"
   },
-  "homepage": "https://github.com/lingfengQAQ/webnovel-writer",
-  "repository": "https://github.com/lingfengQAQ/webnovel-writer",
+  "homepage": "https://github.com/Splittinglv/webnovel-writer-cursor",
+  "repository": "https://github.com/Splittinglv/webnovel-writer-cursor",
   "license": "GPL-3.0",
   "keywords": [
     "webnovel",

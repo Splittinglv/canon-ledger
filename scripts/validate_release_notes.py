@@ -77,6 +77,96 @@ def _infer_previous_tag(root: Path, version: str) -> str:
     return sorted(candidates)[-1][1]
 
 
+def _git_release_issues(root: Path, version: str) -> list[dict[str, str]]:
+    """在 Git 工作区执行发版校验时，同时验证版本标签历史。"""
+    if not (root / ".git").exists():
+        return []
+    try:
+        tags = subprocess.run(
+            ["git", "-C", str(root), "tag", "--list", "v*"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        dirty = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return [
+            _issue(
+                "git.unavailable",
+                message=f"无法检查 Git 发版历史：{exc}",
+                path=str(root),
+                repair="在完整 Git checkout 中重新执行发版校验。",
+            )
+        ]
+    if tags.returncode != 0 or head.returncode != 0 or dirty.returncode != 0:
+        return [
+            _issue(
+                "git.unavailable",
+                message="无法读取 Git tag、HEAD 或工作区状态",
+                path=str(root),
+                repair="修复 Git 仓库后重新执行发版校验。",
+            )
+        ]
+
+    issues: list[dict[str, str]] = []
+    semantic_tags = [
+        tag.strip()
+        for tag in tags.stdout.splitlines()
+        if _parse_version_tag(tag.strip()) is not None
+    ]
+    if not semantic_tags:
+        issues.append(
+            _issue(
+                "git.tag_history_missing",
+                message="正式发版仓库没有任何可比较的 vX.Y.Z tag",
+                path=str(root),
+                repair="先为已有正式版本补建并推送 tag，再发布新版本。",
+            )
+        )
+    current_tag = f"v{version}"
+    if current_tag in semantic_tags:
+        target = subprocess.run(
+            ["git", "-C", str(root), "rev-list", "-n", "1", current_tag],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        if target.returncode != 0 or target.stdout.strip() != head.stdout.strip():
+            issues.append(
+                _issue(
+                    "git.version_reused_after_tag",
+                    message=f"版本 {version} 的 tag 不在当前 HEAD，不能继续复用同一版本号承载新提交",
+                    path=str(root),
+                    repair="递增版本号，并新增对应 release note 与 CHANGELOG 小节。",
+                )
+            )
+    if dirty.stdout.strip():
+        issues.append(
+            _issue(
+                "git.worktree_dirty",
+                message="发版校验时工作区仍有未提交变更",
+                path=str(root),
+                repair="提交并复跑全部验证后再执行正式发版校验。",
+            )
+        )
+    return issues
+
+
 def _changelog_section(text: str, version: str) -> str:
     heading_re = re.compile(rf"^##\s+v{re.escape(version)}(?:\s|$)", re.MULTILINE)
     match = heading_re.search(text)
@@ -115,6 +205,8 @@ def validate_release_notes(
 
     if not VERSION_RE.fullmatch(target_version):
         issues.append(_issue("version.invalid", message=f"invalid version: {target_version}", repair="使用 X.Y.Z 版本号。"))
+    else:
+        issues.extend(_git_release_issues(repo_root, target_version))
 
     release_path = repo_root / "releases" / f"v{target_version}.md"
     release_text, release_error = _load_text(release_path)

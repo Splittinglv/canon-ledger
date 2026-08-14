@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "本地 Cursor 插件市场：webnovel-writer 长篇一致性写作插件",
-    "version": "6.2.1"
+    "version": "6.2.2"
   },
   "plugins": [
     {
       "name": "webnovel-writer",
       "source": ".",
       "description": "长篇小说长期一致性。默认只守设定、时间线、伏笔；文风由作者提示词或模型默认决定。",
-      "version": "6.2.1",
+      "version": "6.2.2",
       "author": {
         "name": "lingfengQAQ"
       },

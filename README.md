@@ -1,7 +1,7 @@
 # Webnovel Writer for Cursor
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-6.2.1-brightgreen.svg)](.cursor-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-6.2.2-brightgreen.svg)](.cursor-plugin/plugin.json)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 
 让 AI 写到几百章，依然记得住设定、接得住伏笔、守得住大纲。文风交给模型和作者。
@@ -29,7 +29,16 @@
 
 仍生效的世界规则、未回收伏笔、未兑现承诺和当前人物关系属于硬约束：不会因“只取前几条”、章节距离或上下文预算被静默丢弃。预算不足时只裁检索命中、近期索引变化等软证据；硬约束自身超限会明确阻断并报告，而不是带着残缺记忆继续写。
 
+初始化时作者明确给出的主角欲望与缺陷、世界规模、势力、力量体系和金手指代价会写入闭合结构的 `MASTER_SETTING.initial_canon`，从首章开始进入一致性上下文；不会把初始化模板里的文风或题材处方混进去。写第 N 章时，人物状态、关系、时间线、一般事实、伏笔和承诺统一从正文绑定且已接受的第 `1..N-1` 章提交重放；历史改写不会读取未来章的当前快照。四类运行合同缺失或历史正文绑定失效时会明确阻断，不会把“读不到”伪装成“没有约束”。
+
+规划阶段后续写回 `设定集/*.md` 的新角色、地点、势力、规则和能力限制，会在刷新 Story System 时生成带来源路径、字节数和 SHA-256 的闭合设定快照，并从下一章起进入 canon。写回使用“字段：值”、项目符号或 Markdown 表格；设定文件改了却没刷新合同时，写作上下文会报 `stale_setting_canon` 并阻断。`设定集/文风提示词.md` 以及反转、爽点、节奏、句式等创作处方不会进入这份事实快照。
+
+同一章重新提交时，新的正文绑定提交会替换该章旧版本，并从全部当前 canonical commits 顺序重建状态、实体索引、时间线、伏笔/承诺、事件、摘要与检索库；旧版本删除的事实不会残留。`projections retry` 会识别缺失或失败的读模型，`projections replay` 始终执行隔离构建、校验、原子安装；中途失败保留原读模型，不把半套结果装进项目。
+
 模型生成的自由文本摘要不会直接进入默认写作包；历史承接改由已绑定正文的结构化事件、状态、硬约束和事实型 RAG 提供，避免摘要里的写法建议被误当成默认文风。
+模型抽取的世界规则也只能描述故事世界内的人、物、制度或环境；以章节、段落、句子、读者或作者为对象的反转、悬念、爽点等章法配方会被拒绝，不能伪装成硬 canon。
+
+事实审查只有三种明确模式：`standard` 完整检查设定、时间线、连贯、角色与逻辑；`fast` 只检查前三项并把未检查维度标成降级；`minimal` 明确记录“跳过审查”，绝不伪装成完整通过。审查不再生成文笔评分、节奏评分或所谓 AI 味反模式。无 Git 时的本地备份会保存正文、大纲、设定集、完整 Story System 与必要运行状态，并用签名文件清单验真；恢复前先留救援快照，安装后统一重建投影。
 
 ### 文风怎么自定义
 
@@ -58,7 +67,7 @@
 
 可选，有则写、没有不补：章末钩子、爽点、CBN / CPN / CEN。不要为了凑密度给每章编一个打脸点。
 
-章纲中的目标、阻力、代价、时间信息、本章变化、核心冲突、视角、关键实体、结构化节点、禁区、章末未闭合问题与钩子会完整按结构进入章合同，并作为写前必达约束；即使上下文预算裁掉章纲原文，这些结构化字段也不会被裁掉。提交门禁还会将权威 `must_cover_nodes` 与 data-agent 的完成清单逐项核对，不能用空列表绕过。章纲字段视为作者或规划模型已经授权的输入，因此不会靠关键词猜测并删除内容；插件自身仍不会往里补文风处方。要稳定指定文风与文笔，请使用本轮要求或 `设定集/文风提示词.md`。
+章纲中的目标、阻力、代价、时间信息、本章变化、核心冲突、视角、关键实体、结构化节点、禁区、章末未闭合问题与钩子会完整按结构进入章合同，并作为写前必达约束；即使上下文预算裁掉章纲原文，这些结构化字段也不会被裁掉。现代章合同的目标为空时，写前门禁和直接提交都会独立阻断；成功提交会把权威目标写入 `outline_snapshot.goal`。提交门禁还会将权威 `must_cover_nodes` 与 data-agent 的完成清单逐项核对，不能用空列表绕过。章纲字段视为作者或规划模型已经授权的输入，因此不会靠关键词猜测并删除内容；插件自身仍不会往里补文风处方。要稳定指定文风与文笔，请使用本轮要求或 `设定集/文风提示词.md`。
 
 **`/webnovel-write 4` 写一章**
 
@@ -112,7 +121,17 @@ python -m pip install -r scripts/requirements.txt
 python -m pip install -r dashboard/requirements.txt
 ```
 
-Cursor Agent 默认使用系统里的 `python3`。请保证该解释器已安装上述依赖，或把 `.venv/bin` 加进 PATH。
+插件不会假定 Cursor 调用到的系统 `python3` 已安装依赖。启动脚本会依次选择：显式设置的 `WEBNOVEL_PYTHON`、插件目录下的 `.venv`、`~/.cursor/webnovel-writer/.venv`，最后才检查当前或系统解释器；只有能导入插件依赖的解释器才会被使用。
+
+本地目录安装按上面的命令在仓库根创建 `.venv` 即可。若 Cursor 使用的是复制到缓存中的插件包，建议创建共享运行环境：
+
+```bash
+python3 -m venv ~/.cursor/webnovel-writer/.venv
+~/.cursor/webnovel-writer/.venv/bin/python -m pip install -r "/absolute/path/to/webnovel-writer-to-cursor/scripts/requirements.txt"
+~/.cursor/webnovel-writer/.venv/bin/python -m pip install -r "/absolute/path/to/webnovel-writer-to-cursor/dashboard/requirements.txt"
+```
+
+需要固定解释器时，可在启动 Cursor 前设置 `WEBNOVEL_PYTHON=/absolute/path/to/python`。该解释器缺少依赖时，插件会明确报错并停止受保护写入，不会静默改用一个不完整的 Python。
 
 ### 2. 把本仓库装成本地 Cursor 插件
 
@@ -233,7 +252,8 @@ Python 引擎、Story System、设定/大纲模板来自上游 v6.2.1。本仓�
 
 | 版本 | 说明 |
 |------|------|
-| **v6.2.1 (当前)** | 上游引擎 v6.2.1 的 Cursor 本地插件。只守事实一致性；文风只读 `设定集/文风提示词.md` 或按模型默认写。未上架官方商店。 |
+| **v6.2.2 (当前)** | 长期一致性真源可重建、设定写回可验证；文风仍由作者或模型决定。 |
+| **v6.2.1** | 上游引擎 v6.2.1 的 Cursor 本地插件。只守事实一致性；文风只读 `设定集/文风提示词.md` 或按模型默认写。未上架官方商店。 |
 
 ## 开源协议
 

@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -145,3 +146,75 @@ def test_validate_release_notes_reports_missing_manifest_without_traceback(tmp_p
 
     assert report["ok"] is False
     assert any(item["code"] == "layout.plugin_manifest" for item in report["issues"])
+
+
+def _init_release_git(root: Path) -> None:
+    assert subprocess.run(
+        ["git", "init", "-b", "main"], cwd=root, capture_output=True, check=False
+    ).returncode == 0
+    assert subprocess.run(
+        ["git", "config", "user.name", "测试维护者"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    ).returncode == 0
+    assert subprocess.run(
+        ["git", "config", "user.email", "maintainer@example.com"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    ).returncode == 0
+    assert subprocess.run(
+        ["git", "add", "."], cwd=root, capture_output=True, check=False
+    ).returncode == 0
+    assert subprocess.run(
+        ["git", "commit", "-m", "建立正式发布基线"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    ).returncode == 0
+
+
+def test_validate_release_notes_rejects_git_repository_without_release_tags(tmp_path):
+    _write_release_files(tmp_path)
+    _init_release_git(tmp_path)
+
+    report = validate_release_notes(
+        tmp_path, version="1.2.3", previous_tag="v1.2.2"
+    )
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "git.tag_history_missing" for item in report["issues"]
+    )
+
+
+def test_validate_release_notes_rejects_reusing_a_tagged_version(tmp_path):
+    _write_release_files(tmp_path)
+    _init_release_git(tmp_path)
+    assert subprocess.run(
+        ["git", "tag", "v1.2.3"], cwd=tmp_path, capture_output=True, check=False
+    ).returncode == 0
+    (tmp_path / "版本后续改动.txt").write_text("同版本新增改动\n", encoding="utf-8")
+    assert subprocess.run(
+        ["git", "add", "版本后续改动.txt"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=False,
+    ).returncode == 0
+    assert subprocess.run(
+        ["git", "commit", "-m", "同版本继续增加功能"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=False,
+    ).returncode == 0
+
+    report = validate_release_notes(
+        tmp_path, version="1.2.3", previous_tag="v1.2.2"
+    )
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "git.version_reused_after_tag"
+        for item in report["issues"]
+    )
