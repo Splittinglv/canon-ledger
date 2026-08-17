@@ -176,3 +176,61 @@ def test_skill_bootstrap_preserves_workspace_metacharacters_as_plain_data(tmp_pa
 
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.splitlines()[-1] == str(workspace.resolve())
+
+def _skill_bootstrap_block() -> str:
+    skill_text = (PLUGIN_ROOT / "skills" / "canon-ledger-doctor" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    return skill_text.split("```bash", 1)[1].split("```", 1)[0]
+
+
+def test_skill_bootstrap_finds_plugin_root_from_cwd_without_env():
+    import subprocess
+
+    bootstrap = _skill_bootstrap_block()
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in {
+            "CANON_LEDGER_PLUGIN_ROOT",
+            "CURSOR_PLUGIN_ROOT",
+        }
+    }
+    nested = PLUGIN_ROOT / "scripts" / "data_modules" / "tests"
+    for cwd in (PLUGIN_ROOT, PLUGIN_ROOT / "tests" / "adapter", nested):
+        proc = subprocess.run(
+            ["bash", "-c", bootstrap + "\nprintf \"%s\\n\" \"$CANON_LEDGER_PLUGIN_ROOT\""],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=str(cwd),
+            env=env,
+        )
+        assert proc.returncode == 0, (cwd, proc.stderr)
+        assert Path(proc.stdout.splitlines()[-1]).resolve() == PLUGIN_ROOT
+
+
+def test_skill_bootstrap_fails_outside_plugin_tree_without_env(tmp_path):
+    import subprocess
+
+    bootstrap = _skill_bootstrap_block()
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in {
+            "CANON_LEDGER_PLUGIN_ROOT",
+            "CURSOR_PLUGIN_ROOT",
+        }
+    }
+    proc = subprocess.run(
+        ["bash", "-c", bootstrap],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        cwd=str(tmp_path),
+        env=env,
+    )
+    assert proc.returncode != 0
+    assert "插件根不可信" in (proc.stderr + proc.stdout)
