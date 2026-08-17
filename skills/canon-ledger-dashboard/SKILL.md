@@ -20,8 +20,20 @@ description: 启动只读可视化面板，浏览项目状态、实体图谱、�
 # 缓存安装必须使用 Cursor 注入的插件根；不扫描缓存目录寻找可执行脚本。
 # bootstrap_env.py 输出固定六行数据协议：逐行 read 赋值，禁止 eval/source 执行输出。
 _PLUGIN_ROOT_HINT="${CANON_LEDGER_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-}}"
-if [ -z "$_PLUGIN_ROOT_HINT" ]; then
+if [ ! -f "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py" ]; then
   _PLUGIN_ROOT_HINT="${HOME}/.cursor/plugins/local/canon-ledger"
+fi
+if [ ! -f "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py" ]; then
+  _PLUGIN_ROOT_HINT="$(pwd)"
+fi
+if [ ! -f "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py" ]; then
+  _PLUGIN_ROOT_HINT="$(dirname "$(pwd)")"
+fi
+if [ ! -f "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py" ]; then
+  _PLUGIN_ROOT_HINT="$(dirname "$(dirname "$(pwd)")")"
+fi
+if [ ! -f "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py" ]; then
+  _PLUGIN_ROOT_HINT="$(dirname "$(dirname "$(dirname "$(pwd)")")")"
 fi
 _ENV_LINES="$(python3 -X utf8 "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py")" || {
   echo "ERROR: 插件根不可信或安装不完整。请使用 Cursor 注入的插件根，或安装到 ~/.cursor/plugins/local/canon-ledger" >&2
