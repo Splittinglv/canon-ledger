@@ -56,10 +56,107 @@ def _directive_list_error(chapter_contract: dict[str, Any], field: str) -> str:
     return ""
 
 
+def _human_review_gate_issue(
+    project_root: Path,
+    chapter: int,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    """Block prose advancement until all earlier human decisions take effect."""
+    from ..human_review import HumanReviewService
+
+    try:
+        summary = HumanReviewService(project_root).gate_summary(
+            before_chapter=chapter
+        )
+    except ValueError as exc:
+        return (
+            issue(
+                "human_review_state_invalid",
+                message="人工确认账本或队列无法可靠读取",
+                impact="系统无法证明前文章节的人工确认已经完成并生效。",
+                repair="先运行 /canon-ledger-doctor 修复人工确认数据，再继续写作。",
+                details={"error": str(exc)},
+            ),
+            {"error": str(exc)},
+        )
+
+    candidates: list[tuple[int, int, str, dict[str, Any]]] = []
+    # 同一章内：确认需要改文 > 已裁决未重放 > 尚未裁决。
+    priorities = {
+        "rewrite_required": 0,
+        "not_replayed": 1,
+        "pending": 2,
+    }
+    for state, priority in priorities.items():
+        for item in summary.get(state) or []:
+            item_chapter = int(item.get("chapter") or 0)
+            if item_chapter > 0:
+                candidates.append((item_chapter, priority, state, item))
+    if not candidates:
+        return None, summary
+
+    earliest_chapter, _priority, state, _item = min(candidates)
+    state_rows = [
+        row
+        for row in (summary.get(state) or [])
+        if int(row.get("chapter") or 0) == earliest_chapter
+    ]
+    if state == "rewrite_required":
+        return (
+            issue(
+                "human_review_rewrite_required",
+                message=(
+                    f"第 {earliest_chapter} 章已由作者确认存在穿帮，"
+                    f"不能直接写第 {chapter} 章"
+                ),
+                impact="继续写作会把作者已经判定有误的正文当作有效前史。",
+                repair=(
+                    f"先修改并重新审查第 {earliest_chapter} 章："
+                    f" /canon-ledger-write {earliest_chapter}"
+                ),
+                details={"items": state_rows, "summary": summary},
+            ),
+            summary,
+        )
+    if state == "not_replayed":
+        return (
+            issue(
+                "human_review_decisions_not_replayed",
+                message=(
+                    f"第 {earliest_chapter} 章的人工裁决已保存但尚未生效，"
+                    f"不能直接写第 {chapter} 章"
+                ),
+                impact="当前正史提交还没有消费作者的最新裁决。",
+                repair=(
+                    f"先重放第 {earliest_chapter} 章裁决："
+                    f" /canon-ledger-confirm {earliest_chapter}"
+                ),
+                details={"items": state_rows, "summary": summary},
+            ),
+            summary,
+        )
+    return (
+        issue(
+            "human_review_pending",
+            message=(
+                f"第 {earliest_chapter} 章仍有事实疑点等待作者确认，"
+                f"不能直接写第 {chapter} 章"
+            ),
+            impact="未确认项不会进入正史，后续章节也不能据此可靠判断知识、在场或持有边界。",
+            repair=(
+                f"先完成第 {earliest_chapter} 章人工确认："
+                f" /canon-ledger-confirm {earliest_chapter}"
+            ),
+            details={"items": state_rows, "summary": summary},
+        ),
+        summary,
+    )
+
+
 def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
     snapshot = resolve_project_phase(project_root, chapter=chapter)
     errors: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
+    human_review_summary: dict[str, Any] = {}
 
     if snapshot.phase not in ALLOWED_PREWRITE_PHASES:
         errors.append(
@@ -110,6 +207,13 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
                 details={"chapters": stale_bindings},
             )
         )
+
+    human_review_issue, human_review_summary = _human_review_gate_issue(
+        project_root,
+        chapter,
+    )
+    if human_review_issue is not None:
+        errors.append(human_review_issue)
 
     from ..projection_rebuild import projection_coverage_gaps
 
@@ -212,13 +316,19 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
                 details=validation,
             )
         )
-    if int(
-        (validation.get("disambiguation_domain") or {}).get("pending_count") or 0
-    ) > int(
-        (validation.get("disambiguation_domain") or {}).get(
-            "blocking_pending_count"
+    if (
+        not human_review_summary.get("error")
+        and not any((human_review_summary.get("counts") or {}).values())
+        and int(
+            (validation.get("disambiguation_domain") or {}).get("pending_count")
+            or 0
         )
-        or 0
+        > int(
+            (validation.get("disambiguation_domain") or {}).get(
+                "blocking_pending_count"
+            )
+            or 0
+        )
     ):
         warnings.append(
             issue(
@@ -253,6 +363,7 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
             "phase": snapshot.to_dict(),
             "story_runtime": runtime.to_dict(),
             "prewrite_validation": validation,
+            "human_review": human_review_summary,
             "authoritative_chapter_goal": authoritative_goal or "",
         },
     )

@@ -468,13 +468,18 @@ def cmd_human_review(args: argparse.Namespace) -> int:
     if args.human_review_action == "list":
         items = service.list_items(chapter=args.chapter)
         payload = {
-            "schema_version": "canon-ledger-human-review-list/v1",
+            "schema_version": "canon-ledger-human-review-list/v2",
             "chapter": args.chapter,
             "pending": [
                 item for item in items if item.get("status") == "pending"
             ],
+            "rewrite_required": [
+                item
+                for item in items
+                if item.get("status") == "rewrite_required"
+            ],
             "resolved": [
-                item for item in items if item.get("status") != "pending"
+                item for item in items if item.get("status") == "resolved"
             ],
         }
     else:
@@ -491,7 +496,38 @@ def cmd_human_review(args: argparse.Namespace) -> int:
         payload = service.record(
             json.loads(decision_path.read_text(encoding="utf-8"))
         )
-        payload["next_action"] = "重新运行本章 chapter-commit 使裁决生效"
+        recorded_ids = set(payload.get("recorded") or [])
+        recorded_items = [
+            item
+            for item in service.list_items()
+            if item.get("decision_id") in recorded_ids
+        ]
+        rewrite_chapters = sorted(
+            {
+                int(item.get("chapter") or 0)
+                for item in recorded_items
+                if item.get("status") == "rewrite_required"
+                and int(item.get("chapter") or 0) > 0
+            }
+        )
+        resolved_chapters = sorted(
+            {
+                int(item.get("chapter") or 0)
+                for item in recorded_items
+                if item.get("status") == "resolved"
+                and int(item.get("chapter") or 0) > 0
+            }
+        )
+        if rewrite_chapters:
+            payload["next_action"] = (
+                f"修改第 {rewrite_chapters[0]} 章正文后运行 "
+                f"/canon-ledger-write {rewrite_chapters[0]}"
+            )
+        elif resolved_chapters:
+            payload["next_action"] = (
+                f"运行 /canon-ledger-confirm {resolved_chapters[0]} "
+                "使裁决进入正史提交"
+            )
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 

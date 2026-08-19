@@ -692,6 +692,25 @@ def test_write_and_review_pending_confirm_is_only_next_step():
         assert "确认是唯一下一步" in text, skill_name
 
 
+def test_confirm_skill_keeps_review_and_extraction_actions_separate():
+    text = _read_text(SKILLS_DIR / "canon-ledger-confirm" / "SKILL.md")
+    assert "审查疑点（`source=review_manual_check`）" in text
+    assert "`confirm`：这不是穿帮，关闭疑点" in text
+    assert "`rewrite`：这是穿帮" in text
+    assert "抽取候选事实（其它 `source`）" in text
+    assert "`ignore`：本章不记录这条候选事实，不表示正文有问题" in text
+    assert "`ignore` 仅适用于抽取候选事实" in text
+    assert "`rewrite` 仅适用于审查疑点" in text
+    assert "旧队列中的审查 `ignore` 必须按 `rewrite`" in text
+
+
+def test_write_skill_hard_blocks_unclosed_prior_human_review():
+    text = _read_text(SKILLS_DIR / "canon-ledger-write" / "SKILL.md")
+    assert "`pending` / 未重放用 `/canon-ledger-confirm K`" in text
+    assert "`rewrite_required` 用 `/canon-ledger-write K`" in text
+    assert "不允许跳到后续章" in text
+
+
 def test_init_required_fields_match_sufficiency_gate():
     text = _read_text(SKILLS_DIR / "canon-ledger-init" / "SKILL.md")
     required_blob = "\n".join(

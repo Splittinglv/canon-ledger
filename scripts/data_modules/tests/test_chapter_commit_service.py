@@ -1375,6 +1375,174 @@ def _committed_chapter_with_pending_presence(tmp_path):
     return service
 
 
+def _committed_chapter_with_review_manual_checks(tmp_path, *, count=1):
+    """Persist one accepted commit whose review checks await author decisions."""
+    from data_modules.human_review import HumanReviewService
+
+    body = "晨光里，林舟已经站在南港。"
+    binding = _chapter_binding(tmp_path, 3, body)
+    _ensure_contract(tmp_path, 3)
+    review = standard_review(binding)
+    checks = [
+        {
+            "category": "timeline",
+            "location": "第1段",
+            "description": "北城到南港的转场耗时可能不足",
+            "evidence": body,
+            "reason": "缺少明确距离和交通方式",
+        },
+        {
+            "category": "continuity",
+            "location": "第1段",
+            "description": "林舟此刻是否应该出现在南港",
+            "evidence": body,
+            "reason": "上一章仍被困在北城",
+        },
+    ]
+    review["manual_checks"] = checks[:count]
+    artifacts = {
+        "chapter": 3,
+        "review_result": review,
+        "fulfillment_result": {
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        "disambiguation_result": {
+            "pending": [],
+            "chapter_binding": binding,
+        },
+        "extraction_result": {
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [],
+            "chapter_binding": binding,
+        },
+    }
+    service = ChapterCommitService(tmp_path)
+    first = service.build_commit(**artifacts)
+    assert first["meta"]["status"] == "accepted"
+    assert first["provenance"]["human_review"]["unresolved_count"] == count
+    service.persist_commit(first)
+    service.apply_projections(first)
+    items = HumanReviewService(tmp_path).list_items(3)
+    assert len(items) == count
+    return service, artifacts, items
+
+
+def test_build_commit_rejects_review_rewrite_then_accepts_fresh_clean_artifacts(
+    tmp_path,
+):
+    from data_modules.human_review import HumanReviewService
+
+    service, artifacts, items = _committed_chapter_with_review_manual_checks(
+        tmp_path
+    )
+    HumanReviewService(tmp_path).record(
+        {
+            "decisions": [
+                {"decision_id": items[0]["decision_id"], "action": "rewrite"}
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="human_review_rewrite_required"):
+        service.build_commit(**artifacts)
+
+    # 修改正文后旧裁决因内容绑定失效；新的 clean artifacts 可以重新提交。
+    (tmp_path / "正文" / "第0003章.md").write_text(
+        "晨光里，林舟仍留在北城客栈。",
+        encoding="utf-8",
+    )
+    clean = _build_commit(
+        service,
+        tmp_path,
+        chapter=3,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+        },
+        disambiguation_result={"pending": []},
+        extraction_result={
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [],
+        },
+    )
+    assert clean["meta"]["status"] == "accepted"
+    assert HumanReviewService(tmp_path).list_items(3) == []
+
+
+def test_from_last_commit_rewrite_fails_without_mutating_commit_or_events(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    from data_modules.human_review import HumanReviewService
+
+    _service, _artifacts, items = _committed_chapter_with_review_manual_checks(
+        tmp_path
+    )
+    commit_path = (
+        tmp_path / ".story-system" / "commits" / "chapter_003.commit.json"
+    )
+    event_path = (
+        tmp_path / ".story-system" / "events" / "chapter_003.events.json"
+    )
+    commit_before = commit_path.read_bytes()
+    event_before = event_path.read_bytes() if event_path.is_file() else None
+    HumanReviewService(tmp_path).record(
+        {
+            "decisions": [
+                {"decision_id": items[0]["decision_id"], "action": "rewrite"}
+            ]
+        }
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _run_chapter_commit_cli(
+            monkeypatch,
+            capsys,
+            "--project-root",
+            str(tmp_path),
+            "--chapter",
+            "3",
+            "--from-last-commit",
+        )
+
+    assert "/canon-ledger-write 3" in str(excinfo.value)
+    assert commit_path.read_bytes() == commit_before
+    if event_before is None:
+        assert not event_path.exists()
+    else:
+        assert event_path.read_bytes() == event_before
+
+
+def test_mixed_confirm_and_rewrite_still_rejects_commit(tmp_path):
+    from data_modules.human_review import HumanReviewService
+
+    service, artifacts, items = _committed_chapter_with_review_manual_checks(
+        tmp_path,
+        count=2,
+    )
+    HumanReviewService(tmp_path).record(
+        {
+            "decisions": [
+                {"decision_id": items[0]["decision_id"], "action": "confirm"},
+                {"decision_id": items[1]["decision_id"], "action": "rewrite"},
+            ]
+        }
+    )
+
+    with pytest.raises(ValueError, match="human_review_rewrite_required"):
+        service.build_commit(**artifacts)
+
+
 def test_from_last_commit_replays_confirmed_decision_and_reprojects(
     tmp_path, monkeypatch, capsys
 ):

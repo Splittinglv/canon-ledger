@@ -495,19 +495,253 @@ def _status_from_issues(report: dict[str, Any], *, core_file_count: int = 0) -> 
     return STATUS_COMPLETED
 
 
-def _pending_human_review_items(project_root: Path, chapter: int | None) -> list[dict[str, Any]]:
-    if not chapter:
-        return []
-    try:
-        from .human_review import HumanReviewService
+def _human_review_item_status(item: dict[str, Any]) -> str:
+    """Normalize current and legacy human-review outcomes for reporting.
 
-        return [
-            item
-            for item in HumanReviewService(project_root).list_items(int(chapter))
-            if item.get("status") == "pending"
-        ]
-    except Exception:
+    New queues expose one of ``pending``, ``resolved`` or
+    ``rewrite_required``.  The action/outcome fallbacks keep reports safe while
+    an older queue is being migrated: ignoring a reviewer-raised manual check
+    means the prose really is wrong and must never be presented as resolved.
+    """
+    status = str(item.get("status") or "").strip()
+    outcome = str(item.get("outcome") or "").strip()
+    action = str(
+        item.get("action") or item.get("decision_action") or ""
+    ).strip()
+    source = str(item.get("source") or "").strip()
+    if (
+        status in {"rewrite", "rewrite_required"}
+        or outcome in {"rewrite", "rewrite_required"}
+        or action in {"rewrite", "rewrite_required"}
+        or (source == "review_manual_check" and action == "ignore")
+    ):
+        return "rewrite_required"
+    if status == "pending" or (not status and not outcome and not action):
+        return "pending"
+    if status == "resolved" or outcome == "resolved":
+        return "resolved"
+    if status in {"confirm", "ignore", "replace"}:
+        return "resolved"
+    if action in {"confirm", "ignore", "replace"}:
+        return "resolved"
+    # Unknown queue states are safer to surface for confirmation than to count
+    # as successfully resolved.
+    return "pending"
+
+
+def _load_human_review_items(
+    project_root: Path,
+    chapter: int | None,
+    *,
+    include_previous: bool = False,
+) -> list[dict[str, Any]]:
+    if not chapter and not include_previous:
         return []
+    from .human_review import HumanReviewService
+
+    service = HumanReviewService(project_root)
+    if include_previous and chapter:
+        raw_items: list[dict[str, Any]] = []
+        for path in sorted(service.queue_root.glob("chapter_*.json")):
+            try:
+                queue_chapter = int(path.stem.removeprefix("chapter_"))
+            except ValueError as exc:
+                raise ValueError(
+                    f"human_review_queue_invalid:{path.name}"
+                ) from exc
+            if 0 < queue_chapter <= int(chapter):
+                raw_items.extend(service.list_items(queue_chapter))
+    else:
+        raw_items = (
+            service.list_items()
+            if include_previous
+            else service.list_items(int(chapter or 0))
+        )
+    items = [dict(item) for item in raw_items if isinstance(item, dict)]
+    if include_previous and chapter:
+        items = [
+            item
+            for item in items
+            if 0 < int(item.get("chapter") or 0) <= int(chapter)
+        ]
+    return items
+
+
+def _applied_human_review_receipts(
+    project_root: Path,
+    chapter: int,
+) -> tuple[set[str], dict[str, str]]:
+    commit_payload, commit_error = _read_json(_commit_path(project_root, chapter))
+    if commit_error or not isinstance(commit_payload, dict):
+        return set(), {}
+    provenance = commit_payload.get("provenance") or {}
+    human_review = (
+        provenance.get("human_review")
+        if isinstance(provenance, dict)
+        and isinstance(provenance.get("human_review"), dict)
+        else {}
+    )
+    applied_ids = {
+        str(value)
+        for value in (human_review.get("resolved_decision_ids") or [])
+        if str(value)
+    }
+    applied_receipts = {
+        str(item.get("decision_id") or ""): str(
+            item.get("decision_sha256") or ""
+        )
+        for item in (human_review.get("decision_receipts") or [])
+        if isinstance(item, dict)
+        and str(item.get("decision_id") or "")
+        and str(item.get("decision_sha256") or "")
+    }
+    return applied_ids, applied_receipts
+
+
+def _human_review_work(
+    project_root: Path,
+    chapter: int | None,
+    review_payload: dict[str, Any] | None = None,
+    *,
+    include_previous: bool = False,
+    items: list[dict[str, Any]] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    state_errors: list[dict[str, Any]] = []
+    if items is not None:
+        loaded = list(items)
+    else:
+        try:
+            loaded = _load_human_review_items(
+                project_root,
+                chapter,
+                include_previous=include_previous,
+            )
+        except Exception as exc:
+            loaded = []
+            state_errors.append(
+                {
+                    "chapter": int(chapter or 0),
+                    "error": str(exc),
+                }
+            )
+    pending = [item for item in loaded if _human_review_item_status(item) == "pending"]
+    rewrite_required = [
+        item
+        for item in loaded
+        if _human_review_item_status(item) == "rewrite_required"
+    ]
+    resolved = [
+        item for item in loaded if _human_review_item_status(item) == "resolved"
+    ]
+
+    # A fresh review result may contain manual checks just before the queue is
+    # persisted.  Once a chapter has queue items, their status is authoritative
+    # and the still-present manual_checks array must not reopen resolved work.
+    current_queue_items = [
+        item
+        for item in loaded
+        if chapter and int(item.get("chapter") or 0) == int(chapter)
+    ]
+    checks = _review_manual_checks(review_payload)
+    if chapter and checks and not current_queue_items:
+        pending.extend(
+            {
+                "chapter": int(chapter),
+                "status": "pending",
+                "source": "review_manual_check",
+                "synthetic": True,
+            }
+            for _ in checks
+        )
+
+    applied_by_chapter: dict[int, tuple[set[str], dict[str, str]]] = {}
+    resolved_not_replayed: list[dict[str, Any]] = []
+    for item in resolved:
+        item_chapter = int(item.get("chapter") or 0)
+        decision_id = str(item.get("decision_id") or "")
+        if item_chapter <= 0:
+            resolved_not_replayed.append(item)
+            continue
+        if item_chapter not in applied_by_chapter:
+            applied_by_chapter[item_chapter] = _applied_human_review_receipts(
+                project_root,
+                item_chapter,
+            )
+        applied_ids, applied_receipts = applied_by_chapter[item_chapter]
+        decision_sha256 = str(item.get("decision_sha256") or "")
+        applied = bool(decision_id) and (
+            decision_id in applied_ids
+            and applied_receipts.get(decision_id) == decision_sha256
+            if decision_sha256
+            else decision_id in applied_ids
+        )
+        if not applied:
+            resolved_not_replayed.append(item)
+    return {
+        "pending": pending,
+        "rewrite_required": rewrite_required,
+        "resolved": resolved,
+        "resolved_not_replayed": resolved_not_replayed,
+        "state_errors": state_errors,
+    }
+
+
+def _human_review_chapters(items: list[dict[str, Any]]) -> list[int]:
+    return sorted(
+        {
+            int(item.get("chapter") or 0)
+            for item in items
+            if int(item.get("chapter") or 0) > 0
+        }
+    )
+
+
+def _human_review_next_action(
+    work: dict[str, list[dict[str, Any]]],
+    *,
+    fallback_chapter: int | None,
+) -> dict[str, str] | None:
+    """Choose one recovery command by chapter prefix, then state priority."""
+    required = {
+        "rewrite_required": work.get("rewrite_required") or [],
+        "resolved_not_replayed": work.get("resolved_not_replayed") or [],
+        "pending": work.get("pending") or [],
+    }
+    if work.get("state_errors"):
+        return {
+            "label": "修复人工确认数据",
+            "description": "人工确认队列或裁决账本无法可靠读取；先修复再继续写作。",
+            "command": "/canon-ledger-doctor",
+        }
+    chapters = _human_review_chapters(
+        [item for values in required.values() for item in values]
+    )
+    target = chapters[0] if chapters else int(fallback_chapter or 0)
+    if target <= 0:
+        return None
+
+    def _at_target(key: str) -> bool:
+        return any(int(item.get("chapter") or 0) == target for item in required[key])
+
+    if _at_target("rewrite_required"):
+        return {
+            "label": "修改确认穿帮的正文",
+            "description": "该章已确认存在穿帮；修改正文并重新完成事实审查与提交。",
+            "command": f"/canon-ledger-write {target}",
+        }
+    if _at_target("resolved_not_replayed"):
+        return {
+            "label": "让已保存裁决生效",
+            "description": "裁决已保存但尚未进入提交；重新运行确认流程完成重放。",
+            "command": f"/canon-ledger-confirm {target}",
+        }
+    if _at_target("pending"):
+        return {
+            "label": "确认待裁决事实",
+            "description": "有拿不准的事实等你确认；确认前不要写下一章。",
+            "command": f"/canon-ledger-confirm {target}",
+        }
+    return None
 
 
 def _review_manual_checks(review_payload: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -520,16 +754,6 @@ def _review_manual_checks(review_payload: dict[str, Any] | None) -> list[dict[st
     ]
 
 
-def _has_confirm_work(
-    project_root: Path,
-    chapter: int | None,
-    review_payload: dict[str, Any] | None = None,
-) -> bool:
-    if _pending_human_review_items(project_root, chapter):
-        return True
-    return bool(_review_manual_checks(review_payload))
-
-
 def _append_confirm_required(
     report: dict[str, Any],
     project_root: Path,
@@ -538,33 +762,121 @@ def _append_confirm_required(
     *,
     source: str,
     path: str,
-) -> None:
-    if not chapter or not _has_confirm_work(project_root, chapter, review_payload):
-        return
+) -> dict[str, list[dict[str, Any]]]:
+    work = _human_review_work(
+        project_root,
+        chapter,
+        review_payload,
+        include_previous=True,
+    )
+    state_errors = work.get("state_errors") or []
+    if state_errors:
+        _add_manual_issue(
+            report,
+            "must_handle",
+            code="human_review_state_invalid",
+            title="人工确认数据无法读取",
+            reason=f"人工确认队列或裁决账本损坏（{state_errors[0].get('error') or 'unknown'}）。",
+            impact="系统无法证明前文章节的人工确认已经闭环，不能继续写下一章。",
+            next_action="先运行项目体检并修复人工确认数据。",
+            command="/canon-ledger-doctor",
+            source=source,
+            path=path,
+        )
+        return work
+    if not chapter:
+        return work
+    selected_command = str(
+        (_human_review_next_action(work, fallback_chapter=chapter) or {}).get(
+            "command"
+        )
+        or ""
+    )
+
+    def issue_action(command: str, active_text: str) -> tuple[str, str]:
+        if command == selected_command:
+            return active_text, command
+        return (
+            "状态已记录；先按报告第三部分的唯一下一步处理更早事项。",
+            "",
+        )
+
+    rewrite_required = work["rewrite_required"]
+    if rewrite_required:
+        rewrite_chapters = _human_review_chapters(rewrite_required)
+        listed = "、".join(str(value) for value in rewrite_chapters)
+        earliest = rewrite_chapters[0] if rewrite_chapters else int(chapter)
+        next_action, command = issue_action(
+            f"/canon-ledger-write {earliest}",
+            "修改最早受影响章节，并重新完成事实审查与提交。",
+        )
+        _add_manual_issue(
+            report,
+            "must_handle",
+            code="human_review_rewrite_required",
+            title="已确认正文存在穿帮，需要改写",
+            reason=f"第 {listed or earliest} 章有 {len(rewrite_required)} 条人工裁决要求修改正文。",
+            impact="原正文不能重放为已接受提交，也不能继续写下一章。",
+            next_action=next_action,
+            command=command,
+            source=source,
+            path=path,
+        )
+
+    not_replayed = work["resolved_not_replayed"]
+    if not_replayed:
+        chapters = _human_review_chapters(not_replayed)
+        listed = "、".join(str(value) for value in chapters)
+        earliest = chapters[0] if chapters else int(chapter)
+        next_action, command = issue_action(
+            f"/canon-ledger-confirm {earliest}",
+            "重新运行确认命令完成最早章节的提交重放。",
+        )
+        _add_manual_issue(
+            report,
+            "must_handle",
+            code="human_review_decisions_not_replayed",
+            title="裁决已保存但尚未生效",
+            reason=f"第 {listed or earliest} 章有 {len(not_replayed)} 条裁决还没有写入提交来源。",
+            impact="这些裁决尚未进入正史，不能据此继续下一章。",
+            next_action=next_action,
+            command=command,
+            source=source,
+            path=path,
+        )
+
+    pending = work["pending"]
+    if not pending:
+        return work
+    pending_chapters = _human_review_chapters(pending)
+    earliest = pending_chapters[0] if pending_chapters else int(chapter)
+    desired_command = f"/canon-ledger-confirm {earliest}"
+    next_action, command = issue_action(
+        desired_command,
+        "运行确认命令，逐条选择后系统会重放本章提交。",
+    )
     already = any(
-        str(item.get("command") or "").startswith("/canon-ledger-confirm")
+        str(item.get("code") or "") == "human_review_confirm"
+        and str(item.get("command") or "") == command
         for item in report.get("issues", {}).get("needs_confirmation") or []
     )
     if already:
-        return
-    pending = _pending_human_review_items(project_root, chapter)
-    checks = _review_manual_checks(review_payload)
-    count = len(pending) or len(checks)
+        return work
     _add_manual_issue(
         report,
         "needs_confirmation",
         code="human_review_confirm",
         title="有些事实疑点需要作者确认",
-        reason=f"本章有 {count} 项拿不准的事实需要你判断。",
+        reason=f"还有 {len(pending)} 项拿不准的事实需要你判断。",
         impact=(
-            "提交可以先接受，歧义不会进入正史。不确认的话，"
-            "下一章仍不能把「账本没有获得记录 / 不在场 / 不持有」当成确定穿帮。"
+            "待确认事实不会进入正史；确认完成前不能继续写下一章。"
         ),
-        next_action="运行确认命令，逐条选择后系统会重放本章提交。",
-        command=f"/canon-ledger-confirm {chapter}",
+        next_action=next_action,
+        command=command,
         source=source,
         path=path,
     )
+    return work
 
 
 def _append_project_status_next_action(report: dict[str, Any], project_root: Path, chapter: int | None) -> None:
@@ -658,7 +970,7 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             path=COMMIT_ARTIFACT_FILES[0],
         )
 
-    _append_confirm_required(
+    human_review_work = _append_confirm_required(
         report,
         project_root,
         chapter,
@@ -781,25 +1093,18 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
         )
 
     report["overall_status"] = _status_from_issues(report, core_file_count=core_files)
-    needs_confirm = _has_confirm_work(
-        project_root,
-        chapter,
-        review_payload if isinstance(review_payload, dict) else None,
+    human_review_action = _human_review_next_action(
+        human_review_work,
+        fallback_chapter=chapter,
     )
-    if report["issues"]["must_handle"]:
+    if human_review_action:
+        report["next_actions"] = [human_review_action]
+    elif report["issues"]["must_handle"]:
         report["next_actions"].append(
             {
                 "label": "先处理阻断项",
                 "description": "先处理“必须处理”里的问题，再重新运行同一条写章命令。",
                 "command": f"/canon-ledger-write {chapter}",
-            }
-        )
-    elif needs_confirm:
-        report["next_actions"].append(
-            {
-                "label": "确认待裁决事实",
-                "description": "有拿不准的事实等你确认；确认后系统会重放本章提交。确认前不要写下一章。",
-                "command": f"/canon-ledger-confirm {chapter}",
             }
         )
     elif report["overall_status"] == STATUS_COMPLETED:
@@ -1022,7 +1327,7 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
                 path="审查报告",
             )
 
-    _append_confirm_required(
+    human_review_work = _append_confirm_required(
         report,
         project_root,
         chapter,
@@ -1032,25 +1337,18 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
     )
 
     report["overall_status"] = _status_from_issues(report, core_file_count=core_files)
-    needs_confirm = _has_confirm_work(
-        project_root,
-        chapter,
-        review_result if isinstance(review_result, dict) else None,
+    human_review_action = _human_review_next_action(
+        human_review_work,
+        fallback_chapter=chapter,
     )
-    if report["issues"]["must_handle"]:
+    if human_review_action:
+        report["next_actions"] = [human_review_action]
+    elif report["issues"]["must_handle"]:
         report["next_actions"].append(
             {
                 "label": "处理审查问题",
                 "description": "先处理审查报告中的阻断问题，再继续写作或提交。",
                 "command": "/canon-ledger-review",
-            }
-        )
-    elif needs_confirm:
-        report["next_actions"].append(
-            {
-                "label": "确认待裁决事实",
-                "description": "有拿不准的事实等你确认；确认后系统会重放本章提交。确认前不要写下一章。",
-                "command": f"/canon-ledger-confirm {chapter}",
             }
         )
     else:
@@ -1124,10 +1422,14 @@ def build_confirm_report(
     report = _new_report(project_root, stage="confirm", chapter=chapter, volume=volume)
     core_files = 0
     service = HumanReviewService(project_root)
+    state_errors: list[dict[str, Any]] = []
     try:
         items = service.list_items(chapter=chapter)
     except ValueError as exc:
         items = []
+        state_errors.append(
+            {"chapter": int(chapter or 0), "error": str(exc)}
+        )
         _add_manual_issue(
             report,
             "must_handle",
@@ -1140,8 +1442,35 @@ def build_confirm_report(
             source="human_review",
             path=_rel(project_root, service.ledger_path),
         )
-    pending = [item for item in items if item.get("status") == "pending"]
-    resolved = [item for item in items if item.get("status") != "pending"]
+    human_review_work = _human_review_work(
+        project_root,
+        chapter,
+        items=[dict(item) for item in items if isinstance(item, dict)],
+    )
+    human_review_work["state_errors"] = state_errors
+    pending = human_review_work["pending"]
+    resolved = human_review_work["resolved"]
+    rewrite_required = human_review_work["rewrite_required"]
+    not_replayed = human_review_work["resolved_not_replayed"]
+    selected_command = str(
+        (
+            _human_review_next_action(
+                human_review_work,
+                fallback_chapter=chapter,
+            )
+            or {}
+        ).get("command")
+        or ""
+    )
+
+    def issue_action(command: str, active_text: str) -> tuple[str, str]:
+        if command == selected_command:
+            return active_text, command
+        return (
+            "状态已记录；先按报告第三部分的唯一下一步处理更早事项。",
+            "",
+        )
+
     queue_path = (
         service.queue_path(int(chapter)) if chapter else service.queue_root
     )
@@ -1150,7 +1479,10 @@ def build_confirm_report(
         label="人工确认队列",
         path=_rel(project_root, queue_path),
         status="completed",
-        note=f"已裁决 {len(resolved)} 条，待确认 {len(pending)} 条",
+        note=(
+            f"已裁决 {len(resolved)} 条，待确认 {len(pending)} 条，"
+            f"需改写 {len(rewrite_required)} 条"
+        ),
     )
     core_files += 1
 
@@ -1159,6 +1491,15 @@ def build_confirm_report(
     )
     if pending:
         listed = "、".join(str(item) for item in pending_chapters) or str(chapter or "")
+        desired_command = (
+            f"/canon-ledger-confirm {pending_chapters[0]}"
+            if pending_chapters
+            else "/canon-ledger-confirm"
+        )
+        next_action, command = issue_action(
+            desired_command,
+            "继续运行确认命令逐条裁决。",
+        )
         _add_manual_issue(
             report,
             "needs_confirmation",
@@ -1166,62 +1507,65 @@ def build_confirm_report(
             title="仍有候选事实等待作者确认",
             reason=f"第 {listed} 章还有 {len(pending)} 条待确认项。",
             impact="未确认的候选事实不会进入正史，相关维度保持待验证状态。",
-            next_action="继续运行确认命令逐条裁决。",
-            command=(
-                f"/canon-ledger-confirm {pending_chapters[0]}"
-                if pending_chapters
-                else "/canon-ledger-confirm"
-            ),
+            next_action=next_action,
+            command=command,
             source="human_review",
             path=_rel(project_root, queue_path),
         )
 
-    # 已落库的裁决只有重放进本章提交后才真正生效。区分「已裁决」与
-    # 「已生效」，否则只 resolve 未 replay 也会被误报为完成。
-    resolved_by_chapter: dict[int, list[dict[str, Any]]] = {}
-    for item in resolved:
+    rewrite_chapters = _human_review_chapters(rewrite_required)
+    if rewrite_required:
+        listed = "、".join(str(value) for value in rewrite_chapters)
+        first_chapter = rewrite_chapters[0] if rewrite_chapters else int(chapter or 0)
+        next_action, command = issue_action(
+            f"/canon-ledger-write {first_chapter}",
+            "修改最早受影响章节，并重新完成事实审查与提交。",
+        )
+        _add_manual_issue(
+            report,
+            "must_handle",
+            code="human_review_rewrite_required",
+            title="已确认正文存在穿帮，需要改写",
+            reason=f"第 {listed or first_chapter} 章有 {len(rewrite_required)} 条裁决要求改正文。",
+            impact="原正文不能重放为已接受提交，也不能继续写下一章。",
+            next_action=next_action,
+            command=command,
+            source="human_review",
+            path=_rel(project_root, queue_path),
+        )
+
+    # 只有 resolved 裁决需要检查 commit provenance；rewrite_required 绝不
+    # 能通过“已记录 decision id”被误当成已重放成功。
+    not_replayed_by_chapter: dict[int, int] = {}
+    for item in not_replayed:
         item_chapter = int(item.get("chapter") or 0)
         if item_chapter > 0:
-            resolved_by_chapter.setdefault(item_chapter, []).append(item)
-    unapplied_by_chapter: list[tuple[int, int]] = []
-    for item_chapter, chapter_items in sorted(resolved_by_chapter.items()):
-        commit_payload, commit_error = _read_json(
-            _commit_path(project_root, item_chapter)
-        )
-        applied_ids: set[str] = set()
-        if not commit_error and isinstance(commit_payload, dict):
-            provenance = commit_payload.get("provenance") or {}
-            human_review = (
-                provenance.get("human_review")
-                if isinstance(provenance.get("human_review"), dict)
-                else {}
+            not_replayed_by_chapter[item_chapter] = (
+                not_replayed_by_chapter.get(item_chapter, 0) + 1
             )
-            applied_ids = {
-                str(value)
-                for value in (human_review.get("resolved_decision_ids") or [])
-            }
-        missing = [
-            item
-            for item in chapter_items
-            if str(item.get("decision_id") or "") not in applied_ids
-        ]
-        if missing:
-            unapplied_by_chapter.append((item_chapter, len(missing)))
-    if unapplied_by_chapter:
+    if not_replayed:
         listed = "、".join(
             f"第 {item_chapter} 章 {count} 条"
-            for item_chapter, count in unapplied_by_chapter
+            for item_chapter, count in sorted(not_replayed_by_chapter.items())
         )
-        first_chapter = unapplied_by_chapter[0][0]
+        first_chapter = (
+            min(not_replayed_by_chapter)
+            if not_replayed_by_chapter
+            else int(chapter or 0)
+        )
+        next_action, command = issue_action(
+            f"/canon-ledger-confirm {first_chapter}",
+            "重新运行确认命令完成本章重放。",
+        )
         _add_manual_issue(
             report,
             "must_handle",
             code="human_review_decisions_not_replayed",
             title="裁决已保存但尚未生效",
-            reason=f"{listed}裁决还没有重放进本章提交。",
+            reason=f"{listed or len(not_replayed)}裁决还没有重放进本章提交。",
             impact="正史中的这些候选事实仍是未生效状态，已保存的裁决不会自动生效。",
-            next_action="重新运行确认命令完成本章重放。",
-            command=f"/canon-ledger-confirm {first_chapter}",
+            next_action=next_action,
+            command=command,
             source="human_review",
             path=_rel(project_root, queue_path),
         )
@@ -1286,20 +1630,14 @@ def build_confirm_report(
                 )
 
     report["overall_status"] = _status_from_issues(report, core_file_count=core_files)
-    if report["issues"]["must_handle"]:
+    human_review_action = _human_review_next_action(
+        human_review_work,
+        fallback_chapter=chapter,
+    )
+    if human_review_action:
+        report["next_actions"] = [human_review_action]
+    elif report["issues"]["must_handle"]:
         pass
-    elif pending:
-        report["next_actions"].append(
-            {
-                "label": "继续裁决",
-                "description": "还有待确认项，可以继续逐条裁决。",
-                "command": (
-                    f"/canon-ledger-confirm {pending_chapters[0]}"
-                    if pending_chapters
-                    else "/canon-ledger-confirm"
-                ),
-            }
-        )
     else:
         next_chapter = int(chapter or 0) + 1
         report["next_actions"].append(

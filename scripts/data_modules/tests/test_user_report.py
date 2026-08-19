@@ -571,6 +571,18 @@ def test_confirm_report_completes_after_all_decisions(tmp_path: Path) -> None:
         for item in saved_only["issues"]["must_handle"]
     )
 
+    resolved_item = HumanReviewService(tmp_path).list_items(3)[0]
+    human_review_provenance = {
+        "resolved_decision_ids": ["ch0003-alice-location-check"]
+    }
+    if resolved_item.get("decision_sha256"):
+        human_review_provenance["decision_receipts"] = [
+            {
+                "decision_id": "ch0003-alice-location-check",
+                "decision_sha256": resolved_item["decision_sha256"],
+            }
+        ]
+
     commit_path = tmp_path / ".story-system" / "commits" / "chapter_003.commit.json"
     commit_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json(
@@ -578,9 +590,7 @@ def test_confirm_report_completes_after_all_decisions(tmp_path: Path) -> None:
         {
             "meta": {"chapter": 3, "status": "accepted"},
             "provenance": {
-                "human_review": {
-                    "resolved_decision_ids": ["ch0003-alice-location-check"]
-                }
+                "human_review": human_review_provenance
             },
         },
     )
@@ -591,3 +601,276 @@ def test_confirm_report_completes_after_all_decisions(tmp_path: Path) -> None:
     assert report["overall_status"] == "completed"
     assert not report["issues"]["needs_confirmation"]
     assert "待确认 0 条" in text
+
+
+def test_write_report_rewrite_required_is_must_handle_and_only_rewrite_action(
+    tmp_path: Path,
+) -> None:
+    from data_modules.human_review import HumanReviewService
+
+    _write_success_case(tmp_path, chapter=4)
+    items = [
+        {
+            "decision_id": "ch0002-pending",
+            "chapter": 2,
+            "status": "pending",
+        },
+        {
+            "decision_id": "ch0002-resolved",
+            "decision_sha256": "resolved-sha",
+            "chapter": 2,
+            "status": "resolved",
+        },
+        {
+            "decision_id": "ch0002-rewrite",
+            "chapter": 2,
+            "status": "rewrite_required",
+            "outcome": "rewrite_required",
+            "source": "review_manual_check",
+        },
+        {
+            "decision_id": "ch0003-rewrite",
+            "chapter": 3,
+            "status": "rewrite_required",
+        },
+    ]
+
+    with patch.object(HumanReviewService, "list_items", return_value=items):
+        report = build_user_report(tmp_path, stage="write", chapter=4)
+
+    assert report["overall_status"] == "needs_user"
+    assert any(
+        item["code"] == "human_review_rewrite_required"
+        for item in report["issues"]["must_handle"]
+    )
+    assert [item["command"] for item in report["next_actions"]] == [
+        "/canon-ledger-write 2"
+    ]
+
+
+def test_confirm_report_rewrite_is_not_resolved_or_replayed(tmp_path: Path) -> None:
+    from data_modules.human_review import HumanReviewService
+
+    _make_project(tmp_path)
+    items = [
+        {
+            "decision_id": "ch0003-review-check",
+            "decision_sha256": "rewrite-sha",
+            "chapter": 3,
+            "status": "rewrite_required",
+            "action": "rewrite",
+            "source": "review_manual_check",
+        }
+    ]
+    with patch.object(HumanReviewService, "list_items", return_value=items):
+        report = build_user_report(tmp_path, stage="confirm")
+    queue_file = next(
+        item for item in report["files"] if item["label"] == "人工确认队列"
+    )
+
+    assert report["overall_status"] == "needs_user"
+    assert "已裁决 0 条" in queue_file["note"]
+    assert "需改写 1 条" in queue_file["note"]
+    assert any(
+        item["code"] == "human_review_rewrite_required"
+        for item in report["issues"]["must_handle"]
+    )
+    assert not any(
+        item["code"] == "human_review_decisions_not_replayed"
+        for item in report["issues"]["must_handle"]
+    )
+    assert [item["command"] for item in report["next_actions"]] == [
+        "/canon-ledger-write 3"
+    ]
+
+
+def test_confirm_report_requires_matching_decision_receipt(tmp_path: Path) -> None:
+    from data_modules.human_review import HumanReviewService
+
+    _make_project(tmp_path)
+    item = {
+        "decision_id": "ch0003-location",
+        "decision_sha256": "current-decision-sha",
+        "chapter": 3,
+        "status": "resolved",
+    }
+    commit_path = tmp_path / ".story-system" / "commits" / "chapter_003.commit.json"
+    _write_json(
+        commit_path,
+        {
+            "meta": {"chapter": 3, "status": "accepted"},
+            "provenance": {
+                "human_review": {
+                    "resolved_decision_ids": ["ch0003-location"],
+                    "decision_receipts": [
+                        {
+                            "decision_id": "ch0003-location",
+                            "decision_sha256": "stale-decision-sha",
+                        }
+                    ],
+                }
+            },
+        },
+    )
+
+    with patch.object(HumanReviewService, "list_items", return_value=[item]):
+        stale = build_user_report(tmp_path, stage="confirm")
+
+    assert any(
+        issue["code"] == "human_review_decisions_not_replayed"
+        for issue in stale["issues"]["must_handle"]
+    )
+    assert [action["command"] for action in stale["next_actions"]] == [
+        "/canon-ledger-confirm 3"
+    ]
+
+    commit_payload = json.loads(commit_path.read_text(encoding="utf-8"))
+    commit_payload["provenance"]["human_review"]["decision_receipts"][0][
+        "decision_sha256"
+    ] = "current-decision-sha"
+    _write_json(commit_path, commit_payload)
+    with patch.object(HumanReviewService, "list_items", return_value=[item]):
+        applied = build_user_report(tmp_path, stage="confirm")
+
+    assert not applied["issues"]["must_handle"]
+    assert not any(
+        str(action.get("command") or "").startswith("/canon-ledger-confirm")
+        for action in applied["next_actions"]
+    )
+
+
+def test_confirm_report_uses_earliest_chapter_before_state_priority(
+    tmp_path: Path,
+) -> None:
+    from data_modules.human_review import HumanReviewService
+
+    _make_project(tmp_path)
+    items = [
+        {"decision_id": "ch0002-pending", "chapter": 2, "status": "pending"},
+        {
+            "decision_id": "ch0003-rewrite",
+            "chapter": 3,
+            "status": "rewrite_required",
+        },
+    ]
+
+    with patch.object(HumanReviewService, "list_items", return_value=items):
+        report = build_user_report(tmp_path, stage="confirm")
+
+    assert [item["command"] for item in report["next_actions"]] == [
+        "/canon-ledger-confirm 2"
+    ]
+    issue_commands = [
+        str(item.get("command") or "")
+        for bucket in ("needs_confirmation", "must_handle")
+        for item in report["issues"][bucket]
+        if str(item.get("command") or "")
+    ]
+    assert issue_commands == ["/canon-ledger-confirm 2"]
+    assert not any(
+        str(item.get("command") or "").startswith("/canon-ledger-write 4")
+        for item in report["next_actions"]
+    )
+
+
+def test_review_report_rewrite_does_not_reopen_manual_confirmation(
+    tmp_path: Path,
+) -> None:
+    from data_modules.human_review import HumanReviewService
+
+    _make_project(tmp_path)
+    chapter_file = tmp_path / "正文" / "第0004章.md"
+    chapter_file.write_text("第4章正文\n", encoding="utf-8")
+    binding = build_chapter_binding(tmp_path, 4)
+    _write_review(
+        tmp_path,
+        chapter=4,
+        chapter_binding=binding,
+        manual_checks=[
+            {
+                "category": "timeline",
+                "location": "第3段",
+                "description": "转场耗时是否成立",
+                "evidence": "片刻后抵达南港",
+                "reason": "作者已确认时间不足",
+            }
+        ],
+    )
+    items = [
+        {
+            "decision_id": "ch0004-timeline",
+            "chapter": 4,
+            "status": "rewrite_required",
+            "source": "review_manual_check",
+        }
+    ]
+    queue_path = HumanReviewService(tmp_path).queue_path(4)
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text("{}", encoding="utf-8")
+
+    with patch.object(HumanReviewService, "list_items", return_value=items):
+        report = build_user_report(tmp_path, stage="review", chapter=4)
+
+    assert any(
+        item["code"] == "human_review_rewrite_required"
+        for item in report["issues"]["must_handle"]
+    )
+    assert [item["command"] for item in report["next_actions"]] == [
+        "/canon-ledger-write 4"
+    ]
+
+
+def test_write_report_resolved_without_provenance_never_offers_next_chapter(
+    tmp_path: Path,
+) -> None:
+    from data_modules.human_review import HumanReviewService
+
+    _write_success_case(tmp_path, chapter=1)
+    items = [
+        {
+            "decision_id": "ch0001-resolved",
+            "decision_sha256": "decision-sha",
+            "chapter": 1,
+            "status": "resolved",
+        }
+    ]
+
+    with patch.object(HumanReviewService, "list_items", return_value=items):
+        report = build_user_report(tmp_path, stage="write", chapter=1)
+
+    assert any(
+        item["code"] == "human_review_decisions_not_replayed"
+        for item in report["issues"]["must_handle"]
+    )
+    assert [item["command"] for item in report["next_actions"]] == [
+        "/canon-ledger-confirm 1"
+    ]
+    assert not any(
+        str(item.get("command") or "") == "/canon-ledger-write 2"
+        for item in report["next_actions"]
+    )
+
+
+def test_write_report_fails_closed_on_corrupt_prior_human_review_queue(
+    tmp_path: Path,
+) -> None:
+    _write_success_case(tmp_path, chapter=4)
+    queue_path = (
+        tmp_path
+        / ".canon-ledger"
+        / "human-review"
+        / "queue"
+        / "chapter_0002.json"
+    )
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text("{not-json", encoding="utf-8")
+
+    report = build_user_report(tmp_path, stage="write", chapter=4)
+
+    assert any(
+        item["code"] == "human_review_state_invalid"
+        for item in report["issues"]["must_handle"]
+    )
+    assert [item["command"] for item in report["next_actions"]] == [
+        "/canon-ledger-doctor"
+    ]

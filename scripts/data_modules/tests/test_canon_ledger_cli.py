@@ -388,6 +388,8 @@ def test_human_review_cli_lists_and_records_decisions(
         module.main()
     assert int(exc.value.code or 0) == 0
     listed = json.loads(capsys.readouterr().out)
+    assert listed["schema_version"] == "canon-ledger-human-review-list/v2"
+    assert listed["rewrite_required"] == []
     # 队列 ID 带章节前缀防跨章串单；resolve 仍接受无歧义短 ID。
     assert listed["pending"][0]["decision_id"] == "ch0003-alice-location-check"
 
@@ -424,8 +426,94 @@ def test_human_review_cli_lists_and_records_decisions(
     assert int(exc.value.code or 0) == 0
     resolved = json.loads(capsys.readouterr().out)
     assert resolved["recorded"] == ["ch0003-alice-location-check"]
-    assert "chapter-commit" in resolved["next_action"]
-    assert service.list_items(3)[0]["status"] == "ignore"
+    assert resolved["next_action"].startswith("运行 /canon-ledger-confirm 3")
+    listed_item = service.list_items(3)[0]
+    assert listed_item["status"] == "resolved"
+    assert listed_item["decision_action"] == "ignore"
+
+
+def test_human_review_cli_routes_review_rewrite_back_to_write(
+    monkeypatch, tmp_path, capsys
+):
+    module = _load_canon_ledger_module()
+    project_root = tmp_path / "book"
+    (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
+    (project_root / ".canon-ledger" / "state.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    chapter_path = project_root / "正文" / "第0003章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("爱丽丝瞬间抵达北城。", encoding="utf-8")
+
+    from data_modules.chapter_content_binding import build_chapter_binding
+    from data_modules.human_review import HumanReviewService
+
+    service = HumanReviewService(project_root)
+    service.persist_queue(
+        3,
+        build_chapter_binding(project_root, 3),
+        [
+            {
+                "decision_id": "timeline-check",
+                "source": "review_manual_check",
+                "category": "timeline",
+                "dimension": "presence",
+                "reason": "转场时间可能不足",
+                "options": ["confirm", "rewrite"],
+            }
+        ],
+    )
+    decisions_path = project_root / "human-decisions.json"
+    decisions_path.write_text(
+        json.dumps(
+            {
+                "decisions": [
+                    {"decision_id": "timeline-check", "action": "rewrite"}
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "canon-ledger",
+            "--project-root",
+            str(project_root),
+            "human-review",
+            "resolve",
+            "--input-file",
+            "human-decisions.json",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+    assert int(exc.value.code or 0) == 0
+    resolved = json.loads(capsys.readouterr().out)
+    assert resolved["next_action"].endswith("/canon-ledger-write 3")
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "canon-ledger",
+            "--project-root",
+            str(project_root),
+            "human-review",
+            "list",
+            "--chapter",
+            "3",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+    assert int(exc.value.code or 0) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["resolved"] == []
+    assert listed["rewrite_required"][0]["status"] == "rewrite_required"
 
 
 def test_preflight_includes_story_runtime_health(monkeypatch, tmp_path, capsys):

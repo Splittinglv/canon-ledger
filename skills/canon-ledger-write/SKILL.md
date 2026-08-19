@@ -113,6 +113,8 @@ CHAPTER_GOAL="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import sys; from pathlib im
 
 必备文件：`MASTER_SETTING.json`（题材/设定合同）、`volume_{NNN}.json`（卷级约束）、`chapter_{NNN}.review.json`（必须节点/禁区）。缺失则阻断。
 
+prewrite 同时是人工审核闭环的硬门禁。写第 N 章前，任一更早章存在未裁决 `pending`、已确认穿帮的 `rewrite_required`，或裁决已保存但未重放生效，都必须阻断，不得只作 warning 继续写作。恢复动作只指向最早未闭环章节：`pending` / 未重放用 `/canon-ledger-confirm K`，`rewrite_required` 用 `/canon-ledger-write K`。第 K 章自己进入返工时可以重新运行 `/canon-ledger-write K`，但不允许跳到后续章。
+
 `chapter_{NNN}.json` 必须优先检查顶层 `chapter_directive`。`chapter_focus` 只能来自 `chapter_directive.goal` 或真实 query，不得从 `dynamic_context` 的参考摘要继承。
 
 主流程必须把本轮用户消息里除写章命令/章号/模式开关外的要求写入 `${PROJECT_ROOT}/.canon-ledger/tmp/turn_requirements.md`，格式固定为：
@@ -341,7 +343,7 @@ fi
   --extraction-result "${PROJECT_ROOT}/.canon-ledger/tmp/extraction_result.json"
 ```
 
-自动判定：`blocking_count>0`、存在 `pending[].blocking=true`，或 `fulfillment.enforcement=strict` 且 `missed_nodes` 非空 → rejected。普通 pending 和 advisory missed_nodes 不阻断；pending 的候选事件在人工确认前不会进入 canon。
+自动判定：`blocking_count>0`、存在 `pending[].blocking=true`，或 `fulfillment.enforcement=strict` 且 `missed_nodes` 非空 → rejected。普通 pending 不阻断当前章的首次提交（候选事件在人工确认前不会进入 canon），但会通过下一章 prewrite 硬门禁阻止继续写作；advisory missed_nodes 仍不阻断。
 
 chapter-commit 后如有普通 pending，列出人工队列：
 
@@ -351,7 +353,7 @@ chapter-commit 后如有普通 pending，列出人工队列：
   human-review list --chapter {chapter_num}
 ```
 
-裁决交给交互式确认完成：备份后若队列仍有 pending，本轮必须立刻按 `/canon-ledger-confirm {chapter_num}` 逐条 AskQuestion，不得把确认留到以后，也不得把「写下一章」列为下一步。提交与备份可以先做完（歧义未入正史）。裁决绑定当前正文哈希，正文变化后旧裁决不会被复用。
+裁决交给交互式确认完成：备份后若队列仍有 pending，本轮必须立刻按 `/canon-ledger-confirm {chapter_num}` 逐条 AskQuestion，不得把确认留到以后，也不得把「写下一章」列为下一步。审查疑点的选项是 `confirm`（不是穿帮）/ `rewrite`（确认穿帮，必须改正文）/ 队列可选的 `replace`（追认或替换事实）；抽取候选事实仍用 `confirm` / `ignore` / `replace`，其中 `ignore` 只丢弃候选事实。提交与备份可以先做完（歧义未入正史）。裁决绑定当前正文哈希，正文变化后旧裁决不会被复用。
 
 #### 5.3 验证投影
 
@@ -387,7 +389,7 @@ commit 未生成→重跑 5.2。projection 失败→只补跑 projection，不�
 
 备份必须以解析后的 `PROJECT_ROOT` 为准，禁止从工作区父目录执行裸全量 Git add，避免把书项目仓库作为父仓库的嵌入仓库/submodule 加入。
 
-备份后再列一次人工队列。若 `pending` 非空：立刻 `Read` `${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-confirm/SKILL.md`，从该 skill 的 Step 2 执行（环境与项目根已就绪，不必重复引导），当场逐条 `AskQuestion`。队列为空才进入最终报告的「写下一章」。
+备份后再列一次人工队列。若 `pending` 非空：立刻 `Read` `${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-confirm/SKILL.md`，从该 skill 的 Step 2 执行（环境与项目根已就绪，不必重复引导），当场逐条 `AskQuestion`。确认结果出现 `rewrite` 时，必须停止 `chapter-commit --from-last-commit`，报告「需要你处理」，唯一下一步是 `/canon-ledger-write {chapter_num}`；只有队列为空、无 `rewrite_required` 且已保存裁决全部重放生效，才进入最终报告的「写下一章」。
 
 ## 作者友好过程提示与恢复契约
 
@@ -408,7 +410,7 @@ commit 未生成→重跑 5.2。projection 失败→只补跑 projection，不�
 3. 起草正文：根据写作任务书生成本章正文。
 4. 写作检查：确定穿帮才定点修补，拿不准的判断转人工，不改文风或剧情选择。
 5. 保存本章故事事实：提取本章目标完成情况、歧义和新事实。
-6. 提交备份：把本章事实入账、更新故事资料并备份；有待确认项则当场确认。
+6. 提交备份：把本章事实入账、更新故事资料并备份；有待确认项则当场确认，确认穿帮则交回本章返工而不重放旧正文。
 
 重复执行同一章时，先读取可信断点：
 
@@ -424,7 +426,7 @@ commit 未生成→重跑 5.2。projection 失败→只补跑 projection，不�
 
 每个关键步骤完成后记录 `run-ledger record-write-step`，至少记录 step、status、输入/输出文件路径、problems、auto_handled 和 duration_ms，供下一次续跑和最终报告使用。
 
-少打扰确认策略：确定无误的事实不反复询问；有 pending 或审查疑点时必须当场确认，不得把「继续写下一章」当作并列选项。无待确认项才进入下一章。只有创作方向、显式 retcon、文件覆盖风险或 blocking issue 无法定点处理时才另开询问。
+少打扰确认策略：确定无误的事实不反复询问；有 pending 或审查疑点时必须当场确认，不得把「继续写下一章」当作并列选项。只有无待确认项、无 `rewrite_required` 且裁决已重放生效才进入下一章。只有创作方向、显式 retcon、文件覆盖风险或 blocking issue 无法定点处理时才另开询问。
 
 卡住时必须说明卡点、已完成内容和恢复建议：例如“正文和审查报告已保留，保存本章故事事实失败；重新运行 `/canon-ledger-write {chapter_num}` 会从 data-agent 继续”。不可恢复故障才在最终报告提示 `.canon-ledger/logs/run_last.log`；平时只保留日志，不打扰作者。
 
@@ -448,6 +450,7 @@ commit 未生成→重跑 5.2。projection 失败→只补跑 projection，不�
 6. accepted CHAPTER_COMMIT，projection 五项 done/skipped
 7. chapter_status=committed（projection 自动推进）
 8. `write-gate` 的 prewrite / precommit / postcommit 均通过
+9. 本章人工队列已闭环：无 `pending`、无 `rewrite_required`、无已保存但未重放生效的裁决。任一项不满足时不得建议写下一章。
 
 ## 失败恢复
 
@@ -483,26 +486,34 @@ commit 未生成→重跑 5.2。projection 失败→只补跑 projection，不�
 - `.story-system/commits/chapter_{NNN}.commit.json`。
 - state / index / summary / memory / vector 更新状态。
 - 备份状态。
-- 是否还有待确认项；仅当确认队列为空时才提示可写下一章。
+- 是否还有待确认项、`rewrite_required` 或未重放生效的裁决；仅当三者都没有时才提示可写下一章。
 
 状态规则：
 - `chapter-commit rejected`、任一 `write-gate` failed、projection failed 时，最终状态不得写“已完成”。
+- 人工裁决为 `rewrite` 时，禁止重放旧正文，最终状态必须是「需要你处理」。
 - `--fast` 和 `--minimal` 的跳过项必须说明；`--minimal` 跳过审查时归入“已自动处理”或“建议确认”，不得假装已完成完整审查。
 - projection retry 发生时必须说明已自动处理和最终结果。
 
 异常分类：
 - 已自动处理：projection retry 成功、RAG 临时降级但不影响结果、旧 no-review artifact 被本章新 artifact 覆盖。
 - 建议确认：reviewer `manual_checks`、人工事实队列须当场确认。
-- 必须处理：blocking issue 未裁决、data artifacts 缺失或 schema 不完整、commit rejected、projection failed。
+- 必须处理：`rewrite_required` 要求修改本章正文、blocking issue 未裁决、data artifacts 缺失或 schema 不完整、commit rejected、projection failed。
 
 下一步建议必须使用任务化语言 + 可复制命令。本章存在人工事实队列或审查疑点时，确认是唯一下一步，不得并列「写下一章」：
 
 ```text
-- 有 {pending_count} 条候选事实等你确认，逐条裁决后系统会自动重新提交本章：
+- 有 {pending_count} 条事实疑点或候选事实等你确认；无返工项时系统会重放本章，确认穿帮时则转入本章返工：
   /canon-ledger-confirm {chapter_num}
 ```
 
-队列为空才建议写下一章：
+若裁决结果为 `rewrite`，只能建议返工问题章：
+
+```text
+- 第 {chapter_num} 章已确认存在穿帮，请修改正文并重新走完整审查：
+  /canon-ledger-write {chapter_num}
+```
+
+队列为空、无 `rewrite_required` 且裁决已重放生效，才建议写下一章：
 
 ```text
 - 接下来可以写下一章：

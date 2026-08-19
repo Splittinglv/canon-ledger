@@ -18,6 +18,7 @@ _ensure_scripts_on_path()
 
 from data_modules.write_gates import run_write_gate  # noqa: E402
 from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
+from data_modules.human_review import HumanReviewService  # noqa: E402
 from data_modules.projection_log import append_projection_run  # noqa: E402
 from .review_test_helpers import standard_review  # noqa: E402
 
@@ -36,6 +37,43 @@ def _make_current_contracts(project_root: Path, chapter: int = 1) -> None:
     directive["must_cover_nodes"] = []
     directive["forbidden_zones"] = []
     _write_json(path, payload)
+
+
+def _queue_human_review_items(
+    project_root: Path,
+    chapter: int,
+    items: list[dict],
+) -> tuple[HumanReviewService, dict, list[dict]]:
+    chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text(f"第 {chapter} 章正文。", encoding="utf-8")
+    binding = build_chapter_binding(project_root, chapter)
+    service = HumanReviewService(project_root)
+    service.persist_queue(chapter, binding, items)
+    return service, binding, service.list_items(chapter)
+
+
+def _fact_review_item(decision_id: str) -> dict:
+    return {
+        "decision_id": decision_id,
+        "source": "fact_extraction",
+        "category": "presence",
+        "dimension": "presence",
+        "candidate_event_id": decision_id,
+        "reason": "候选事实需要作者确认",
+    }
+
+
+def _prose_rewrite_item(decision_id: str) -> dict:
+    return {
+        "decision_id": decision_id,
+        "source": "review_manual_check",
+        "category": "timeline",
+        "dimension": "presence",
+        "candidate_event_id": decision_id,
+        "reason": "作者需要判断这是否是时间线穿帮",
+        "options": ["confirm", "rewrite"],
+    }
 
 
 def _write_valid_artifacts(project_root: Path) -> None:
@@ -219,6 +257,224 @@ def test_prewrite_gate_blocks_only_explicit_blocking_pending(tmp_path):
     assert report["ok"] is False
     assert any(
         item["code"] == "prewrite_validator_blocking"
+        for item in report["errors"]
+    )
+
+
+def test_prewrite_blocks_prior_pending_but_allows_reworking_same_chapter(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=1)
+    _queue_human_review_items(
+        tmp_path,
+        1,
+        [_fact_review_item("chapter-one-pending")],
+    )
+
+    same_chapter = run_write_gate(tmp_path, chapter=1, stage="prewrite")
+    assert not any(
+        item["code"].startswith("human_review_")
+        for item in same_chapter["errors"]
+    )
+
+    _make_current_contracts(tmp_path, chapter=2)
+    next_chapter = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+    blocker = next(
+        item
+        for item in next_chapter["errors"]
+        if item["code"] == "human_review_pending"
+    )
+    assert "/canon-ledger-confirm 1" in blocker["repair"]
+
+
+def test_prewrite_routes_prior_rewrite_required_back_to_write(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=2)
+    service, _binding, items = _queue_human_review_items(
+        tmp_path,
+        1,
+        [_prose_rewrite_item("chapter-one-rewrite")],
+    )
+    service.record(
+        {
+            "decisions": [
+                {"decision_id": items[0]["decision_id"], "action": "rewrite"}
+            ]
+        }
+    )
+
+    report = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+
+    blocker = next(
+        item
+        for item in report["errors"]
+        if item["code"] == "human_review_rewrite_required"
+    )
+    assert "/canon-ledger-write 1" in blocker["repair"]
+    assert "/canon-ledger-confirm" not in blocker["repair"]
+
+
+def test_prewrite_routes_resolved_but_not_replayed_to_confirm(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=2)
+    service, binding, items = _queue_human_review_items(
+        tmp_path,
+        1,
+        [_fact_review_item("chapter-one-resolved")],
+    )
+    decision_id = items[0]["decision_id"]
+    service.record(
+        {"decisions": [{"decision_id": decision_id, "action": "ignore"}]}
+    )
+    decision_sha256 = service.list_items(1)[0]["decision_sha256"]
+
+    saved_only = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+    blocker = next(
+        item
+        for item in saved_only["errors"]
+        if item["code"] == "human_review_decisions_not_replayed"
+    )
+    assert "/canon-ledger-confirm 1" in blocker["repair"]
+
+    # 一旦同一正文绑定的裁决 ID 已进入 commit provenance，人工门禁应放行；
+    # 其它投影健康检查仍可独立报告自己的问题。
+    _write_json(
+        tmp_path / ".story-system" / "commits" / "chapter_001.commit.json",
+        {
+            "meta": {"chapter": 1, "status": "accepted"},
+            "chapter_binding": binding,
+            "provenance": {
+                "chapter_binding": binding,
+                "human_review": {
+                    "resolved_decision_ids": [decision_id],
+                    "decision_receipts": [
+                        {
+                            "decision_id": decision_id,
+                            "decision_sha256": decision_sha256,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+    replayed = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+    assert not any(
+        item["code"] == "human_review_decisions_not_replayed"
+        for item in replayed["errors"]
+    )
+
+    # 同一 decision_id 被改成另一种动作后，旧 commit 的 receipt 不得继续
+    # 冒充最新裁决已经生效。
+    service.record(
+        {"decisions": [{"decision_id": decision_id, "action": "confirm"}]}
+    )
+    changed = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+    assert any(
+        item["code"] == "human_review_decisions_not_replayed"
+        for item in changed["errors"]
+    )
+
+
+def test_prewrite_uses_earliest_human_review_chapter_before_state_priority(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=3)
+    _queue_human_review_items(
+        tmp_path,
+        1,
+        [_fact_review_item("chapter-one-pending")],
+    )
+    service, _binding, items = _queue_human_review_items(
+        tmp_path,
+        2,
+        [_prose_rewrite_item("chapter-two-rewrite")],
+    )
+    service.record(
+        {
+            "decisions": [
+                {"decision_id": items[0]["decision_id"], "action": "rewrite"}
+            ]
+        }
+    )
+
+    report = run_write_gate(tmp_path, chapter=3, stage="prewrite")
+
+    human_blockers = [
+        item for item in report["errors"] if item["code"].startswith("human_review_")
+    ]
+    assert [item["code"] for item in human_blockers] == ["human_review_pending"]
+    assert "/canon-ledger-confirm 1" in human_blockers[0]["repair"]
+
+
+def test_prewrite_prioritizes_rewrite_over_pending_in_same_chapter(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=2)
+    service, _binding, items = _queue_human_review_items(
+        tmp_path,
+        1,
+        [
+            _fact_review_item("chapter-one-pending"),
+            _prose_rewrite_item("chapter-one-rewrite"),
+        ],
+    )
+    rewrite = next(item for item in items if item["source"] == "review_manual_check")
+    service.record(
+        {
+            "decisions": [
+                {"decision_id": rewrite["decision_id"], "action": "rewrite"}
+            ]
+        }
+    )
+
+    report = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+
+    human_blockers = [
+        item for item in report["errors"] if item["code"].startswith("human_review_")
+    ]
+    assert [item["code"] for item in human_blockers] == [
+        "human_review_rewrite_required"
+    ]
+    assert "/canon-ledger-write 1" in human_blockers[0]["repair"]
+
+
+def test_prewrite_fails_closed_when_prior_human_review_queue_is_corrupt(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=2)
+    queue_path = (
+        tmp_path
+        / ".canon-ledger"
+        / "human-review"
+        / "queue"
+        / "chapter_0001.json"
+    )
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text("{not-json", encoding="utf-8")
+
+    report = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+
+    blocker = next(
+        item
+        for item in report["errors"]
+        if item["code"] == "human_review_state_invalid"
+    )
+    assert "/canon-ledger-doctor" in blocker["repair"]
+
+
+def test_prewrite_ignores_corrupt_future_human_review_queue(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=2)
+    queue_path = (
+        tmp_path
+        / ".canon-ledger"
+        / "human-review"
+        / "queue"
+        / "chapter_0003.json"
+    )
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text("{not-json", encoding="utf-8")
+
+    report = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+
+    assert not any(
+        item["code"] == "human_review_state_invalid"
         for item in report["errors"]
     )
 

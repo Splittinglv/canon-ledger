@@ -10,12 +10,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .chapter_content_binding import ChapterContentBinding
+from .chapter_content_binding import ChapterContentBinding, chapter_bindings_equal
 from .story_contracts import write_json
 
 
 SCHEMA_VERSION = "canon-ledger-human-review/v1"
-VALID_ACTIONS = {"confirm", "ignore", "replace"}
+VALID_ACTIONS = {"confirm", "ignore", "replace", "rewrite"}
+STATUS_PENDING = "pending"
+STATUS_RESOLVED = "resolved"
+STATUS_REWRITE_REQUIRED = "rewrite_required"
+REVIEW_MANUAL_CHECK_SOURCE = "review_manual_check"
 _CATEGORY_DIMENSION = {
     "knowledge": "knowledge",
     "knowledge_identity": "knowledge",
@@ -33,51 +37,52 @@ _REVIEW_CHECK_SPECS = {
         "category": "knowledge_boundary",
         "dimension": "knowledge",
         "id_prefix": "knowledge-boundary",
-        "options": ["confirm", "ignore", "replace"],
+        "options": ["confirm", "rewrite", "replace"],
         "hint": (
-            "confirm=补一条角色已知事件（须提供 knowledge_state_changed，state=known）；"
-            "ignore=确认不该知道，保留待改正文；"
-            "replace=作者改写这条已知事实。"
+            "confirm=作者确认并非越界知情，关闭疑点；"
+            "rewrite=确认角色不该知道，返回修改正文；"
+            "replace=作者追认一条角色已知事实（须提供 knowledge_state_changed，"
+            "state=known）。"
         ),
     },
     "timeline": {
         "category": "timeline",
         "dimension": "presence",
         "id_prefix": "timeline-check",
-        "options": ["confirm", "ignore"],
+        "options": ["confirm", "rewrite"],
         "hint": (
             "confirm=作者确认时间线可成立，关闭疑点；"
-            "ignore=确认穿帮，保留待改正文。"
+            "rewrite=确认穿帮，返回修改正文。"
         ),
     },
     "continuity": {
         "category": "continuity",
         "dimension": "presence",
         "id_prefix": "continuity-check",
-        "options": ["confirm", "ignore"],
+        "options": ["confirm", "rewrite"],
         "hint": (
             "confirm=作者确认并非不该出现或持有冲突，关闭疑点；"
-            "ignore=确认不该出现或事实冲突，保留待改正文。"
+            "rewrite=确认不该出现或事实冲突，返回修改正文。"
         ),
     },
     "setting": {
         "category": "setting",
         "dimension": "",
         "id_prefix": "setting-check",
-        "options": ["confirm", "ignore"],
+        "options": ["confirm", "rewrite"],
         "hint": (
             "confirm=作者确认设定可同时成立，关闭疑点；"
-            "ignore=确认设定冲突，保留待改正文。"
+            "rewrite=确认设定冲突，返回修改正文。"
         ),
     },
     "logic": {
         "category": "logic",
         "dimension": "",
         "id_prefix": "logic-check",
-        "options": ["confirm", "ignore"],
+        "options": ["confirm", "rewrite"],
         "hint": (
             "confirm=作者确认机械规则可成立，关闭疑点；"
-            "ignore=确认规则冲突，保留待改正文。"
+            "rewrite=确认规则冲突，返回修改正文。"
         ),
     },
 }
@@ -144,6 +149,66 @@ def _candidate_fingerprint(chapter: int, item: dict[str, Any]) -> str:
         "matched_entity_id": item.get("matched_entity_id"),
     }
     return hashlib.sha256(_canonical_json(stable).encode("utf-8")).hexdigest()[:16]
+
+
+def _decision_receipt(decision: dict[str, Any]) -> str:
+    """Fingerprint the decision semantics that a commit actually replayed.
+
+    ``decision_id`` alone is not sufficient provenance: a later edit can keep
+    the same ID while changing confirm/ignore/replace or the replacement event.
+    Notes and timestamps are intentionally excluded because they do not change
+    the canonical effect of the decision.
+    """
+    try:
+        chapter = int(decision.get("chapter") or 0)
+    except (TypeError, ValueError):
+        chapter = 0
+    replacement = decision.get("replacement_event")
+    stable = {
+        "decision_id": _text(decision.get("decision_id"), 180),
+        "chapter": chapter,
+        "chapter_sha256": _text(decision.get("chapter_sha256"), 64),
+        "candidate_fingerprint": _text(
+            decision.get("candidate_fingerprint"), 64
+        ),
+        "action": _text(decision.get("action"), 40),
+        "replacement_event": (
+            stable_event_repr(chapter, replacement)
+            if isinstance(replacement, dict) and chapter > 0
+            else None
+        ),
+        "verified_event_id": _text(decision.get("verified_event_id"), 180),
+        "verified_event_sha256": _text(
+            decision.get("verified_event_sha256"), 64
+        ),
+    }
+    return hashlib.sha256(_canonical_json(stable).encode("utf-8")).hexdigest()
+
+
+def _is_review_knowledge_item(item: dict[str, Any]) -> bool:
+    return bool(
+        item.get("source") == REVIEW_MANUAL_CHECK_SOURCE
+        and item.get("category") == "knowledge_boundary"
+    )
+
+
+def _assert_review_knowledge_replacement(
+    event: dict[str, Any],
+    decision_id: str,
+) -> None:
+    if _text(event.get("event_type"), 80) != "knowledge_state_changed":
+        raise ValueError(
+            f"human_review_replace_requires_knowledge_event:{decision_id}"
+        )
+    payload = event.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    if (
+        not _text(payload.get("information_id"), 180)
+        or _text(payload.get("state"), 40) != "known"
+    ):
+        raise ValueError(
+            f"human_review_replace_requires_known_information:{decision_id}"
+        )
 
 
 def review_manual_check_items_from_review(review: Any) -> list[dict[str, Any]]:
@@ -278,6 +343,45 @@ class HumanReviewService:
 
     def queue_path(self, chapter: int) -> Path:
         return self.queue_root / f"chapter_{int(chapter):04d}.json"
+
+    def _load_queue(
+        self,
+        path: Path,
+    ) -> tuple[dict[str, Any], ChapterContentBinding]:
+        """Load one queue without silently discarding authoritative state."""
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(payload, dict)
+                or payload.get("schema_version") != SCHEMA_VERSION
+                or not isinstance(payload.get("items"), list)
+            ):
+                raise ValueError("invalid queue envelope")
+            binding = ChapterContentBinding.model_validate(
+                payload.get("chapter_binding")
+            )
+            filename_match = re.fullmatch(r"chapter_(\d+)\.json", path.name)
+            if (
+                int(payload.get("chapter") or 0) != binding.chapter
+                or filename_match is None
+                or int(filename_match.group(1)) != binding.chapter
+            ):
+                raise ValueError("queue chapter does not match binding")
+            for item in payload["items"]:
+                if not isinstance(item, dict):
+                    raise ValueError("queue item must be an object")
+                if (
+                    not _text(item.get("decision_id"), 180)
+                    or int(item.get("chapter") or 0) != binding.chapter
+                    or _text(item.get("chapter_sha256"), 64) != binding.sha256
+                    or not _text(item.get("candidate_fingerprint"), 64)
+                ):
+                    raise ValueError("queue item binding is invalid")
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"human_review_queue_invalid:{path.name}"
+            ) from exc
+        return payload, binding
 
     def _load_ledger(self) -> dict[str, Any]:
         if not self.ledger_path.is_file():
@@ -434,7 +538,41 @@ class HumanReviewService:
         decisions: dict[str, dict[str, Any]],
     ) -> str:
         decision = self._matched_decision(item, decisions)
-        return _text((decision or {}).get("action"), 40) or "pending"
+        if decision is None:
+            return STATUS_PENDING
+        action = _text(decision.get("action"), 40)
+        if (
+            item.get("source") == REVIEW_MANUAL_CHECK_SOURCE
+            and action in {"ignore", "rewrite"}
+        ):
+            # v7.2 recorded review "this is a bug" choices as ``ignore``.
+            # Preserve that documented meaning while exposing an explicit
+            # workflow state for both legacy and new decisions.
+            return STATUS_REWRITE_REQUIRED
+        return STATUS_RESOLVED
+
+    @staticmethod
+    def _effective_action(item: dict[str, Any], action: str) -> str:
+        """Map legacy review ``ignore`` to the explicit rewrite outcome."""
+        if (
+            item.get("source") == REVIEW_MANUAL_CHECK_SOURCE
+            and action == "ignore"
+        ):
+            return "rewrite"
+        return action
+
+    @classmethod
+    def _offered_actions(cls, item: dict[str, Any]) -> list[str]:
+        actions = [
+            cls._effective_action(item, _text(value, 40))
+            for value in (item.get("options") or [])
+        ]
+        allowed = (
+            {"confirm", "rewrite", "replace"}
+            if item.get("source") == REVIEW_MANUAL_CHECK_SOURCE
+            else {"confirm", "ignore", "replace"}
+        )
+        return list(dict.fromkeys(value for value in actions if value in allowed))
 
     def persist_queue(
         self,
@@ -444,6 +582,45 @@ class HumanReviewService:
     ) -> list[dict[str, Any]]:
         parsed_binding = ChapterContentBinding.model_validate(binding).model_dump()
         items = self._normalize_items(chapter, parsed_binding, pending)
+        queue_path = self.queue_path(chapter)
+        if queue_path.is_file():
+            previous, previous_binding = self._load_queue(queue_path)
+            if chapter_bindings_equal(previous_binding, parsed_binding):
+                current_ids = {
+                    _text(item.get("decision_id"), 180) for item in items
+                }
+                current_fingerprints = {
+                    _text(item.get("candidate_fingerprint"), 64)
+                    for item in items
+                }
+                # A nondeterministic second model pass must not erase an item
+                # awaiting the author, a rewrite verdict, or a resolved verdict
+                # that still needs durable replay provenance. Editing the
+                # chapter changes the binding and deliberately starts a fresh
+                # review queue.
+                for raw in previous.get("items") or []:
+                    preserved = {
+                        key: value
+                        for key, value in raw.items()
+                        if key not in {
+                            "status",
+                            "workflow_state",
+                            "decision_action",
+                            "decision_sha256",
+                        }
+                    }
+                    decision_id = _text(preserved.get("decision_id"), 180)
+                    fingerprint = _text(
+                        preserved.get("candidate_fingerprint"), 64
+                    )
+                    if (
+                        decision_id in current_ids
+                        or fingerprint in current_fingerprints
+                    ):
+                        continue
+                    items.append(preserved)
+                    current_ids.add(decision_id)
+                    current_fingerprints.add(fingerprint)
         decisions = self._decision_map(chapter, parsed_binding["sha256"])
         rendered = [
             {
@@ -453,7 +630,7 @@ class HumanReviewService:
             for item in items
         ]
         write_json(
-            self.queue_path(chapter),
+            queue_path,
             {
                 "schema_version": SCHEMA_VERSION,
                 "chapter": int(chapter),
@@ -567,7 +744,9 @@ class HumanReviewService:
         replacements: dict[int, dict[str, Any]] = {}
         additions: list[dict[str, Any]] = []
         unresolved: list[dict[str, Any]] = []
+        rewrite_required: list[dict[str, Any]] = []
         resolved_ids: list[str] = []
+        decision_receipts: list[dict[str, str]] = []
         verified_event_ids: list[str] = []
         affected_dimensions: set[str] = set()
         resolved_dimensions: set[str] = set()
@@ -584,11 +763,25 @@ class HumanReviewService:
                     affected_dimensions.add(str(item["dimension"]))
                 continue
 
-            action = _text(decision.get("action"), 40)
-            if action not in item["options"]:
+            action = self._effective_action(
+                item,
+                _text(decision.get("action"), 40),
+            )
+            if action not in self._offered_actions(item):
                 raise ValueError(
                     f"human_review_action_not_offered:{item['decision_id']}"
                 )
+            if action == "rewrite":
+                rewrite_required.append(
+                    {**item, "status": STATUS_REWRITE_REQUIRED}
+                )
+                if event_index is not None:
+                    dropped.add(event_index)
+                if item.get("dimension"):
+                    affected_dimensions.add(str(item["dimension"]))
+                # A confirmed prose bug is intentionally not a resolved fact
+                # decision.  The caller must edit and re-review these bytes.
+                continue
             if action == "ignore":
                 if event_index is not None:
                     dropped.add(event_index)
@@ -603,23 +796,38 @@ class HumanReviewService:
                         raise ValueError(
                             f"human_review_replacement_missing:{item['decision_id']}"
                         )
-                    # replace corrects the wording of a real candidate; it may not
-                    # smuggle in a fact with a different identity.
+                    replacement_repr = self._normalized_event(
+                        chapter,
+                        replacement,
+                        item["decision_id"],
+                        "replacement_event",
+                    )
+                    # Extraction replace corrects the wording of a real
+                    # candidate and may not smuggle in a different identity.
+                    # A character review has no candidate event; its explicit
+                    # replace option instead lets the author record the missing
+                    # knowledge fact.
                     candidate_repr = stable_event_repr(
                         chapter, item.get("candidate_event")
                     )
                     if not candidate_repr:
-                        raise ValueError(
-                            "human_review_replace_requires_candidate:"
-                            f"{item['decision_id']}"
+                        if _is_review_knowledge_item(item):
+                            _assert_review_knowledge_replacement(
+                                replacement_repr,
+                                item["decision_id"],
+                            )
+                        else:
+                            raise ValueError(
+                                "human_review_replace_requires_candidate:"
+                                f"{item['decision_id']}"
+                            )
+                    else:
+                        _assert_replacement_keeps_identity(
+                            candidate_repr,
+                            replacement_repr,
+                            item["decision_id"],
                         )
-                    replacement_repr = stable_event_repr(chapter, replacement) or {}
-                    _assert_replacement_keeps_identity(
-                        candidate_repr,
-                        replacement_repr,
-                        item["decision_id"],
-                    )
-                    verified = self._verified_event(replacement)
+                    verified = self._verified_event(replacement_repr)
                     if event_index is None:
                         additions.append(verified)
                     else:
@@ -633,17 +841,23 @@ class HumanReviewService:
                     if isinstance(item.get("candidate_event"), dict)
                     else None
                 )
-                if source is None and item.get("category") == "knowledge_boundary":
-                    source = (
-                        decision.get("replacement_event")
-                        if isinstance(decision.get("replacement_event"), dict)
-                        else None
+                if (
+                    source is None
+                    and _is_review_knowledge_item(item)
+                    and isinstance(decision.get("replacement_event"), dict)
+                ):
+                    # Compatibility with v7.2 decisions, where character
+                    # review confirm required a knowledge event.
+                    source = self._normalized_event(
+                        chapter,
+                        decision["replacement_event"],
+                        item["decision_id"],
+                        "replacement_event",
                     )
-                    if source is None:
-                        raise ValueError(
-                            "human_review_knowledge_boundary_confirm_requires_event:"
-                            f"{item['decision_id']}"
-                        )
+                    _assert_review_knowledge_replacement(
+                        source,
+                        item["decision_id"],
+                    )
                 if source is not None:
                     verified = self._verified_event(source)
                     if event_index is not None:
@@ -661,6 +875,12 @@ class HumanReviewService:
             if action == "ignore" and item.get("new_entity_id"):
                 identity_actions[str(item["new_entity_id"])] = "ignore"
             resolved_ids.append(item["decision_id"])
+            decision_receipts.append(
+                {
+                    "decision_id": item["decision_id"],
+                    "decision_sha256": _decision_receipt(decision),
+                }
+            )
             if item.get("dimension"):
                 resolved_dimensions.add(str(item["dimension"]))
 
@@ -678,7 +898,9 @@ class HumanReviewService:
         return {
             "events": effective_events,
             "unresolved": unresolved,
+            "rewrite_required": rewrite_required,
             "resolved_decision_ids": resolved_ids,
+            "decision_receipts": decision_receipts,
             "verified_event_ids": all_verified_ids,
             "affected_dimensions": sorted(affected_dimensions),
             "resolved_dimensions": sorted(resolved_dimensions),
@@ -693,10 +915,7 @@ class HumanReviewService:
         queued: dict[str, dict[str, Any]] = {}
         ambiguous_ids: set[str] = set()
         for path in sorted(self.queue_root.glob("chapter_*.json")):
-            try:
-                queue = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
+            queue, _binding = self._load_queue(path)
             for item in queue.get("items") or []:
                 if isinstance(item, dict) and item.get("decision_id"):
                     decision_id = str(item["decision_id"])
@@ -746,10 +965,13 @@ class HumanReviewService:
                 # An old queue file without content binding cannot prove which
                 # candidate this verdict judged.  Regenerate the queue first.
                 raise ValueError(f"human_review_queue_outdated:{decision_id}")
-            action = _text(raw.get("action"), 40)
+            action = self._effective_action(
+                queue_item,
+                _text(raw.get("action"), 40),
+            )
             if action not in VALID_ACTIONS:
                 raise ValueError(f"human_review_action_invalid:{decision_id}")
-            if action not in (queue_item.get("options") or []):
+            if action not in self._offered_actions(queue_item):
                 raise ValueError(f"human_review_action_not_offered:{decision_id}")
             binding = ChapterContentBinding.model_validate(
                 queue_item.get("chapter_binding")
@@ -766,19 +988,27 @@ class HumanReviewService:
             elif action == "replace":
                 if not isinstance(replacement, dict):
                     raise ValueError(f"human_review_replacement_missing:{decision_id}")
-                if not isinstance(candidate_event, dict) or not candidate_event:
-                    raise ValueError(
-                        f"human_review_replace_requires_candidate:{decision_id}"
-                    )
                 replacement_repr = self._normalized_event(
                     binding.chapter, replacement, decision_id, "replacement_event"
                 )
-                candidate_repr = stable_event_repr(binding.chapter, candidate_event) or {}
-                _assert_replacement_keeps_identity(
-                    candidate_repr,
-                    replacement_repr,
-                    decision_id,
-                )
+                if isinstance(candidate_event, dict) and candidate_event:
+                    candidate_repr = (
+                        stable_event_repr(binding.chapter, candidate_event) or {}
+                    )
+                    _assert_replacement_keeps_identity(
+                        candidate_repr,
+                        replacement_repr,
+                        decision_id,
+                    )
+                elif _is_review_knowledge_item(queue_item):
+                    _assert_review_knowledge_replacement(
+                        replacement_repr,
+                        decision_id,
+                    )
+                else:
+                    raise ValueError(
+                        f"human_review_replace_requires_candidate:{decision_id}"
+                    )
                 replacement_payload = replacement_repr.get("payload")
                 quote = str(
                     (replacement_payload or {}).get("evidence_quote") or ""
@@ -793,17 +1023,23 @@ class HumanReviewService:
                 ).hexdigest()
             elif action == "confirm":
                 source = candidate_event if isinstance(candidate_event, dict) else None
-                if source is None and queue_item.get("category") == "knowledge_boundary":
-                    source = replacement if isinstance(replacement, dict) else None
-                    if source is None:
-                        raise ValueError(
-                            "human_review_knowledge_boundary_confirm_requires_event:"
-                            f"{decision_id}"
-                        )
+                if (
+                    source is None
+                    and _is_review_knowledge_item(queue_item)
+                    and isinstance(replacement, dict)
+                ):
+                    # Accept already-recorded v7.2 confirm payloads while new
+                    # prompts use replace for explicit knowledge backfill.
+                    source = replacement
                 if isinstance(source, dict):
                     candidate_repr = self._normalized_event(
                         binding.chapter, source, decision_id, "candidate_event"
                     )
+                    if _is_review_knowledge_item(queue_item):
+                        _assert_review_knowledge_replacement(
+                            candidate_repr,
+                            decision_id,
+                        )
                     verified_event_id = _text(candidate_repr.get("event_id"), 180)
                     verified_event_sha256 = hashlib.sha256(
                         _canonical_json(candidate_repr).encode("utf-8")
@@ -814,6 +1050,13 @@ class HumanReviewService:
                 "chapter_sha256": binding.sha256,
                 "candidate_fingerprint": candidate_fingerprint,
                 "action": action,
+                "outcome": (
+                    STATUS_REWRITE_REQUIRED
+                    if action == "rewrite"
+                    else STATUS_RESOLVED
+                ),
+                "source": _text(queue_item.get("source"), 80),
+                "category": _text(queue_item.get("category"), 80),
                 "replacement_event": (
                     dict(replacement) if isinstance(replacement, dict) else None
                 ),
@@ -851,18 +1094,120 @@ class HumanReviewService:
         for path in paths:
             if not path.is_file():
                 continue
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                binding = ChapterContentBinding.model_validate(
-                    payload.get("chapter_binding")
-                )
-            except (OSError, json.JSONDecodeError, ValueError):
-                continue
+            payload, binding = self._load_queue(path)
             decisions = self._decision_map(binding.chapter, binding.sha256)
             for raw in payload.get("items") or []:
-                if not isinstance(raw, dict):
-                    continue
                 item = dict(raw)
+                decision = self._matched_decision(item, decisions)
                 item["status"] = self._decision_status(item, decisions)
+                item["decision_action"] = _text(
+                    (decision or {}).get("action"), 40
+                )
+                item["decision_sha256"] = (
+                    _decision_receipt(decision) if decision is not None else ""
+                )
                 result.append(item)
         return result
+
+    def gate_summary(self, *, before_chapter: int) -> dict[str, Any]:
+        """Return authoritative human-review blockers before a target chapter.
+
+        Queue/ledger state is the source of truth.  ``state.json`` may lag the
+        latest decision or replay and must not decide whether prose can advance.
+        """
+        target = int(before_chapter)
+        prior: list[dict[str, Any]] = []
+        for path in sorted(self.queue_root.glob("chapter_*.json")):
+            match = re.fullmatch(r"chapter_(\d+)\.json", path.name)
+            if match is None:
+                raise ValueError(f"human_review_queue_invalid:{path.name}")
+            queue_chapter = int(match.group(1))
+            # Only earlier chapters can constrain this write. A broken current
+            # or future queue must not prevent returning to the target chapter;
+            # its own pipeline will validate that queue before committing.
+            if 0 < queue_chapter < target:
+                prior.extend(self.list_items(queue_chapter))
+        pending = [item for item in prior if item.get("status") == STATUS_PENDING]
+        rewrite_required = [
+            item
+            for item in prior
+            if item.get("status") == STATUS_REWRITE_REQUIRED
+        ]
+
+        commits: dict[int, tuple[set[str], dict[str, str]]] = {}
+        not_replayed: list[dict[str, Any]] = []
+        for item in prior:
+            if item.get("status") != STATUS_RESOLVED:
+                continue
+            chapter = int(item.get("chapter") or 0)
+            if chapter not in commits:
+                commit_path = (
+                    self.project_root
+                    / ".story-system"
+                    / "commits"
+                    / f"chapter_{chapter:03d}.commit.json"
+                )
+                applied_ids: set[str] = set()
+                applied_receipts: dict[str, str] = {}
+                try:
+                    commit = json.loads(commit_path.read_text(encoding="utf-8"))
+                except (FileNotFoundError, OSError, json.JSONDecodeError):
+                    commit = {}
+                if isinstance(commit, dict):
+                    provenance = commit.get("provenance")
+                    provenance = provenance if isinstance(provenance, dict) else {}
+                    human_review = provenance.get("human_review")
+                    human_review = (
+                        human_review if isinstance(human_review, dict) else {}
+                    )
+                    applied_ids = {
+                        _text(value, 180)
+                        for value in human_review.get("resolved_decision_ids") or []
+                        if _text(value, 180)
+                    }
+                    for receipt in human_review.get("decision_receipts") or []:
+                        if not isinstance(receipt, dict):
+                            continue
+                        decision_id = _text(receipt.get("decision_id"), 180)
+                        decision_sha256 = _text(
+                            receipt.get("decision_sha256"), 64
+                        )
+                        if decision_id and decision_sha256:
+                            applied_receipts[decision_id] = decision_sha256
+                commits[chapter] = (applied_ids, applied_receipts)
+            decision_id = _text(item.get("decision_id"), 180)
+            decision_sha256 = _text(item.get("decision_sha256"), 64)
+            applied_ids, applied_receipts = commits[chapter]
+            if (
+                decision_id not in applied_ids
+                or not decision_sha256
+                or applied_receipts.get(decision_id) != decision_sha256
+            ):
+                not_replayed.append(item)
+
+        def compact(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            return [
+                {
+                    "chapter": int(row.get("chapter") or 0),
+                    "decision_id": _text(row.get("decision_id"), 180),
+                    "source": _text(row.get("source"), 80),
+                    "category": _text(row.get("category"), 80),
+                    "status": _text(row.get("status"), 40),
+                    "decision_sha256": _text(
+                        row.get("decision_sha256"), 64
+                    ),
+                }
+                for row in rows
+            ]
+
+        return {
+            "before_chapter": target,
+            "pending": compact(pending),
+            "rewrite_required": compact(rewrite_required),
+            "not_replayed": compact(not_replayed),
+            "counts": {
+                "pending": len(pending),
+                "rewrite_required": len(rewrite_required),
+                "not_replayed": len(not_replayed),
+            },
+        }

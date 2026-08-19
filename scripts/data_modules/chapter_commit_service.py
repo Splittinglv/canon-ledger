@@ -653,6 +653,18 @@ class ChapterCommitService:
             merged_pending,
             raw_candidates,
         )
+        rewrite_required = list(human_review.get("rewrite_required") or [])
+        if rewrite_required:
+            decision_ids = [
+                str(item.get("decision_id") or "").strip()
+                for item in rewrite_required
+                if str(item.get("decision_id") or "").strip()
+            ]
+            raise ValueError(
+                "human_review_rewrite_required:"
+                + ",".join(decision_ids)
+                + f";edit chapter {chapter} and run /canon-ledger-write {chapter}"
+            )
         unresolved = list(human_review["unresolved"])
         blocking_pending = [
             item for item in unresolved if bool(item.get("blocking", False))
@@ -779,6 +791,7 @@ class ChapterCommitService:
                     "resolved_decision_ids": human_review[
                         "resolved_decision_ids"
                     ],
+                    "decision_receipts": human_review["decision_receipts"],
                     "verified_event_ids": human_review["verified_event_ids"],
                     "unresolved_count": len(unresolved),
                 },

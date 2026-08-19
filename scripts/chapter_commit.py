@@ -113,6 +113,14 @@ def main() -> None:
                 "旧裁决不能重放到新正文。请重跑 /canon-ledger-write 重新走完整写作链。"
             ) from exc
         raise
+    except ValueError as exc:
+        if str(exc).startswith("human_review_rewrite_required:"):
+            raise SystemExit(
+                f"错误：第 {args.chapter} 章的人工裁决已确认正文存在穿帮，"
+                "不能重放原正文。请先修改正文，再运行 "
+                f"/canon-ledger-write {args.chapter} 重新审查并提交。"
+            ) from exc
+        raise
     service.persist_commit(payload)
     try:
         payload = service.apply_projections(payload)

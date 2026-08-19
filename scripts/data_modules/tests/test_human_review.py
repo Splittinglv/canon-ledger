@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+
 from data_modules.chapter_content_binding import build_chapter_binding
 from data_modules.human_review import (
     HumanReviewService,
@@ -85,7 +87,9 @@ def test_unresolved_candidate_stays_out_of_canon_until_human_confirms(tmp_path):
     assert second["unresolved"] == []
     assert second["events"][0]["verification"] == "verified"
     assert second["verified_event_ids"] == ["alice-location"]
-    assert service.list_items(3)[0]["status"] == "confirm"
+    listed = service.list_items(3)[0]
+    assert listed["status"] == "resolved"
+    assert listed["decision_action"] == "confirm"
 
 
 def test_decision_does_not_survive_chapter_content_change(tmp_path):
@@ -162,7 +166,110 @@ def test_human_can_ignore_a_candidate(tmp_path):
 
     assert result["events"] == []
     assert result["unresolved"] == []
+    assert result["rewrite_required"] == []
     assert result["resolved_decision_ids"] == ["ch0003-confirm-alice-location"]
+    assert service.list_items(3)[0]["status"] == "resolved"
+
+
+def test_review_rewrite_requires_new_prose_instead_of_resolving_fact(tmp_path):
+    binding = _binding(tmp_path)
+    service = HumanReviewService(tmp_path)
+    pending = review_manual_check_items_from_review(
+        {
+            "manual_checks": [
+                {
+                    "category": "timeline",
+                    "location": "第1段",
+                    "description": "转场耗时不足",
+                    "evidence": "爱丽丝抵达北城。",
+                    "reason": "上一刻仍在千里之外",
+                }
+            ]
+        }
+    )
+    first = service.apply_decisions(3, binding, pending, [])
+    decision_id = first["unresolved"][0]["decision_id"]
+
+    service.record(
+        {"decisions": [{"decision_id": decision_id, "action": "rewrite"}]}
+    )
+    result = service.apply_decisions(3, binding, pending, [])
+
+    assert result["unresolved"] == []
+    assert [item["decision_id"] for item in result["rewrite_required"]] == [
+        decision_id
+    ]
+    assert result["resolved_decision_ids"] == []
+    listed = service.list_items(3)[0]
+    assert listed["status"] == "rewrite_required"
+    assert listed["decision_action"] == "rewrite"
+
+
+def test_legacy_review_ignore_is_treated_as_rewrite_required(tmp_path):
+    binding = _binding(tmp_path)
+    service = HumanReviewService(tmp_path)
+    pending = [
+        {
+            "decision_id": "legacy-timeline-check",
+            "source": "review_manual_check",
+            "category": "timeline",
+            "dimension": "presence",
+            "candidate_event_id": "timeline-check-1",
+            "evidence_quote": "爱丽丝抵达北城。",
+            "reason": "旧版 ignore 表示作者确认正文穿帮",
+            "options": ["confirm", "ignore"],
+        }
+    ]
+    first = service.apply_decisions(3, binding, pending, [])
+    decision_id = first["unresolved"][0]["decision_id"]
+    service.record(
+        {"decisions": [{"decision_id": decision_id, "action": "rewrite"}]}
+    )
+
+    # 模拟 v7.2 已落盘的旧裁决：当时把「确认穿帮」存成 ignore，且没有
+    # outcome/source/category 等新字段。
+    ledger = json.loads(service.ledger_path.read_text(encoding="utf-8"))
+    legacy = ledger["decisions"][0]
+    legacy["action"] = "ignore"
+    for field in ("outcome", "source", "category"):
+        legacy.pop(field, None)
+    service.ledger_path.write_text(
+        json.dumps(ledger, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    result = service.apply_decisions(3, binding, pending, [])
+
+    assert result["resolved_decision_ids"] == []
+    assert [item["decision_id"] for item in result["rewrite_required"]] == [
+        decision_id
+    ]
+    assert service.list_items(3)[0]["status"] == "rewrite_required"
+
+
+def test_same_binding_rerun_cannot_erase_pending_human_review(tmp_path):
+    binding = _binding(tmp_path)
+    service = HumanReviewService(tmp_path)
+    service.persist_queue(3, binding, _pending())
+
+    service.persist_queue(3, binding, [])
+
+    items = service.list_items(3)
+    assert len(items) == 1
+    assert items[0]["status"] == "pending"
+
+
+def test_new_binding_can_replace_old_pending_queue_after_re_review(tmp_path):
+    first_binding = _binding(tmp_path)
+    service = HumanReviewService(tmp_path)
+    service.persist_queue(3, first_binding, _pending())
+
+    second_binding = _binding(tmp_path, text="爱丽丝仍留在南港，没有抵达北城。")
+    service.persist_queue(3, second_binding, [])
+
+    assert service.list_items(3) == []
+    queue = json.loads(service.queue_path(3).read_text(encoding="utf-8"))
+    assert queue["chapter_binding"]["sha256"] == second_binding["sha256"]
 
 
 def test_replace_must_keep_event_identity_and_carry_evidence(tmp_path):
@@ -371,9 +478,9 @@ def test_review_manual_checks_all_fact_categories_enter_queue():
     assert categories == {"knowledge_boundary", "timeline", "continuity", "setting"}
     timeline = next(item for item in items if item["category"] == "timeline")
     assert timeline["dimension"] == "presence"
-    assert timeline["options"] == ["confirm", "ignore"]
+    assert timeline["options"] == ["confirm", "rewrite"]
     knowledge = next(item for item in items if item["category"] == "knowledge_boundary")
-    assert knowledge["options"] == ["confirm", "ignore", "replace"]
+    assert knowledge["options"] == ["confirm", "rewrite", "replace"]
 
 
 def test_timeline_review_check_confirm_without_event_clears_queue(tmp_path):
@@ -399,3 +506,105 @@ def test_timeline_review_check_confirm_without_event_clears_queue(tmp_path):
     resolved = service.apply_decisions(3, binding, pending, [])
     assert resolved["unresolved"] == []
     assert resolved["events"] == []
+
+
+def test_character_review_confirm_can_close_doubt_without_inventing_fact(tmp_path):
+    binding = _binding(tmp_path, text="爱丽丝径直推开了密门。")
+    service = HumanReviewService(tmp_path)
+    pending = review_manual_check_items_from_review(
+        {
+            "manual_checks": [
+                {
+                    "category": "character",
+                    "location": "第1段",
+                    "description": "爱丽丝是否知道密门位置",
+                    "evidence": "爱丽丝径直推开了密门。",
+                    "reason": "账本没有明确的获知记录",
+                }
+            ]
+        }
+    )
+    first = service.apply_decisions(3, binding, pending, [])
+    decision_id = first["unresolved"][0]["decision_id"]
+
+    service.record(
+        {"decisions": [{"decision_id": decision_id, "action": "confirm"}]}
+    )
+    resolved = service.apply_decisions(3, binding, pending, [])
+
+    assert resolved["unresolved"] == []
+    assert resolved["events"] == []
+    assert resolved["resolved_decision_ids"] == [decision_id]
+
+
+def test_character_review_replace_can_backfill_explicit_known_fact(tmp_path):
+    binding = _binding(tmp_path, text="爱丽丝径直推开了密门。")
+    service = HumanReviewService(tmp_path)
+    pending = review_manual_check_items_from_review(
+        {
+            "manual_checks": [
+                {
+                    "category": "character",
+                    "location": "第1段",
+                    "description": "爱丽丝是否知道密门位置",
+                    "evidence": "爱丽丝径直推开了密门。",
+                    "reason": "账本没有明确的获知记录",
+                }
+            ]
+        }
+    )
+    first = service.apply_decisions(3, binding, pending, [])
+    decision_id = first["unresolved"][0]["decision_id"]
+    replacement = {
+        "event_id": "alice-knows-secret-door",
+        "chapter": 3,
+        "sequence": 1,
+        "event_type": "knowledge_state_changed",
+        "subject": "alice",
+        "payload": {
+            "information_id": "clocktower-secret-door",
+            "canonical_claim": "密门在钟楼下",
+            "evidence_fragment": "径直推开了密门",
+            "state": "known",
+            "source_kind": "inferred",
+            "evidence_quote": "爱丽丝径直推开了密门。",
+        },
+    }
+
+    service.record(
+        {
+            "decisions": [
+                {
+                    "decision_id": decision_id,
+                    "action": "replace",
+                    "replacement_event": replacement,
+                }
+            ]
+        }
+    )
+    resolved = service.apply_decisions(3, binding, pending, [])
+
+    assert resolved["unresolved"] == []
+    assert resolved["events"][0]["event_id"] == "alice-knows-secret-door"
+    assert resolved["events"][0]["verification"] == "verified"
+
+
+def test_extraction_candidate_cannot_offer_rewrite_action(tmp_path):
+    import pytest
+
+    binding = _binding(tmp_path)
+    service = HumanReviewService(tmp_path)
+    pending = [{**_pending()[0], "options": ["confirm", "ignore", "rewrite"]}]
+    first = service.apply_decisions(3, binding, pending, [_presence_event()])
+
+    with pytest.raises(ValueError, match="human_review_action_not_offered"):
+        service.record(
+            {
+                "decisions": [
+                    {
+                        "decision_id": first["unresolved"][0]["decision_id"],
+                        "action": "rewrite",
+                    }
+                ]
+            }
+        )
