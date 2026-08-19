@@ -180,7 +180,7 @@ color: yellow
 - `status`：standard 且五维结论齐全为 `completed`；fast 且四维结论齐全为 `partial`；正文为空或无法完成本模式要求的维度为 `failed`。
 - `problems`：正文为空、读取状态失败、维度跳过、输出不完整、blocking issue、耗时异常。
 - `auto_handled`：无已接受上章提交时跳过跨章核对。
-- `needs_user_action`：存在 `blocking=true`、`manual_checks` 或无法审查时为 true；人工检查项只表示可稍后确认，不代表流程阻断。
+- `needs_user_action`：存在 `blocking=true`、`manual_checks` 或无法审查时为 true；人工检查项须作者确认，不代表流程阻断。
 - `duration_ms`：由主流程计时记录。
 - `outputs`：`.canon-ledger/tmp/review_results.json` 与审查报告路径由主流程记录。
 

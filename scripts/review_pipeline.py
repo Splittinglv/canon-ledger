@@ -208,6 +208,44 @@ def build_review_artifacts(
         raise ValueError("review_result.chapter_binding 与预期正文不一致")
     # 在写入报告或审计记录前立即重新校验正文摘要。
     require_chapter_binding(project_root, chapter, expected_binding)
+    from data_modules.commit_lineage import prior_chapters_with_stale_binding
+
+    stale_bindings = prior_chapters_with_stale_binding(project_root, chapter)
+    if stale_bindings:
+        earliest = int(stale_bindings[0].get("chapter") or 0)
+        raise ValueError(
+            "prior_chapter_binding_stale:"
+            f"第 {earliest} 章正文已改但 commit 仍绑定旧稿纸；"
+            f"先 /canon-ledger-write {earliest} 重提后再审查第 {chapter} 章"
+        )
+    from data_modules.human_review import (
+        HumanReviewService,
+        review_manual_check_items_from_review,
+    )
+
+    review_items = review_manual_check_items_from_review(result)
+    service = HumanReviewService(project_root)
+    queue_path = service.queue_path(chapter)
+    existing: list[dict[str, Any]] = []
+    if queue_path.is_file():
+        try:
+            queued = json.loads(queue_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            queued = {}
+        queued_binding = (
+            queued.get("chapter_binding")
+            if isinstance(queued, dict)
+            else None
+        )
+        if chapter_bindings_equal(queued_binding, expected_binding):
+            existing = [
+                item
+                for item in (queued.get("items") or [])
+                if isinstance(item, dict)
+                and item.get("source") != "review_manual_check"
+            ]
+    if review_items or existing or queue_path.is_file():
+        service.persist_queue(chapter, expected_binding, existing + review_items)
     review_audit = result.to_audit_dict(report_file=report_file)
     normalized_review = result.to_dict()
     review_results_path.parent.mkdir(parents=True, exist_ok=True)

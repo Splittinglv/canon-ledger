@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from .review_test_helpers import standard_review
+from .review_test_helpers import inject_hard_evidence_quotes, standard_review
 
 # 确保 scripts/ 在 sys.path 中
 _scripts_dir = str(Path(__file__).resolve().parent.parent.parent)
@@ -82,22 +82,14 @@ def _write_contracts(project_root: Path, *chapters: int) -> None:
 
 def _accepted_commit(project_root: Path, chapter: int, extraction: dict) -> dict:
     """通过当前四工件主链生成并投影一个已接受提交。"""
-    extraction = copy.deepcopy(extraction)
-    evidence_lines: list[str] = []
-    for event in extraction.get("accepted_events") or []:
-        if not isinstance(event, dict) or event.get("event_type") != "world_rule_revealed":
-            continue
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        quote = str(payload.get("evidence_quote") or payload.get("rule_content") or "").strip()
-        if quote:
-            payload["evidence_quote"] = quote
-            evidence_lines.append(quote)
+    extraction, chapter_text = inject_hard_evidence_quotes(
+        copy.deepcopy(extraction),
+        chapter=chapter,
+        chapter_text=f"第{chapter}章中文正文。\n",
+    )
     chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
-    chapter_path.write_text(
-        "\n".join([f"第{chapter}章中文正文。", *evidence_lines]),
-        encoding="utf-8",
-    )
+    chapter_path.write_text(chapter_text, encoding="utf-8")
     binding = build_chapter_binding(project_root, chapter)
     payload = ChapterCommitService(project_root).build_commit(
         chapter=chapter,

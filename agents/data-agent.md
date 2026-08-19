@@ -136,6 +136,6 @@ artifacts 失败→重跑 C/D。commit 失败→修复三份 JSON 后补提。pr
 - `status`：三份 artifact 均写入且 schema 合格为 `completed`；存在 warning / pending 但可继续为 `partial`；任一必需 artifact 缺失或 schema 不合格为 `failed`。
 - `problems`：三份 artifact 写入状态、schema 不合格、pending 消歧、长时间无进展、输出不完整。
 - `auto_handled`：重跑 C/D、采用唯一别名、跳过低价值非跨章事实。
-- `needs_user_action`：pending 非空时提示作者“可稍后确认”，但只有 `blocking=true` 或 schema 失败才阻断当前提交。
+- `needs_user_action`：pending 非空时提示作者确认，但只有 `blocking=true` 或 schema 失败才阻断当前提交。
 - `duration_ms`：由主流程计时记录。
 - `outputs`：`fulfillment_result.json`、`disambiguation_result.json`、`extraction_result.json`。

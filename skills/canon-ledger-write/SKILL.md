@@ -131,10 +131,10 @@ CHAPTER_GOAL="$("${CANON_LEDGER_PYTHON}" -X utf8 -c "import sys; from pathlib im
 没有本轮额外要求时仍要写该文件，三段都写「无」。禁止把本轮要求只留在聊天记录里。
 
 写作任务书排序必须固定为：
-1. 本章硬性约束：完整消费 `chapter_directive`；必查 `goal/obstacles/cost/time_anchor/chapter_span/previous_chapter_gap/countdown/key_entities/chapter_change/core_conflict/viewpoint/chapter_end_open_question`，并携带已有的 `strand/antagonist_tier/hook/hook_type/hook_strength`
-2. 章纲节点（若有 CBN/CPNs/CEN / `must_cover_nodes`），作为剧情方向与履约报告依据
+1. 本章硬性约束：完整消费事实型 `chapter_directive` 字段 `goal/obstacles/cost/time_anchor/chapter_span/previous_chapter_gap/countdown/key_entities/chapter_change/core_conflict/viewpoint/chapter_end_open_question`。`hook/hook_type/hook_strength/strand/antagonist_tier` 以及 CBN/CPNs/CEN 不是硬约束；仅当本轮用户要求或 `设定集/文风提示词.md` 点名时才写入任务书
+2. 章纲节点（若有 `must_cover_nodes`），作为剧情方向与履约报告依据，默认不升格为事实检查
 3. 本章禁区：`forbidden_zones`，作为剧情计划提醒；只有作者显式选择 strict 才作为提交阻断
-4. 剧情/人物事实：上章钩子、伏笔、能力边界、OOC 事实警戒、剧情向 anti_patterns
+4. 剧情/人物事实：上章未闭合问题、伏笔、能力边界、在场与持有、知识边界。不要写入 anti_patterns、钩子类型或写法教程
 5. 文风：先粘贴本轮用户明确的人称/口吻/文风覆盖；再粘贴 `设定集/文风提示词.md` 里作者手写的正文（去掉 HTML 注释）。两处都没有 → 写「无」
 
 ### Step 1：context-agent 生成写作任务书
@@ -149,11 +149,12 @@ Task:
 - project_root=${PROJECT_ROOT}
 - scripts_dir=${SCRIPTS_DIR}
 - storage_path=${PROJECT_ROOT}/.canon-ledger
-- state_file=${PROJECT_ROOT}/.canon-ledger/state.json（只读 projection/read-model）
+- 不要把 `state.json` 整文件当事实源 Read；卷号由现有只返回整数的 loader 提供，写作任务书的事实只来自 as-of 快照与 load-context
 - turn_requirements_file=${PROJECT_ROOT}/.canon-ledger/tmp/turn_requirements.md
 - style_override=本轮文风覆盖原文；没有则传空字符串
 - 先 research，把本轮要求拆成剧情、风格、显式 retcon；普通剧情和风格不得覆盖事实。再按长期事实边界 → 本章剧情目标/节点 → 计划禁区 → 人物事实 → 文风的顺序输出五段写作任务书。
 - 文风优先级：本轮用户要求 > 全书文风提示词 > 模型默认。不要把写法教程、句式/口吻建议、题材节奏配方写进任务书。
+- 不要把 hook/CBN/anti_patterns 当硬约束。钩子仅当本轮用户要求或全书文风提示词点名时进入任务书。
 - 上下文不足时返回 blocker。
 
 产物：一份写作任务书，能独立支撑 Step 2 起草。
@@ -248,7 +249,7 @@ reviewer 跳过、失败、输出不完整、`--minimal` 写 no-review artifact�
   --save-audit
 ```
 
-每个正文字节版本只跑一轮审查。只处理已证实的事实问题。`blocking=true` 的事实问题在不改剧情、不破设定、**不改文风**的前提下定点修复；任何字节变更都会使旧 `chapter_binding`、review artifact 和审计记录失效，因此必须先重新生成 binding，再对最终正文重新调用 reviewer + review-pipeline，然后才能进 Step 5。确实无法修复的阻断问题用 `AskQuestion` 让用户裁决。`manual_checks` 只写入报告并提示作者，可稍后处理，不得擅自改正文或阻断提交。口吻、句式、修辞类意见一律忽略。`--fast` 检查 setting/timeline/continuity/character（含知识边界），并在作者报告中明确标记未检查 logic。
+每个正文字节版本只跑一轮审查。只处理已证实的事实问题。`blocking=true` 的事实问题在不改剧情、不破设定、**不改文风**的前提下定点修复；任何字节变更都会使旧 `chapter_binding`、review artifact 和审计记录失效，因此必须先重新生成 binding，再对最终正文重新调用 reviewer + review-pipeline，然后才能进 Step 5。确实无法修复的阻断问题用 `AskQuestion` 让用户裁决。`manual_checks` 进入确认队列，提交备份后当场确认；不得擅自改正文或阻断提交。口吻、句式、修辞类意见一律忽略。`--fast` 检查 setting/timeline/continuity/character（含知识边界），并在作者报告中明确标记未检查 logic。
 
 `--minimal` 不调用 reviewer，也不生成审查报告或审计记录；必须通过统一 CLI **覆盖写入**本章新的跳过审查凭据（禁止复用旧 artifact），使 Step 5 提交链有有效 `--review-result`（成功标准“审查已落库”对 `--minimal` 的豁免仍成立）：
 
@@ -350,7 +351,7 @@ chapter-commit 后如有普通 pending，列出人工队列：
   human-review list --chapter {chapter_num}
 ```
 
-裁决交给交互式确认命令完成：作者运行 `/canon-ledger-confirm {chapter_num}`，在对话里逐条选择 confirm / ignore / replace，系统会自动落库裁决并用 `chapter-commit --from-last-commit` 重放本章提交。裁决绑定当前正文哈希，正文变化后旧裁决不会被复用。本轮写章流程不等待裁决，继续走 5.3。
+裁决交给交互式确认完成：备份后若队列仍有 pending，本轮必须立刻按 `/canon-ledger-confirm {chapter_num}` 逐条 AskQuestion，不得把确认留到以后，也不得把「写下一章」列为下一步。提交与备份可以先做完（歧义未入正史）。裁决绑定当前正文哈希，正文变化后旧裁决不会被复用。
 
 #### 5.3 验证投影
 
@@ -386,6 +387,8 @@ commit 未生成→重跑 5.2。projection 失败→只补跑 projection，不�
 
 备份必须以解析后的 `PROJECT_ROOT` 为准，禁止从工作区父目录执行裸全量 Git add，避免把书项目仓库作为父仓库的嵌入仓库/submodule 加入。
 
+备份后再列一次人工队列。若 `pending` 非空：立刻 `Read` `${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-confirm/SKILL.md`，从该 skill 的 Step 2 执行（环境与项目根已就绪，不必重复引导），当场逐条 `AskQuestion`。队列为空才进入最终报告的「写下一章」。
+
 ## 作者友好过程提示与恢复契约
 
 开始写章前先用作者语言说明本次目标、主要阶段和是否需要守在旁边，不承诺固定耗时。过程提示只说当前在做什么和会产生什么，不直接输出原始 JSON、traceback 或长命令日志；技术详情写入 `.canon-ledger/logs/run_last.log`：
@@ -405,7 +408,7 @@ commit 未生成→重跑 5.2。projection 失败→只补跑 projection，不�
 3. 起草正文：根据写作任务书生成本章正文。
 4. 写作检查：确定穿帮才定点修补，拿不准的判断转人工，不改文风或剧情选择。
 5. 保存本章故事事实：提取本章目标完成情况、歧义和新事实。
-6. 提交备份：把本章事实入账、更新故事资料并备份。
+6. 提交备份：把本章事实入账、更新故事资料并备份；有待确认项则当场确认。
 
 重复执行同一章时，先读取可信断点：
 
@@ -421,7 +424,7 @@ commit 未生成→重跑 5.2。projection 失败→只补跑 projection，不�
 
 每个关键步骤完成后记录 `run-ledger record-write-step`，至少记录 step、status、输入/输出文件路径、problems、auto_handled 和 duration_ms，供下一次续跑和最终报告使用。
 
-少打扰确认策略：默认继续推进；普通 manual_checks / pending 写入报告和队列后继续，只有创作方向、显式 retcon、文件覆盖风险或 blocking issue 无法定点处理时才停下询问。
+少打扰确认策略：确定无误的事实不反复询问；有 pending 或审查疑点时必须当场确认，不得把「继续写下一章」当作并列选项。无待确认项才进入下一章。只有创作方向、显式 retcon、文件覆盖风险或 blocking issue 无法定点处理时才另开询问。
 
 卡住时必须说明卡点、已完成内容和恢复建议：例如“正文和审查报告已保留，保存本章故事事实失败；重新运行 `/canon-ledger-write {chapter_num}` 会从 data-agent 继续”。不可恢复故障才在最终报告提示 `.canon-ledger/logs/run_last.log`；平时只保留日志，不打扰作者。
 
@@ -480,7 +483,7 @@ commit 未生成→重跑 5.2。projection 失败→只补跑 projection，不�
 - `.story-system/commits/chapter_{NNN}.commit.json`。
 - state / index / summary / memory / vector 更新状态。
 - 备份状态。
-- 是否可以继续写下一章。
+- 是否还有待确认项；仅当确认队列为空时才提示可写下一章。
 
 状态规则：
 - `chapter-commit rejected`、任一 `write-gate` failed、projection failed 时，最终状态不得写“已完成”。
@@ -489,14 +492,19 @@ commit 未生成→重跑 5.2。projection 失败→只补跑 projection，不�
 
 异常分类：
 - 已自动处理：projection retry 成功、RAG 临时降级但不影响结果、旧 no-review artifact 被本章新 artifact 覆盖。
-- 建议确认：reviewer `manual_checks`、人工事实队列、命名或设定归属歧义。
+- 建议确认：reviewer `manual_checks`、人工事实队列须当场确认。
 - 必须处理：blocking issue 未裁决、data artifacts 缺失或 schema 不完整、commit rejected、projection failed。
 
-下一步建议必须使用任务化语言 + 可复制命令。本章存在人工事实队列待确认项时，必须给出确认命令，例如：
+下一步建议必须使用任务化语言 + 可复制命令。本章存在人工事实队列或审查疑点时，确认是唯一下一步，不得并列「写下一章」：
 
 ```text
 - 有 {pending_count} 条候选事实等你确认，逐条裁决后系统会自动重新提交本章：
   /canon-ledger-confirm {chapter_num}
+```
+
+队列为空才建议写下一章：
+
+```text
 - 接下来可以写下一章：
   /canon-ledger-write {next_chapter}
 ```

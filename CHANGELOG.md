@@ -1,5 +1,29 @@
 # 更新日志
 
+## v7.2.0 - 堵住静默改写，让知识否定检查真正可达
+
+发版范围：`v7.1.0..v7.2.0`。
+
+### 给作者看的变化
+
+- 已接受的章节不能再被「审查未通过」的提交悄悄覆盖；要作废必须显式确认。
+- 只改正文、不重提该章时，写后续章会被拦住，并提示先 `/canon-ledger-write K` 重提最早失绑章。
+- 查询伏笔和世界规则必须按「截至上一章」来看，写前任务书不再把整份 `state.json` 当事实源通读。
+- 伏笔、承诺、关系、破规则进正史必须引用本章原文；模型「猜出来」的已知事实会进确认队列，不会直接记成正史。
+- 同名却用了新 ID 的角色会进 `/canon-ledger-confirm`：合并到旧人、丢掉，或声明就是新人。
+- 确认时会看到信息编号、已知内容和状态；replace 不能把一条秘密换成另一条编号。
+- 抽全了、歧义都确认完之后，「账本没有获得记录 / 不在场 / 不持有」可以自动当成穿帮。审查里拿不准的设定、时间线、连贯、知识边界和机械规则都会进确认队列；写完一章后确认是唯一下一步，确认前不要写下一章。不确认也不挡本章提交，只是下一章仍不会按「确定不知道 / 不在场」来判。
+- 写章任务书不再把钩子、CBN、anti_patterns 当硬约束。开书不说就不问目标读者、平台、感情线。
+
+### 给维护者
+
+- `persist_commit` 拒绝 `accepted` ← `rejected` 覆盖（`allow_void_accepted=True` 才能显式作废）。
+- prewrite / review-pipeline 检查前缀 `chapter_binding`，失绑报 `prior_chapter_binding_stale`。
+- `_validate_state_delta_chain` 覆盖 `character_state_changed` / `power_breakthrough`；硬约束事件强制 `evidence_quote`；`source_kind=inferred` 从 accepted 挪进 pending。
+- 同名新实体合成 `entity_identity` 队列项；pending 与 accepted 同 `event_id` 以队列 `candidate_event` 为准；replace 锁定 `information_id`。
+- as-of 聚合：前缀连续、每章 `coverage=complete`、无 pending、无 coverage_failures → 维度 `verification=verified`（章级仍禁止模型自称 verified）。
+- reviewer 的全部事实维 `manual_checks` 写入确认队列（character→knowledge_boundary，timeline/continuity 卡住 presence 可信度）；写章/审查报告有待确认项时，`/canon-ledger-confirm N` 是唯一下一步，不再并列「继续写下一章」。
+
 ## v7.1.0 - 人工确认走对话、提交链与确认链全链路加固
 
 发版范围：`v7.0.2..v7.1.0`。

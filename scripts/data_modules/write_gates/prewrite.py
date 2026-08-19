@@ -13,7 +13,10 @@ from ..project_phase import (
     resolve_project_phase,
 )
 from ..story_runtime_sources import load_runtime_sources
-from ..commit_lineage import prior_chapters_needing_revalidation
+from ..commit_lineage import (
+    prior_chapters_needing_revalidation,
+    prior_chapters_with_stale_binding,
+)
 from ..outline_fulfillment import (
     load_authoritative_chapter_goal,
     merged_planned_nodes,
@@ -85,6 +88,26 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
                     f" /canon-ledger-write {earliest}"
                 ),
                 details={"chapters": stale_prior},
+            )
+        )
+
+    stale_bindings = prior_chapters_with_stale_binding(project_root, chapter)
+    if stale_bindings:
+        earliest_binding = stale_bindings[0]
+        earliest_chapter = int(earliest_binding.get("chapter") or 0)
+        errors.append(
+            issue(
+                "prior_chapter_binding_stale",
+                message=(
+                    f"第 {earliest_chapter} 章正文已改，但该章 commit 仍绑定旧稿纸，"
+                    f"不能直接写第 {chapter} 章"
+                ),
+                impact="后续章节会按已失绑的旧抽取当正史，审查也会对着挖空历史进行。",
+                repair=(
+                    f"先重新审查并提交第 {earliest_chapter} 章："
+                    f" /canon-ledger-write {earliest_chapter}"
+                ),
+                details={"chapters": stale_bindings},
             )
         )
 

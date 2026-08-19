@@ -1,7 +1,7 @@
 # 叙典 CanonLedger
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-7.1.0-brightgreen.svg)](.cursor-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-7.2.0-brightgreen.svg)](.cursor-plugin/plugin.json)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 
 记住故事事实，不替你决定文风。
@@ -46,7 +46,7 @@
 
 事实审查只有三种明确模式：`standard` 检查设定、时间线、连续性、知识边界和明确机械规则；`fast` 跳过最后一项并标成降级；`minimal` 明确记录“跳过审查”，绝不伪装成完整通过。只有直接证据表明两条事实不能同时成立时才判为 issue；转场耗时、同义信息、人物动机、一般因果等容易误判的内容进入“待作者确认”，不自动改文、不阻断提交。审查不生成文笔评分、节奏评分或所谓 AI 味反模式。
 
-章末抽取也采用同一原则：明确事件进入 canon；语义不确定的知识、在场或物品持有候选先排除，并写入 `.canon-ledger/human-review/queue/`。作者可以稍后 `confirm`、`ignore` 或 `replace`，裁决只对当时的正文字节版本生效。
+章末抽取也采用同一原则：明确事件进入 canon；语义不确定的知识、在场或物品持有，以及审查里拿不准的时间线、在场和规则疑点，都写入 `.canon-ledger/human-review/queue/`。写完本章后默认当场确认；确认前不要写下一章。裁决只对当时的正文字节版本生效。
 
 日常裁决用 `/canon-ledger-confirm N`：系统逐条展示证据原文和现有记录，作者在对话里选 confirm / ignore / replace，落库后自动用 `chapter-commit --from-last-commit` 重放本章提交，把已确认事实升级为 `verified` 并重建投影。底层 CLI 依然可用：`human-review list --chapter N` 查看队列、`human-review resolve --input-file <项目内 JSON>` 写入裁决；正文改动后旧裁决不会自动沿用。
 
@@ -69,7 +69,7 @@
 
 必收：书名、题材、规模（字数或章数）、主角姓名 / 欲望 / 缺陷、世界规模、力量体系。确认摘要后才生成项目。
 
-不说就不问、不阻断：金手指、反套路、卖点公式、参考书拆解。插件不随包提供题材套路库或爽点模板——题材只作为分类标签写入 `project_info.genre`。想拆书当灵感，要先明确选「从参考书开始」，拆完经你确认才会写进项目。
+不说就不问、不阻断：金手指、反套路、卖点公式、参考书拆解、目标读者、平台、感情线。插件不随包提供题材套路库或爽点模板——题材只作为分类标签写入 `project_info.genre`。想拆书当灵感，要先明确选「从参考书开始」，拆完经你确认才会写进项目。
 
 **`/canon-ledger-plan 1` 拆卷拆章**
 
@@ -81,7 +81,7 @@
 
 **`/canon-ledger-write 4` 写一章**
 
-流程：整理本章依据 → 起草 → 事实审查 → 只改已证实的穿帮 → 登记明确事实 / 排队歧义 → 备份。字数跟你或大纲走，插件不规定章长。`--fast` 减轻审查；`--minimal` 跳过审查修补。
+流程：整理本章依据 → 起草 → 事实审查 → 只改已证实的穿帮 → 登记明确事实 / 排队歧义 → 备份 → 有待确认则当场确认。字数跟你或大纲走，插件不规定章长。`--fast` 减轻审查；`--minimal` 跳过审查修补。钩子和 CBN 不是硬约束。
 
 **`/canon-ledger-review` 查事实**
 
@@ -89,7 +89,7 @@
 
 **`/canon-ledger-confirm 4` 裁决待确认事实**
 
-逐条展示章末抽取排队的歧义候选（证据原文 + 现有记录），作者选 confirm / ignore / replace，系统自动落库裁决并重放本章提交。省略章节号则处理全部待确认章节。正文改过的章节会被拒绝重放，提示重新 `/canon-ledger-write`。
+逐条展示确认队列（抽取歧义 + 审查疑点），作者选 confirm / ignore / replace（有的疑点只有前两项）。系统自动落库裁决并重放本章提交。省略章节号则处理全部待确认章节。正文改过的章节会被拒绝重放，提示重新 `/canon-ledger-write`。有待确认项时这是写完一章后的唯一下一步。
 
 **`/canon-ledger-query` 查书内状态**
 
@@ -260,7 +260,8 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" --project-root "<PROJECT
 
 | 版本 | 说明 |
 |------|------|
-| **v7.1.0 (当前)** | 新增 /canon-ledger-confirm 对话式人工确认与 chapter-commit 重放；Skill 引导样板收敛为受信脚本 bootstrap_env.py。 |
+| **v7.2.0 (当前)** | 堵住正史静默改写与前缀脱节；伏笔/关系必须有正文证据；同名新 ID 转人工；知识边界确认后「不该知道」可自动成 issue。 |
+| **v7.1.0** | 新增 /canon-ledger-confirm 对话式人工确认与 chapter-commit 重放；Skill 引导样板收敛为受信脚本 bootstrap_env.py。 |
 | **v7.0.2** | 收口残留的写法口径，保住含节奏/氛围/反转的设定事实。 |
 | **v7.0.1** | 仓库更名为 Splittinglv/canon-ledger，并明确生成式 AI 辅助开发说明。 |
 | **v7.0.0** | 更名为叙典 CanonLedger，启用独立命令、运行目录与产品身份。 |

@@ -20,7 +20,7 @@ from data_modules.memory_contract_adapter import MemoryContractAdapter
 from data_modules.memory_projection_writer import MemoryProjectionWriter
 from data_modules.projections import retry_projection
 from data_modules.state_projection_writer import StateProjectionWriter
-from .review_test_helpers import standard_review
+from .review_test_helpers import inject_hard_evidence_quotes, standard_review
 
 
 def _prepare_project(tmp_path):
@@ -32,26 +32,19 @@ def _prepare_project(tmp_path):
 
 
 def _build_commit(project_root, chapter: int, extraction: dict):
-    extraction = copy.deepcopy(extraction)
-    evidence_lines: list[str] = []
-    for event in extraction.get("accepted_events") or []:
-        if not isinstance(event, dict) or event.get("event_type") != "world_rule_revealed":
-            continue
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        domain = str(payload.get("domain") or event.get("subject") or "").strip()
-        content = str(payload.get("rule_content") or "").strip()
-        if domain and content:
-            quote = str(payload.get("evidence_quote") or f"{domain}：{content}").strip()
-            payload["evidence_quote"] = quote
-            event["payload"] = payload
-            evidence_lines.append(quote)
     chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
-    if not chapter_path.exists():
-        chapter_path.write_text(
-            "\n".join([f"第{chapter}章最终正文", *evidence_lines]),
-            encoding="utf-8",
-        )
+    existing = (
+        chapter_path.read_text(encoding="utf-8")
+        if chapter_path.exists()
+        else f"第{chapter}章最终正文\n"
+    )
+    extraction, chapter_text = inject_hard_evidence_quotes(
+        copy.deepcopy(extraction),
+        chapter=chapter,
+        chapter_text=existing,
+    )
+    chapter_path.write_text(chapter_text, encoding="utf-8")
     binding = build_chapter_binding(project_root, chapter)
     contract_path = project_root / ".story-system" / "chapters" / f"chapter_{chapter:03d}.json"
     contract_path.parent.mkdir(parents=True, exist_ok=True)

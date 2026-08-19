@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from data_modules.chapter_content_binding import build_chapter_binding
-from data_modules.human_review import HumanReviewService
+from data_modules.human_review import (
+    HumanReviewService,
+    review_manual_check_items_from_review,
+)
 
 
 def _binding(project_root, chapter=3, text="爱丽丝抵达北城。"):
@@ -271,3 +274,128 @@ def test_verified_event_survives_repeated_replays(tmp_path):
         result = service.apply_decisions(3, binding, _pending(), [_presence_event()])
         assert result["events"][0]["verification"] == "verified"
         assert result["verified_event_ids"] == ["alice-location"]
+
+
+def _knowledge_pending():
+    return [
+        {
+            "decision_id": "confirm-door",
+            "category": "knowledge",
+            "candidate_event_id": "door-known",
+            "candidate_event": {
+                "event_id": "door-known",
+                "chapter": 3,
+                "sequence": 1,
+                "event_type": "knowledge_state_changed",
+                "subject": "alice",
+                "payload": {
+                    "information_id": "clocktower-secret-door",
+                    "canonical_claim": "密门在钟楼下",
+                    "evidence_fragment": "密门在钟楼下",
+                    "state": "known",
+                    "source_kind": "told",
+                    "evidence_quote": "爱丽丝得知密门在钟楼下。",
+                },
+            },
+            "evidence_quote": "爱丽丝得知密门在钟楼下。",
+            "reason": "是否已知密门",
+        }
+    ]
+
+
+def test_replace_must_keep_information_id(tmp_path):
+    import pytest
+
+    binding = _binding(tmp_path, text="爱丽丝得知密门在钟楼下。")
+    service = HumanReviewService(tmp_path)
+    service.apply_decisions(3, binding, _knowledge_pending(), [])
+    replacement = _knowledge_pending()[0]["candidate_event"]
+    replacement = {
+        **replacement,
+        "payload": {
+            **replacement["payload"],
+            "information_id": "another-secret",
+            "canonical_claim": "密门在钟楼下",
+        },
+    }
+    with pytest.raises(ValueError, match="must_keep_information_id"):
+        service.record(
+            {
+                "decisions": [
+                    {
+                        "decision_id": "confirm-door",
+                        "action": "replace",
+                        "replacement_event": replacement,
+                    }
+                ]
+            }
+        )
+
+
+def test_review_manual_checks_all_fact_categories_enter_queue():
+    items = review_manual_check_items_from_review(
+        {
+            "manual_checks": [
+                {
+                    "category": "character",
+                    "location": "第1段",
+                    "description": "是否已知密门",
+                    "evidence": "他推开密门",
+                    "reason": "账本没有获得记录",
+                },
+                {
+                    "category": "timeline",
+                    "location": "第2段",
+                    "description": "转场耗时",
+                    "evidence": "已到南港",
+                    "reason": "缺少距离",
+                },
+                {
+                    "category": "continuity",
+                    "location": "第3段",
+                    "description": "死者是否出场",
+                    "evidence": "白芷站在门口",
+                    "reason": "上章已写死",
+                },
+                {
+                    "category": "setting",
+                    "location": "第4段",
+                    "description": "境界是否越级",
+                    "evidence": "他放出斗气",
+                    "reason": "设定措辞有解释空间",
+                },
+            ]
+        }
+    )
+    categories = {item["category"] for item in items}
+    assert categories == {"knowledge_boundary", "timeline", "continuity", "setting"}
+    timeline = next(item for item in items if item["category"] == "timeline")
+    assert timeline["dimension"] == "presence"
+    assert timeline["options"] == ["confirm", "ignore"]
+    knowledge = next(item for item in items if item["category"] == "knowledge_boundary")
+    assert knowledge["options"] == ["confirm", "ignore", "replace"]
+
+
+def test_timeline_review_check_confirm_without_event_clears_queue(tmp_path):
+    binding = _binding(tmp_path)
+    service = HumanReviewService(tmp_path)
+    pending = review_manual_check_items_from_review(
+        {
+            "manual_checks": [
+                {
+                    "category": "timeline",
+                    "location": "第1段",
+                    "description": "转场耗时",
+                    "evidence": "爱丽丝抵达北城。",
+                    "reason": "缺少过夜说明",
+                }
+            ]
+        }
+    )
+    result = service.apply_decisions(3, binding, pending, [])
+    assert len(result["unresolved"]) == 1
+    decision_id = result["unresolved"][0]["decision_id"]
+    service.record({"decisions": [{"decision_id": decision_id, "action": "confirm"}]})
+    resolved = service.apply_decisions(3, binding, pending, [])
+    assert resolved["unresolved"] == []
+    assert resolved["events"] == []

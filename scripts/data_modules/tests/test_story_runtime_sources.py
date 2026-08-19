@@ -131,7 +131,9 @@ def test_load_runtime_sources_excludes_accepted_commit_after_prose_changes(tmp_p
 
 def test_load_runtime_sources_exposes_rejected_status_without_rejected_facts(tmp_path):
     _write_runtime_contracts(tmp_path, chapter=3)
-    chapter_path = _persist_trusted_commit(tmp_path, chapter=3)
+    chapter_path = tmp_path / "正文" / "第0003章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("第3章被拒正文\n", encoding="utf-8")
     binding = build_chapter_binding(tmp_path, 3)
     service = ChapterCommitService(tmp_path)
     rejected = service.build_commit(

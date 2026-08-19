@@ -16,6 +16,7 @@ from data_modules.memory_contract_adapter import MemoryContractAdapter
 from data_modules.story_contracts import synchronize_setting_canon
 from init_project import init_project
 from style_memory import add_style_items
+from .review_test_helpers import inject_hard_evidence_quotes
 
 
 _DIMENSIONS = ("setting", "timeline", "continuity", "character", "logic")
@@ -99,34 +100,14 @@ def _accepted_commit(
     *,
     project: bool = True,
 ) -> dict:
-    extraction = copy.deepcopy(extraction)
-    evidence_lines: list[str] = []
-    for event in extraction.get("accepted_events") or []:
-        if not isinstance(event, dict):
-            continue
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        if event.get("event_type") == "world_rule_revealed":
-            domain = str(payload.get("domain") or event.get("subject") or "").strip()
-            content = str(payload.get("rule_content") or "").strip()
-            if domain and content:
-                quote = str(payload.get("evidence_quote") or f"{domain}：{content}").strip()
-                payload["evidence_quote"] = quote
-                event["payload"] = payload
-                evidence_lines.append(quote)
-        elif event.get("event_type") in {
-            "knowledge_state_changed",
-            "presence_observed",
-            "custody_changed",
-        }:
-            quote = str(payload.get("evidence_quote") or "").strip()
-            if quote:
-                evidence_lines.append(quote)
+    extraction, chapter_text = inject_hard_evidence_quotes(
+        copy.deepcopy(extraction),
+        chapter=chapter,
+        chapter_text=f"第{chapter}章中文正文。\n",
+    )
     chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
-    chapter_path.write_text(
-        "\n".join([f"第{chapter}章中文正文。", *evidence_lines]),
-        encoding="utf-8",
-    )
+    chapter_path.write_text(chapter_text, encoding="utf-8")
     binding = build_chapter_binding(project_root, chapter)
     review = {
         "review_mode": "standard",
@@ -485,9 +466,9 @@ def test_asof_replays_knowledge_physical_presence_and_custody(tmp_path):
     assert chapter_two["schema_version"] == "canon-ledger-asof-snapshot/v3"
     assert chapter_two["coverage"] == full_coverage
     assert chapter_two["verification"] == {
-        "knowledge": "supported",
-        "presence": "supported",
-        "custody": "supported",
+        "knowledge": "verified",
+        "presence": "verified",
+        "custody": "verified",
     }
     assert chapter_two["information"]["clocktower-secret-door"]["content"] == "密门在钟楼下"
     assert chapter_two["knowledge_by_entity"]["linzhou"]["clocktower-secret-door"]["state"] == "known"
@@ -569,9 +550,9 @@ def test_asof_replays_knowledge_physical_presence_and_custody(tmp_path):
     assert context["custody"]["current"]["bronze-key"]["holder_id"] == "baizhi"
     assert context["fact_coverage"] == full_coverage
     assert context["fact_verification"] == {
-        "knowledge": "supported",
-        "presence": "supported",
-        "custody": "supported",
+        "knowledge": "verified",
+        "presence": "verified",
+        "custody": "verified",
     }
 
 

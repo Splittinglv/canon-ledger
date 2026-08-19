@@ -20,6 +20,7 @@ from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E4
 from data_modules.projection_log import read_projection_runs  # noqa: E402
 from data_modules.projections import replay_projections, retry_projection  # noqa: E402
 from .review_test_helpers import (  # noqa: E402
+    inject_hard_evidence_quotes,
     standard_review,
     write_current_chapter_contract,
 )
@@ -29,8 +30,18 @@ def _build_bound_commit(service: ChapterCommitService, **kwargs):
     chapter = int(kwargs["chapter"])
     chapter_path = service.project_root / "正文" / f"第{chapter:04d}章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
-    if not chapter_path.exists():
-        chapter_path.write_text(f"第{chapter}章测试正文\n", encoding="utf-8")
+    existing = (
+        chapter_path.read_text(encoding="utf-8")
+        if chapter_path.exists()
+        else f"第{chapter}章测试正文\n"
+    )
+    extraction, chapter_text = inject_hard_evidence_quotes(
+        dict(kwargs.get("extraction_result") or {}),
+        chapter=chapter,
+        chapter_text=existing,
+    )
+    kwargs["extraction_result"] = extraction
+    chapter_path.write_text(chapter_text, encoding="utf-8")
     binding = build_chapter_binding(service.project_root, chapter)
     write_current_chapter_contract(
         service.project_root,

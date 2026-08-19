@@ -132,6 +132,45 @@ def prior_chapters_needing_revalidation(
     return [item for item in list_needs_revalidation(project_root) if item < target]
 
 
+def prior_chapters_with_stale_binding(
+    project_root: str | Path,
+    chapter: int,
+) -> list[dict[str, Any]]:
+    """Accepted prior chapters whose commit no longer binds current prose.
+
+    ``needs_revalidation`` chapters are skipped: the rewrite stamp already
+    blocks writing past them. This catch is for the remaining hole where the
+    manuscript changed but the commit file was never replaced.
+    """
+    from .chapter_content_binding import verify_chapter_binding
+
+    target = max(1, int(chapter or 1))
+    commits_dir = Path(project_root).expanduser().resolve() / ".story-system" / "commits"
+    if not commits_dir.is_dir():
+        return []
+    stale: list[dict[str, Any]] = []
+    for path in sorted(commits_dir.glob("chapter_*.commit.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        current = _chapter_of(payload)
+        if current <= 0 or current >= target:
+            continue
+        if not is_accepted_commit(payload) or is_needs_revalidation(payload):
+            continue
+        ok, code = verify_chapter_binding(
+            project_root,
+            current,
+            payload.get("chapter_binding"),
+        )
+        if not ok:
+            stale.append({"chapter": current, "reason": code})
+    return stale
+
+
 def stamp_and_partition_commits(
     commits: list[dict[str, Any]],
     *,

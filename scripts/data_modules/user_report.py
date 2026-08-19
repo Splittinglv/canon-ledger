@@ -495,6 +495,78 @@ def _status_from_issues(report: dict[str, Any], *, core_file_count: int = 0) -> 
     return STATUS_COMPLETED
 
 
+def _pending_human_review_items(project_root: Path, chapter: int | None) -> list[dict[str, Any]]:
+    if not chapter:
+        return []
+    try:
+        from .human_review import HumanReviewService
+
+        return [
+            item
+            for item in HumanReviewService(project_root).list_items(int(chapter))
+            if item.get("status") == "pending"
+        ]
+    except Exception:
+        return []
+
+
+def _review_manual_checks(review_payload: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(review_payload, dict):
+        return []
+    return [
+        item
+        for item in (review_payload.get("manual_checks") or [])
+        if isinstance(item, dict) and str(item.get("category") or "").strip()
+    ]
+
+
+def _has_confirm_work(
+    project_root: Path,
+    chapter: int | None,
+    review_payload: dict[str, Any] | None = None,
+) -> bool:
+    if _pending_human_review_items(project_root, chapter):
+        return True
+    return bool(_review_manual_checks(review_payload))
+
+
+def _append_confirm_required(
+    report: dict[str, Any],
+    project_root: Path,
+    chapter: int | None,
+    review_payload: dict[str, Any] | None = None,
+    *,
+    source: str,
+    path: str,
+) -> None:
+    if not chapter or not _has_confirm_work(project_root, chapter, review_payload):
+        return
+    already = any(
+        str(item.get("command") or "").startswith("/canon-ledger-confirm")
+        for item in report.get("issues", {}).get("needs_confirmation") or []
+    )
+    if already:
+        return
+    pending = _pending_human_review_items(project_root, chapter)
+    checks = _review_manual_checks(review_payload)
+    count = len(pending) or len(checks)
+    _add_manual_issue(
+        report,
+        "needs_confirmation",
+        code="human_review_confirm",
+        title="有些事实疑点需要作者确认",
+        reason=f"本章有 {count} 项拿不准的事实需要你判断。",
+        impact=(
+            "提交可以先接受，歧义不会进入正史。不确认的话，"
+            "下一章仍不能把「账本没有获得记录 / 不在场 / 不持有」当成确定穿帮。"
+        ),
+        next_action="运行确认命令，逐条选择后系统会重放本章提交。",
+        command=f"/canon-ledger-confirm {chapter}",
+        source=source,
+        path=path,
+    )
+
+
 def _append_project_status_next_action(report: dict[str, Any], project_root: Path, chapter: int | None) -> None:
     try:
         status = build_project_status(project_root, chapter=chapter)
@@ -585,6 +657,15 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
             source="review_result",
             path=COMMIT_ARTIFACT_FILES[0],
         )
+
+    _append_confirm_required(
+        report,
+        project_root,
+        chapter,
+        review_payload if isinstance(review_payload, dict) else None,
+        source="review_result",
+        path=COMMIT_ARTIFACT_FILES[0],
+    )
 
     if commit_error:
         _add_file(report, label="本章事实提交", path=_rel(project_root, commit_path), status="missing", note="未生成 commit")
@@ -700,20 +781,33 @@ def build_write_report(project_root: Path, *, chapter: int, volume: int | None =
         )
 
     report["overall_status"] = _status_from_issues(report, core_file_count=core_files)
-    if report["overall_status"] == STATUS_COMPLETED:
-        report["next_actions"].append(
-            {
-                "label": "写下一章",
-                "description": f"可以继续写第 {chapter + 1} 章。",
-                "command": f"/canon-ledger-write {chapter + 1}",
-            }
-        )
-    elif report["issues"]["must_handle"]:
+    needs_confirm = _has_confirm_work(
+        project_root,
+        chapter,
+        review_payload if isinstance(review_payload, dict) else None,
+    )
+    if report["issues"]["must_handle"]:
         report["next_actions"].append(
             {
                 "label": "先处理阻断项",
                 "description": "先处理“必须处理”里的问题，再重新运行同一条写章命令。",
                 "command": f"/canon-ledger-write {chapter}",
+            }
+        )
+    elif needs_confirm:
+        report["next_actions"].append(
+            {
+                "label": "确认待裁决事实",
+                "description": "有拿不准的事实等你确认；确认后系统会重放本章提交。确认前不要写下一章。",
+                "command": f"/canon-ledger-confirm {chapter}",
+            }
+        )
+    elif report["overall_status"] == STATUS_COMPLETED:
+        report["next_actions"].append(
+            {
+                "label": "写下一章",
+                "description": f"可以继续写第 {chapter + 1} 章。",
+                "command": f"/canon-ledger-write {chapter + 1}",
             }
         )
     else:
@@ -854,9 +948,12 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
                 code="review_manual_checks",
                 title="有些事实疑点需要作者判断",
                 reason=f"本章有 {manual_checks_count} 项容易误判的检查内容。",
-                impact="这些项目不会自动修改正文，也不阻断当前提交。",
-                next_action="需要时查看审查报告中的“待作者确认”。",
-                command="/canon-ledger-review",
+                impact=(
+                    "这些项目不会自动修改正文，也不阻断当前提交。"
+                    "不确认的话，下一章仍不能把「不该知道 / 不该出现」当成确定穿帮。"
+                ),
+                next_action="运行确认命令，逐条选择后系统会重放本章提交。",
+                command=f"/canon-ledger-confirm {chapter}",
                 source="review",
                 path=_rel(project_root, review_path),
             )
@@ -925,13 +1022,35 @@ def build_review_report(project_root: Path, *, chapter: int, volume: int | None 
                 path="审查报告",
             )
 
+    _append_confirm_required(
+        report,
+        project_root,
+        chapter,
+        review_result if isinstance(review_result, dict) else None,
+        source="review",
+        path=_rel(project_root, review_path),
+    )
+
     report["overall_status"] = _status_from_issues(report, core_file_count=core_files)
+    needs_confirm = _has_confirm_work(
+        project_root,
+        chapter,
+        review_result if isinstance(review_result, dict) else None,
+    )
     if report["issues"]["must_handle"]:
         report["next_actions"].append(
             {
                 "label": "处理审查问题",
                 "description": "先处理审查报告中的阻断问题，再继续写作或提交。",
                 "command": "/canon-ledger-review",
+            }
+        )
+    elif needs_confirm:
+        report["next_actions"].append(
+            {
+                "label": "确认待裁决事实",
+                "description": "有拿不准的事实等你确认；确认后系统会重放本章提交。确认前不要写下一章。",
+                "command": f"/canon-ledger-confirm {chapter}",
             }
         )
     else:

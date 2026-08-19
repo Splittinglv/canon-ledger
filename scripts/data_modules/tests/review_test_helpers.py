@@ -10,6 +10,73 @@ from typing import Any
 
 REVIEW_DIMENSIONS = ["setting", "timeline", "continuity", "character", "logic"]
 
+HARD_EVIDENCE_EVENT_TYPES = frozenset(
+    {
+        "knowledge_state_changed",
+        "presence_observed",
+        "custody_changed",
+        "open_loop_created",
+        "promise_created",
+        "relationship_changed",
+        "world_rule_broken",
+        "world_rule_revealed",
+    }
+)
+
+
+def inject_hard_evidence_quotes(
+    extraction: dict[str, Any],
+    *,
+    chapter: int,
+    chapter_text: str,
+) -> tuple[dict[str, Any], str]:
+    """Fill missing hard-constraint quotes and append them to chapter text.
+
+    Tests that assert missing-quote failures must not call this helper.
+    """
+    payload = dict(extraction)
+    events = list(payload.get("accepted_events") or [])
+    text = chapter_text if chapter_text else f"第{chapter}章最终正文\n"
+    extra_lines: list[str] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_payload = (
+            dict(event.get("payload"))
+            if isinstance(event.get("payload"), dict)
+            else {}
+        )
+        quote = str(event_payload.get("evidence_quote") or "").strip()
+        event_type = str(event.get("event_type") or "")
+        if event_type in HARD_EVIDENCE_EVENT_TYPES and not quote:
+            if event_type == "world_rule_revealed":
+                domain = str(
+                    event_payload.get("domain") or event.get("subject") or ""
+                ).strip()
+                content = str(event_payload.get("rule_content") or "").strip()
+                quote = (
+                    f"{domain}：{content}" if domain and content else content or domain
+                )
+            else:
+                quote = str(
+                    event_payload.get("unanswered_question")
+                    or event_payload.get("content")
+                    or event_payload.get("description")
+                    or event_payload.get("rule_content")
+                    or event_payload.get("proposed_value")
+                    or event_payload.get("canonical_claim")
+                    or f"第{chapter}章最终正文"
+                ).strip()
+            if quote:
+                event_payload["evidence_quote"] = quote
+                event["payload"] = event_payload
+        if quote and quote not in text and quote not in extra_lines:
+            extra_lines.append(quote)
+    if extra_lines:
+        text = text.rstrip("\n") + "\n" + "\n".join(extra_lines) + "\n"
+    payload["accepted_events"] = events
+    return payload, text
+
 
 def write_current_chapter_contract(
     project_root: str | Path,

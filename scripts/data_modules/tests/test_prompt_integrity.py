@@ -421,7 +421,7 @@ def test_write_skill_final_report_covers_commit_projection_and_backup():
         ".story-system/commits/chapter_{NNN}.commit.json",
         "state / index / summary / memory / vector 更新状态",
         "备份状态",
-        "是否可以继续写下一章",
+        "是否还有待确认项",
     ):
         assert required in text
     assert "chapter-commit rejected" in text
@@ -440,7 +440,7 @@ def test_review_skill_final_report_covers_audit_and_blocking_decision():
         "review_audits",
         "阻断问题数量",
         "用户裁决状态",
-        "如果无阻断，明确可以继续写作",
+        "如果无阻断且确认队列为空，才提示可以继续写作。",
     ):
         assert required in text
     assert "有 blocking 问题且用户未选择处理策略" in text
@@ -593,6 +593,24 @@ def test_canon_ledger_query_skill_prefers_story_system_and_memory_contract():
     assert 'cat "$PROJECT_ROOT/.canon-ledger/state.json"' not in text
 
 
+def test_query_skill_open_loops_and_rules_require_asof_chapter():
+    text = _read_text(SKILLS_DIR / "canon-ledger-query" / "SKILL.md")
+    bash_blocks = re.findall(r"```bash\n(.*?)```", text, flags=re.DOTALL)
+    joined = "\n".join(bash_blocks)
+    assert "get-open-loops" in joined
+    for block in bash_blocks:
+        if "get-open-loops" in block:
+            assert "--as-of-chapter" in block
+        if "query-rules" in block:
+            assert "--as-of-chapter" in block
+            assert "query-rules --chapter" not in block
+    context_text = _read_text(AGENTS_DIR / "context-agent.md")
+    context_bash = "\n".join(
+        re.findall(r"```bash\n(.*?)```", context_text, flags=re.DOTALL)
+    )
+    assert "get-reader-signals" not in context_bash
+
+
 def test_context_agent_prefers_contract_and_latest_commit_mainline():
     text = (AGENTS_DIR / "context-agent.md").read_text(encoding="utf-8")
     assert "story_contracts" in text or ".story-system/" in text
@@ -657,6 +675,33 @@ def test_canon_ledger_write_skill_skips_style_pipeline():
     assert "将正文改写为网文风格" not in text
     for forbidden in ("polish-guide.md", "style-adapter.md", "anti-ai-guide.md", "网文腔"):
         assert forbidden not in text, f"write skill 不应再点名 {forbidden}"
+
+
+def test_write_skill_does_not_treat_hooks_as_hard_constraints():
+    write_text = _read_text(SKILLS_DIR / "canon-ledger-write" / "SKILL.md")
+    context_text = _read_text(AGENTS_DIR / "context-agent.md")
+    assert "剧情向 anti_patterns" not in write_text
+    assert "不是硬约束" in write_text
+    assert "不是硬约束" in context_text
+
+
+def test_write_and_review_pending_confirm_is_only_next_step():
+    for skill_name in ("canon-ledger-write", "canon-ledger-review"):
+        text = _read_text(SKILLS_DIR / skill_name / "SKILL.md")
+        assert "也可以继续写下一章" not in text, skill_name
+        assert "确认是唯一下一步" in text, skill_name
+
+
+def test_init_required_fields_match_sufficiency_gate():
+    text = _read_text(SKILLS_DIR / "canon-ledger-init" / "SKILL.md")
+    required_blob = "\n".join(
+        line for line in text.splitlines() if line.startswith("必收：")
+    )
+    assert "目标读者" not in required_blob
+    assert "感情线" not in required_blob
+    assert "势力格局" not in required_blob
+    assert "不说就不问、不阻断：目标读者、平台" in text
+    assert "不说就不问、不阻断：主角结构" in text
 
 
 def test_agents_do_not_name_nonexistent_writing_dna_files():

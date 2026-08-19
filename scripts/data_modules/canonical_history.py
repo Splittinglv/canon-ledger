@@ -375,6 +375,17 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
                 current["type"] = entity_type
             if tier:
                 current["tier"] = tier
+            aliases = list(current.get("aliases") or [])
+            for bucket_key in ("aliases", "mentions"):
+                bucket = delta.get(bucket_key)
+                if not isinstance(bucket, list):
+                    continue
+                for item in bucket:
+                    text = _text(item, 240)
+                    if text and text not in aliases:
+                        aliases.append(text)
+            if aliases:
+                current["aliases"] = aliases
             current.setdefault("first_appearance", chapter)
             current["first_appearance"] = min(
                 int(current.get("first_appearance") or chapter), chapter
@@ -948,9 +959,13 @@ def load_canonical_history(project_root: Path, as_of_chapter: int) -> CanonicalH
             )
         ):
             verification[dimension] = "pending"
-        elif verification_values and all(
-            claim == "verified" for claim in verification_values
+        elif coverage_values and all(
+            claim == "complete" for claim in coverage_values
         ):
+            # Chapter-level fact_verification is extractor output and is
+            # never allowed to self-claim ``verified``.  The as-of dimension
+            # lights up once every prefix chapter was extracted completely
+            # and no chapter is still pending a human decision.
             verification[dimension] = "verified"
         else:
             verification[dimension] = "supported"

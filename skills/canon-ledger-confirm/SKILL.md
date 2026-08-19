@@ -12,10 +12,12 @@ description: 在对话里逐条裁决人工确认队列的歧义事实（confirm
 
 ## 红线
 
-- 只裁决事实歧义（knowledge / presence / custody 等长期事实），不评价文风、剧情选择或人物动机，不修改正文。
+- 审查疑点（`source=review_manual_check`，含知识边界、时间线、在场/持有、设定、机械规则）与抽取歧义走同一条确认，只裁决事实，不评价文风、剧情选择或人物动机，不修改正文。
 - 每一条裁决必须经 `AskQuestion` 由作者亲自选择（不可用时在聊天里给出同样选项）；禁止主流程替作者猜测、默认确认或批量跳过。
 - 每批 `AskQuestion` 不超过 5 条。
-- 选 `replace` 时必须向作者收集替换后的表述，以该条 `candidate_event` 为模板组装 `replacement_event`：保持 `event_id`/`chapter`/`sequence`/`event_type`/`subject` 结构，`payload` 按作者表述修改，`evidence_quote` 必须是本章正文中的原样引用。禁止模型自造作者没有说过的事实。
+- 选 `replace` 时必须向作者收集替换后的表述，以该条 `candidate_event` 为模板组装 `replacement_event`：保持 `event_id`/`chapter`/`sequence`/`event_type`/`subject` 结构；knowledge 事件还须锁定 `information_id`（可改 `canonical_claim`，不可换成另一条秘密的编号），`payload` 按作者表述修改，`evidence_quote` 必须是本章正文中的原样引用。禁止模型自造作者没有说过的事实。
+- 知识边界项（`category=knowledge_boundary`）选 `confirm` 时必须补一条 `knowledge_state_changed`（`state=known`），写入 `replacement_event`；选 `ignore` 表示确认角色不该知道，审查疑点保留待改正文。
+- 其它审查疑点（`timeline` / `continuity` / `setting` / `logic`）若 `options` 只有 confirm / ignore：`confirm` 表示作者确认不是穿帮、关闭疑点，不强制补事件；`ignore` 表示确认是问题、正文待改。不要提供队列未列出的 `replace`。
 - 重放提交报“正文已改动”类错误（如 `chapter_content_hash_mismatch`）时不得强行提交：裁决绑定正文哈希，正文变化后必须重跑 `/canon-ledger-write` 走完整写作链。
 - 项目根不合法 / 缺 `.canon-ledger/state.json` → 阻断。
 
@@ -83,13 +85,13 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py"
 - 待确认原因（`reason`）
 - 正文证据原样引用（`evidence_quote`）
 - 已有记录（`existing_fact`，为空则说明是新事实）
-- 候选事实摘要（`candidate_event` 的 `event_type`、`subject` 与 payload 关键字段，用作者语言复述）
+- 候选事实摘要（`candidate_event` 的 `event_type`、`subject`；knowledge 事件还必须原样展示 `information_id`、`canonical_claim`、`state`；没有则写「无」）
 
-三个固定选项，含义必须向作者讲清：
+三个固定选项，含义必须向作者讲清；若该条 `options` 没有 `replace`，只给已列出的选项：
 
-- `confirm`：按候选事实原样写入正史。
-- `ignore`：本章不记录这条事实（候选事件被丢弃，可此后重提取）。
-- `replace`：作者给出替换表述后写入正史。
+- `confirm`：按候选事实原样写入正史；审查疑点且无候选事件时，表示作者确认不是穿帮并关闭疑点。
+- `ignore`：本章不记录这条事实，或确认这是穿帮、正文待改。
+- `replace`：作者给出替换表述后写入正史（仅当该条提供此选项）。
 
 作者选 `replace` 的条目，继续向作者收集替换后的表述，再按红线组装 `replacement_event`。
 

@@ -20,6 +20,7 @@ _ensure_scripts_on_path()
 from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
 from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
 from data_modules.projections import replay_projections  # noqa: E402
+from .review_test_helpers import inject_hard_evidence_quotes  # noqa: E402
 
 
 _DIMENSIONS = ("setting", "timeline", "continuity", "character", "logic")
@@ -32,9 +33,14 @@ def _accepted_commit(
     body: str,
     extraction: dict,
 ) -> dict:
+    extraction, chapter_text = inject_hard_evidence_quotes(
+        extraction,
+        chapter=chapter,
+        chapter_text=body,
+    )
     chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
-    chapter_path.write_text(body, encoding="utf-8")
+    chapter_path.write_text(chapter_text, encoding="utf-8")
     binding = build_chapter_binding(project_root, chapter)
     contract_path = project_root / ".story-system" / "chapters" / f"chapter_{chapter:03d}.json"
     contract_path.parent.mkdir(parents=True, exist_ok=True)

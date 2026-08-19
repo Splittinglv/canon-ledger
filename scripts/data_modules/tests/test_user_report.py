@@ -374,6 +374,46 @@ def test_render_review_report_surfaces_manual_checks_without_blocking(
         item["code"] == "review_manual_checks"
         for item in report["issues"]["needs_confirmation"]
     )
+    confirm_commands = [
+        str(item.get("command") or "") for item in report["next_actions"]
+    ]
+    assert any("/canon-ledger-confirm 4" in command for command in confirm_commands)
+    write_only = [
+        item
+        for item in report["next_actions"]
+        if str(item.get("command") or "").startswith("/canon-ledger-write")
+    ]
+    assert not write_only
+    assert len(report["next_actions"]) == 1
+
+
+def test_write_report_pending_confirm_is_only_next_step(tmp_path: Path) -> None:
+    from data_modules.human_review import HumanReviewService
+
+    _write_success_case(tmp_path, chapter=1)
+    binding = build_chapter_binding(tmp_path, 1)
+    HumanReviewService(tmp_path).persist_queue(
+        1,
+        binding,
+        [
+            {
+                "source": "review_manual_check",
+                "category": "timeline",
+                "dimension": "presence",
+                "candidate_event_id": "timeline-check-1",
+                "evidence_quote": "正文",
+                "reason": "转场耗时可能不足",
+                "options": ["confirm", "ignore"],
+            }
+        ],
+    )
+
+    report = build_user_report(tmp_path, stage="write", chapter=1)
+    commands = [str(item.get("command") or "") for item in report["next_actions"]]
+    assert any("/canon-ledger-confirm 1" in command for command in commands)
+    assert not any(
+        command.startswith("/canon-ledger-write") for command in commands
+    )
 
 
 def test_review_report_rejects_review_after_manuscript_edit(tmp_path: Path) -> None:

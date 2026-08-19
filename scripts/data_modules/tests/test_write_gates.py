@@ -706,3 +706,72 @@ def test_prewrite_allows_revalidating_the_earliest_stale_chapter(tmp_path):
     assert not any(
         item["code"] == "prior_chapter_needs_revalidation" for item in report["errors"]
     )
+
+
+def test_prewrite_blocks_when_prior_chapter_binding_is_stale(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=1)
+    chapter_path = tmp_path / "正文" / "第0001章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text("第一章原文。\n", encoding="utf-8")
+    from data_modules.chapter_commit_service import ChapterCommitService
+
+    service = ChapterCommitService(tmp_path)
+    binding = build_chapter_binding(tmp_path, 1)
+    payload = service.build_commit(
+        chapter=1,
+        review_result=standard_review(binding),
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        disambiguation_result={"pending": [], "chapter_binding": binding},
+        extraction_result={
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [],
+            "chapter_binding": binding,
+        },
+    )
+    service.persist_commit(payload)
+    service.apply_projections(payload)
+
+    chapter_path.write_text("第一章被改写且未重提。\n", encoding="utf-8")
+    _make_current_contracts(tmp_path, chapter=3)
+    report = run_write_gate(tmp_path, chapter=3, stage="prewrite")
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "prior_chapter_binding_stale" for item in report["errors"]
+    )
+
+    _make_current_contracts(tmp_path, chapter=1)
+    binding = build_chapter_binding(tmp_path, 1)
+    payload = service.build_commit(
+        chapter=1,
+        review_result=standard_review(binding),
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        disambiguation_result={"pending": [], "chapter_binding": binding},
+        extraction_result={
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [],
+            "chapter_binding": binding,
+        },
+    )
+    service.persist_commit(payload)
+    service.apply_projections(payload)
+
+    _make_current_contracts(tmp_path, chapter=3)
+    report = run_write_gate(tmp_path, chapter=3, stage="prewrite")
+    assert not any(
+        item["code"] == "prior_chapter_binding_stale" for item in report["errors"]
+    )

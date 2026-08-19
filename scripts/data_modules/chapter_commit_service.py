@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict
 
@@ -112,6 +114,257 @@ def _information_conflict_items(
     return items
 
 
+_HARD_EVIDENCE_EVENT_TYPES = {
+    "knowledge_state_changed",
+    "presence_observed",
+    "custody_changed",
+    "open_loop_created",
+    "promise_created",
+    "relationship_changed",
+    "world_rule_broken",
+}
+_IDENTITY_KEYS = (
+    "entity_id",
+    "id",
+    "subject",
+    "from_entity",
+    "to_entity",
+    "from_holder",
+    "to_holder",
+    "source_entity",
+    "holder_id",
+)
+
+
+def _normalize_alias_key(value: Any) -> str:
+    return unicodedata.normalize("NFKC", str(value or "")).strip()
+
+
+def _display_names_from_entity_row(row: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for key in ("name", "canonical_name"):
+        text = _normalize_alias_key(row.get(key))
+        if text:
+            names.append(text)
+    for bucket_key in ("aliases", "mentions"):
+        bucket = row.get(bucket_key)
+        if not isinstance(bucket, list):
+            continue
+        for item in bucket:
+            text = _normalize_alias_key(item)
+            if text:
+                names.append(text)
+    return list(dict.fromkeys(names))
+
+
+def _history_alias_owners(history: Any) -> dict[str, list[str]]:
+    """Build the same name→ids map as as-of ``alias_index``, plus NFKC."""
+    owners: dict[str, list[str]] = {}
+    entities = history.entities if isinstance(getattr(history, "entities", None), dict) else {}
+    for entity_id, entity in entities.items():
+        if not isinstance(entity, dict):
+            continue
+        eid = str(entity.get("id") or entity_id or "").strip()
+        if not eid:
+            continue
+        for name in _display_names_from_entity_row(entity):
+            bucket = owners.setdefault(name, [])
+            if eid not in bucket:
+                bucket.append(eid)
+    return owners
+
+
+def _collect_new_entity_rows(extraction: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for appeared in list(getattr(extraction, "entities_appeared", None) or []):
+        if not isinstance(appeared, dict):
+            continue
+        entity_id = str(appeared.get("id") or appeared.get("entity_id") or "").strip()
+        if entity_id:
+            rows.append({"entity_id": entity_id, **appeared})
+    for delta in list(getattr(extraction, "entity_deltas", None) or []):
+        if not isinstance(delta, dict):
+            continue
+        if (delta.get("from_entity") or delta.get("from")) and (
+            delta.get("to_entity") or delta.get("to")
+        ):
+            continue
+        entity_id = str(delta.get("entity_id") or delta.get("id") or "").strip()
+        if entity_id:
+            rows.append({"entity_id": entity_id, **delta})
+    return rows
+
+
+def _entity_name_collision_items(
+    extraction: Any,
+    history: Any,
+) -> list[dict[str, Any]]:
+    """Route a new entity_id that reuses a recorded display name to the queue."""
+    owners = _history_alias_owners(history)
+    known_ids = {
+        str(entity_id or "").strip()
+        for entity_id in (getattr(history, "entities", None) or {})
+    }
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in _collect_new_entity_rows(extraction):
+        new_id = str(row.get("entity_id") or "").strip()
+        if not new_id or new_id in known_ids or new_id in seen:
+            continue
+        matched: list[str] = []
+        matched_names: list[str] = []
+        for name in _display_names_from_entity_row(row):
+            for owner in owners.get(name) or []:
+                if owner != new_id and owner not in matched:
+                    matched.append(owner)
+                    matched_names.append(name)
+        if not matched:
+            continue
+        seen.add(new_id)
+        old_id = matched[0]
+        shown = "、".join(matched_names[:3])
+        items.append(
+            {
+                "source": "entity_name_collision",
+                "category": "entity_identity",
+                "dimension": "knowledge",
+                "candidate_event_id": f"entity-identity-{new_id}",
+                "new_entity_id": new_id,
+                "matched_entity_id": old_id,
+                "existing_fact": f"已有实体 {old_id} 使用名称 {shown}",
+                "reason": (
+                    f"新 ID {new_id} 的显示名/别名与已有实体 {old_id} 相同（{shown}）。"
+                    f"confirm=合并到已有实体 {old_id}；"
+                    "ignore=本章不登记这个新 ID；"
+                    "replace=声明就是新人并保留新 ID。"
+                ),
+            }
+        )
+    return items
+
+
+def _obj_mentions_entity(value: Any, entity_id: str) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            if key in _IDENTITY_KEYS and str(nested or "").strip() == entity_id:
+                return True
+            if _obj_mentions_entity(nested, entity_id):
+                return True
+        return False
+    if isinstance(value, list):
+        return any(
+            str(item or "").strip() == entity_id or _obj_mentions_entity(item, entity_id)
+            for item in value
+        )
+    return False
+
+
+def _rewrite_entity_id(value: Any, old_id: str, new_id: str) -> Any:
+    if isinstance(value, dict):
+        rewritten = {}
+        for key, nested in value.items():
+            if key in _IDENTITY_KEYS and str(nested or "").strip() == old_id:
+                rewritten[key] = new_id
+            else:
+                rewritten[key] = _rewrite_entity_id(nested, old_id, new_id)
+        return rewritten
+    if isinstance(value, list):
+        return [
+            new_id
+            if str(item or "").strip() == old_id
+            else _rewrite_entity_id(item, old_id, new_id)
+            for item in value
+        ]
+    return value
+
+
+def _drop_entity_records(rows: list[Any], entity_id: str) -> list[Any]:
+    kept: list[Any] = []
+    for row in rows:
+        if _obj_mentions_entity(row, entity_id):
+            continue
+        kept.append(row)
+    return kept
+
+
+def _apply_identity_actions(
+    extraction_payload: dict[str, Any],
+    accepted_events: list[dict[str, Any]],
+    collisions: list[dict[str, Any]],
+    identity_actions: dict[str, str],
+) -> list[dict[str, Any]]:
+    events = list(accepted_events)
+    for item in collisions:
+        new_id = str(item.get("new_entity_id") or "").strip()
+        old_id = str(item.get("matched_entity_id") or "").strip()
+        if not new_id:
+            continue
+        action = identity_actions.get(new_id)
+        if action == "replace":
+            continue
+        if action == "confirm" and old_id:
+            events = _rewrite_entity_id(events, new_id, old_id)
+            for field in (
+                "entity_deltas",
+                "entities_appeared",
+                "scenes",
+                "state_deltas",
+            ):
+                extraction_payload[field] = _rewrite_entity_id(
+                    list(extraction_payload.get(field) or []),
+                    new_id,
+                    old_id,
+                )
+            continue
+        events = _drop_entity_records(events, new_id)
+        for field in ("entity_deltas", "entities_appeared", "scenes", "state_deltas"):
+            extraction_payload[field] = _drop_entity_records(
+                list(extraction_payload.get(field) or []),
+                new_id,
+            )
+    return events
+
+
+def _state_deltas_from_events(events: list[Any]) -> list[dict[str, Any]]:
+    deltas: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get("event_type") or "").strip()
+        if event_type not in {"character_state_changed", "power_breakthrough"}:
+            continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        entity = str(payload.get("entity_id") or event.get("subject") or "").strip()
+        field_name = str(
+            payload.get("field") or payload.get("field_path") or ""
+        ).strip()
+        if event_type == "power_breakthrough" and not field_name:
+            field_name = "realm"
+        delta: dict[str, Any] = {"entity_id": entity, "field": field_name}
+        for key in ("new", "new_value", "to", "new_state"):
+            if key in payload:
+                delta[key] = payload[key]
+                break
+        for key in ("old", "old_value", "from", "previous_state"):
+            if key in payload:
+                delta[key] = payload[key]
+                break
+        deltas.append(delta)
+    return deltas
+
+
+def _is_inferred_knowledge(event: dict[str, Any], probe: dict[str, Any] | None) -> bool:
+    source = probe if isinstance(probe, dict) else event
+    if str(source.get("event_type") or event.get("event_type") or "") != (
+        "knowledge_state_changed"
+    ):
+        return False
+    payload = source.get("payload") if isinstance(source.get("payload"), dict) else {}
+    if not payload and isinstance(event.get("payload"), dict):
+        payload = event["payload"]
+    return str(payload.get("source_kind") or "").strip().lower() == "inferred"
+
+
 class ChapterCommitService:
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
@@ -180,9 +433,9 @@ class ChapterCommitService:
     ) -> None:
         """A delta touching a recorded field must declare the matching old value.
 
-        state_deltas enter canon without prose evidence, so this chain check is
-        the only deterministic guard against silently overwriting a recorded
-        value with a contradicting one.
+        ``state_deltas`` and ``character_state_changed`` / ``power_breakthrough``
+        events both write canon state.  This chain check is the deterministic
+        guard against silently overwriting a recorded value.
         """
         recorded: dict[tuple[str, str], Any] = {}
         for change in history.state_changes:
@@ -320,7 +573,10 @@ class ChapterCommitService:
             raise ValueError(fulfillment_errors[0])
 
         from .canonical_history import load_canonical_history
-        from .human_review import HumanReviewService
+        from .human_review import (
+            HumanReviewService,
+            review_manual_check_items_from_review,
+        )
 
         history = load_canonical_history(self.project_root, max(0, chapter - 1))
         raw_candidates = [dict(event) for event in extraction.accepted_events]
@@ -338,7 +594,44 @@ class ChapterCommitService:
                 # conflict can drop exactly this event from the commit.
                 raw_candidates[index]["event_id"] = str(probe.get("event_id") or "")
             probes.append(probe)
+        inferred_kept: list[dict[str, Any]] = []
+        inferred_probes: list[dict[str, Any] | None] = []
+        inferred_items: list[dict[str, Any]] = []
+        for event, probe in zip(raw_candidates, probes):
+            if _is_inferred_knowledge(event, probe):
+                event_id = str(
+                    event.get("event_id")
+                    or (probe or {}).get("event_id")
+                    or ""
+                ).strip()
+                payload = (
+                    (probe or {}).get("payload")
+                    if isinstance((probe or {}).get("payload"), dict)
+                    else event.get("payload")
+                )
+                payload = payload if isinstance(payload, dict) else {}
+                inferred_items.append(
+                    {
+                        "source": "inferred_knowledge",
+                        "category": "knowledge",
+                        "dimension": "knowledge",
+                        "candidate_event_id": event_id,
+                        "candidate_event": dict(probe or event),
+                        "evidence_quote": str(payload.get("evidence_quote") or ""),
+                        "reason": (
+                            "source_kind=inferred 不能自动进入正史，需要作者确认后"
+                            "才能记为已知事实。"
+                        ),
+                    }
+                )
+                continue
+            inferred_kept.append(event)
+            inferred_probes.append(probe)
+        raw_candidates = inferred_kept
+        probes = inferred_probes
         conflict_items = _information_conflict_items(chapter, probes, history)
+        collision_items = _entity_name_collision_items(extraction, history)
+        review_items = review_manual_check_items_from_review(review)
         pending_input = [
             dict(item) if isinstance(item, dict) else item
             for item in disambiguation.pending
@@ -350,8 +643,8 @@ class ChapterCommitService:
         }
         merged_pending = pending_input + [
             item
-            for item in conflict_items
-            if item["candidate_event_id"] not in queued_event_ids
+            for item in conflict_items + inferred_items + collision_items + review_items
+            if item.get("candidate_event_id") not in queued_event_ids
         ]
 
         human_review = HumanReviewService(self.project_root).apply_decisions(
@@ -372,8 +665,15 @@ class ChapterCommitService:
         )
         status = "rejected" if rejected else "accepted"
         volume = volume_num_for_chapter_from_state(self.project_root, chapter) or 1
+        extraction_payload = extraction.model_dump()
+        accepted_events = _apply_identity_actions(
+            extraction_payload,
+            list(human_review["events"]),
+            collision_items,
+            human_review.get("identity_actions") or {},
+        )
         accepted_events = EventLogStore(self.project_root).normalize_events(
-            chapter, human_review["events"]
+            chapter, accepted_events
         )
         evidence_envelope = {
             "meta": {"chapter": chapter},
@@ -384,21 +684,17 @@ class ChapterCommitService:
                 self.project_root,
                 evidence_envelope,
             )
-            consistency_types = {
-                "knowledge_state_changed",
-                "presence_observed",
-                "custody_changed",
-            }
             for index, event in enumerate(accepted_events):
                 event_payload = (
                     event.get("payload") if isinstance(event.get("payload"), dict) else {}
                 )
                 quote = str(event_payload.get("evidence_quote") or "").strip()
-                is_consistency = str(event.get("event_type") or "") in consistency_types
-                # Consistency events must always bind to the prose; any other
-                # event that claims a quote must also actually quote this
-                # chapter, so no event type can carry fabricated evidence.
-                if (is_consistency or quote) and not event_evidence_in_chapter(
+                event_type = str(event.get("event_type") or "")
+                requires_quote = event_type in _HARD_EVIDENCE_EVENT_TYPES
+                # Hard-constraint and consistency events must bind to the
+                # prose; any other event that claims a quote must also
+                # actually quote this chapter.
+                if (requires_quote or quote) and not event_evidence_in_chapter(
                     event, bound_chapter_text
                 ):
                     raise ValueError(
@@ -406,11 +702,15 @@ class ChapterCommitService:
                         "is not present in the bound chapter"
                     )
             self._validate_custody_transitions(chapter, accepted_events, history)
-            self._validate_state_delta_chain(list(extraction.state_deltas), history)
-            self._validate_entity_type_stability(
-                list(extraction.entity_deltas), history
+            self._validate_state_delta_chain(
+                list(extraction_payload.get("state_deltas") or [])
+                + _state_deltas_from_events(accepted_events),
+                history,
             )
-        extraction_payload = extraction.model_dump()
+            self._validate_entity_type_stability(
+                list(extraction_payload.get("entity_deltas") or []),
+                history,
+            )
         extraction_payload["accepted_events"] = accepted_events
         coverage = dict(extraction_payload.get("fact_coverage") or {})
         # fact_verification is extractor output at this boundary.  As with
@@ -515,10 +815,39 @@ class ChapterCommitService:
                 raise ValueError(f"invalid_consistency_fact:{lifecycle_errors[0]}")
         return ChapterCommitSchema.model_validate(commit_payload).model_dump()
 
-    def persist_commit(self, payload: Dict[str, Any]) -> Path:
+    def persist_commit(
+        self,
+        payload: Dict[str, Any],
+        *,
+        allow_void_accepted: bool = False,
+    ) -> Path:
         target = self.project_root / ".story-system" / "commits"
         target.mkdir(parents=True, exist_ok=True)
-        path = target / f"chapter_{int(payload['meta']['chapter']):03d}.commit.json"
+        chapter = int(payload["meta"]["chapter"])
+        path = target / f"chapter_{chapter:03d}.commit.json"
+        if path.is_file() and not allow_void_accepted:
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                existing = None
+            if isinstance(existing, dict):
+                existing_meta = (
+                    existing.get("meta")
+                    if isinstance(existing.get("meta"), dict)
+                    else {}
+                )
+                new_meta = (
+                    payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+                )
+                old_status = str(existing_meta.get("status") or "")
+                new_status = str(new_meta.get("status") or "")
+                if old_status == "accepted" and new_status == "rejected":
+                    raise ValueError(
+                        "cannot_overwrite_accepted_with_rejected:"
+                        f"chapter {chapter} already has an accepted commit; "
+                        "fix blocking issues and resubmit as accepted, "
+                        "or pass allow_void_accepted=True to void it explicitly"
+                    )
         write_json(path, payload)
         return path
 

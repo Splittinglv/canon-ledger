@@ -1353,7 +1353,11 @@ def test_canon_ledger_skill_flow_runs_story_contract_context_and_review_pipeline
                     "chapter": 2,
                     "event_type": "relationship_changed",
                     "subject": "萧炎",
-                    "payload": {"to_entity": "药老", "relationship_type": "紧张"},
+                    "payload": {
+                        "to_entity": "药老",
+                        "relationship_type": "紧张",
+                        "evidence_quote": "萧炎与药老在试炼前关系紧张。",
+                    },
                 }
             ],
             "state_deltas": [],

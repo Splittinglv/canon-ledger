@@ -84,14 +84,14 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py"
    3. `.story-system/chapters/*.json` - 章级合同：权威在 `chapter_directive`（`goal`、`must_cover_nodes`、`forbidden_zones`、时间锚点等章纲事实）。`override_allowed.chapter_focus` 只是 `goal` 的别名；`dynamic_context` 固定为空，不是检索到的写法材料
    4. latest accepted `.story-system/commits/chapter_XXX.commit.json` - 写后事实（已发布章节的定稿状态）
    5. `memory-contract` 系列查询 - 记忆编排结果（长期记忆、伏笔、时间线）
-   6. `.canon-ledger/state.json` / `index.db` - 只读投影层（角色卡、章节列表）
+   6. `.canon-ledger/state.json` / `index.db` - 只读投影层（角色卡、章节列表）。不要通读整份 `state.json` 当事实源；查询记忆请用带 `--as-of-chapter` 的 `memory-contract`
 
    **优先级说明**：
    - 写前真源（1-3）：作者开写前必须遵守的"大纲、设定、禁区"
    - 写后真源（4）：已发布章节的"定稿状态"，不可篡改
    - 投影层（5-6）：从写后真源自动生成的"查询视图"，方便快速检索
 
-3. **调用最窄工具检索**：按类型只调用所需命令，不默认全量 `load-context`。
+3. **调用最窄工具检索**：按类型只调用所需命令，不默认全量 `load-context`。用户问第 N 章或「当前」时，`{N-1}` 取该章上一章或最新 accepted 章号。所有 `memory-contract` 补查必须带 `--as-of-chapter {N-1}`（`load-context` 用 `--chapter {N}`，内部截至 N-1）。禁止把整份 `.canon-ledger/state.json` 当事实源通读。
 
 ```bash
 : "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
@@ -102,10 +102,10 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py"
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" knowledge query-relationships --entity "{entity_id}" --at-chapter {N}
 
 # 世界规则
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" memory-contract query-rules --chapter {chapter_num}
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" memory-contract query-rules --as-of-chapter {N-1}
 
 # 伏笔 / open loop
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" memory-contract get-open-loops
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" memory-contract get-open-loops --as-of-chapter {N-1}
 
 # 仅综合 / 复杂查询：需要时间线 + 长期记忆联合时才用
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" memory-contract load-context --chapter {chapter_num}

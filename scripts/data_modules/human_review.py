@@ -19,10 +19,67 @@ VALID_ACTIONS = {"confirm", "ignore", "replace"}
 _CATEGORY_DIMENSION = {
     "knowledge": "knowledge",
     "knowledge_identity": "knowledge",
+    "knowledge_boundary": "knowledge",
+    "entity_identity": "knowledge",
     "presence": "presence",
     "presence_kind": "presence",
+    "timeline": "presence",
+    "continuity": "presence",
     "custody": "custody",
     "custody_transition": "custody",
+}
+_REVIEW_CHECK_SPECS = {
+    "character": {
+        "category": "knowledge_boundary",
+        "dimension": "knowledge",
+        "id_prefix": "knowledge-boundary",
+        "options": ["confirm", "ignore", "replace"],
+        "hint": (
+            "confirm=补一条角色已知事件（须提供 knowledge_state_changed，state=known）；"
+            "ignore=确认不该知道，保留待改正文；"
+            "replace=作者改写这条已知事实。"
+        ),
+    },
+    "timeline": {
+        "category": "timeline",
+        "dimension": "presence",
+        "id_prefix": "timeline-check",
+        "options": ["confirm", "ignore"],
+        "hint": (
+            "confirm=作者确认时间线可成立，关闭疑点；"
+            "ignore=确认穿帮，保留待改正文。"
+        ),
+    },
+    "continuity": {
+        "category": "continuity",
+        "dimension": "presence",
+        "id_prefix": "continuity-check",
+        "options": ["confirm", "ignore"],
+        "hint": (
+            "confirm=作者确认并非不该出现或持有冲突，关闭疑点；"
+            "ignore=确认不该出现或事实冲突，保留待改正文。"
+        ),
+    },
+    "setting": {
+        "category": "setting",
+        "dimension": "",
+        "id_prefix": "setting-check",
+        "options": ["confirm", "ignore"],
+        "hint": (
+            "confirm=作者确认设定可同时成立，关闭疑点；"
+            "ignore=确认设定冲突，保留待改正文。"
+        ),
+    },
+    "logic": {
+        "category": "logic",
+        "dimension": "",
+        "id_prefix": "logic-check",
+        "options": ["confirm", "ignore"],
+        "hint": (
+            "confirm=作者确认机械规则可成立，关闭疑点；"
+            "ignore=确认规则冲突，保留待改正文。"
+        ),
+    },
 }
 _EVENT_DIMENSION = {
     "knowledge_state_changed": "knowledge",
@@ -83,8 +140,93 @@ def _candidate_fingerprint(chapter: int, item: dict[str, Any]) -> str:
         "evidence_quote": item.get("evidence_quote"),
         "existing_fact": item.get("existing_fact"),
         "reason": item.get("reason"),
+        "new_entity_id": item.get("new_entity_id"),
+        "matched_entity_id": item.get("matched_entity_id"),
     }
     return hashlib.sha256(_canonical_json(stable).encode("utf-8")).hexdigest()[:16]
+
+
+def review_manual_check_items_from_review(review: Any) -> list[dict[str, Any]]:
+    """Turn reviewer manual_checks into confirm-queue items.
+
+    Character checks stay on the knowledge-boundary path. Timeline and
+    continuity checks keep presence unverified until the author decides, so
+    “not present / not held” cannot auto-fire. Setting and logic checks are
+    queued without a coverage dimension.
+    """
+    raw_checks: list[Any]
+    if hasattr(review, "manual_checks"):
+        raw_checks = list(review.manual_checks or [])
+    elif isinstance(review, dict):
+        raw_checks = list(review.get("manual_checks") or [])
+    else:
+        raw_checks = []
+    items: list[dict[str, Any]] = []
+    counters: dict[str, int] = {}
+    for check in raw_checks:
+        if hasattr(check, "model_dump"):
+            check = check.model_dump()
+        if not isinstance(check, dict):
+            continue
+        spec = _REVIEW_CHECK_SPECS.get(str(check.get("category") or ""))
+        if spec is None:
+            continue
+        prefix = str(spec["id_prefix"])
+        counters[prefix] = counters.get(prefix, 0) + 1
+        description = _text(check.get("description"), 600)
+        reason = _text(check.get("reason"), 600)
+        item: dict[str, Any] = {
+            "source": "review_manual_check",
+            "category": spec["category"],
+            "candidate_event_id": f"{prefix}-{counters[prefix]}",
+            "evidence_quote": _text(check.get("evidence"), 600),
+            "existing_fact": _text(check.get("location"), 600),
+            "reason": f"{description} {reason} {spec['hint']}".strip(),
+            "options": list(spec["options"]),
+            "blocking": False,
+        }
+        dimension = str(spec.get("dimension") or "")
+        if dimension:
+            item["dimension"] = dimension
+        items.append(item)
+    return items
+
+
+def knowledge_boundary_items_from_review(review: Any) -> list[dict[str, Any]]:
+    """Compatibility alias: all reviewer manual_checks now enter the queue."""
+    return review_manual_check_items_from_review(review)
+
+
+def _assert_replacement_keeps_identity(
+    candidate_repr: dict[str, Any],
+    replacement_repr: dict[str, Any],
+    decision_id: str,
+) -> None:
+    for field_name in ("event_type", "subject"):
+        if _text(replacement_repr.get(field_name), 180) != _text(
+            candidate_repr.get(field_name), 180
+        ):
+            raise ValueError(
+                "human_review_replacement_must_keep_"
+                f"{field_name}:{decision_id}"
+            )
+    candidate_payload = (
+        candidate_repr.get("payload")
+        if isinstance(candidate_repr.get("payload"), dict)
+        else {}
+    )
+    replacement_payload = (
+        replacement_repr.get("payload")
+        if isinstance(replacement_repr.get("payload"), dict)
+        else {}
+    )
+    information_id = _text(candidate_payload.get("information_id"), 180)
+    if information_id and _text(
+        replacement_payload.get("information_id"), 180
+    ) != information_id:
+        raise ValueError(
+            f"human_review_replacement_must_keep_information_id:{decision_id}"
+        )
 
 
 def _decision_id(
@@ -226,6 +368,8 @@ class HumanReviewService:
                 "dimension": dimension,
                 "candidate_event_id": candidate_event_id,
                 "candidate_event": candidate_event,
+                "new_entity_id": _text(item.get("new_entity_id"), 180),
+                "matched_entity_id": _text(item.get("matched_entity_id"), 180),
                 "evidence_quote": evidence_quote,
                 "existing_fact": _text(item.get("existing_fact"), 600),
                 "reason": _text(
@@ -402,6 +546,18 @@ class HumanReviewService:
             enriched_pending.append(item)
 
         items = self.persist_queue(chapter, binding, enriched_pending)
+        override_ids = {
+            _text(item.get("candidate_event_id"), 180)
+            for item in items
+            if _text(item.get("candidate_event_id"), 180)
+            and isinstance(item.get("candidate_event"), dict)
+        }
+        if override_ids:
+            events = [
+                event
+                for event in events
+                if _text(event.get("event_id"), 180) not in override_ids
+            ]
         event_indexes = {
             _text(event.get("event_id"), 180): index
             for index, event in enumerate(events)
@@ -415,6 +571,7 @@ class HumanReviewService:
         verified_event_ids: list[str] = []
         affected_dimensions: set[str] = set()
         resolved_dimensions: set[str] = set()
+        identity_actions: dict[str, str] = {}
 
         for item in items:
             decision = self._matched_decision(item, decisions)
@@ -436,45 +593,73 @@ class HumanReviewService:
                 if event_index is not None:
                     dropped.add(event_index)
             elif action == "replace":
-                replacement = decision.get("replacement_event")
-                if not isinstance(replacement, dict):
-                    raise ValueError(
-                        f"human_review_replacement_missing:{item['decision_id']}"
-                    )
-                # replace corrects the wording of a real candidate; it may not
-                # smuggle in a fact with a different identity.
-                candidate_repr = stable_event_repr(chapter, item.get("candidate_event"))
-                if not candidate_repr:
-                    raise ValueError(
-                        f"human_review_replace_requires_candidate:{item['decision_id']}"
-                    )
-                replacement_repr = stable_event_repr(chapter, replacement) or {}
-                for field_name in ("event_type", "subject"):
-                    if _text(replacement_repr.get(field_name), 180) != _text(
-                        candidate_repr.get(field_name), 180
-                    ):
-                        raise ValueError(
-                            "human_review_replacement_must_keep_"
-                            f"{field_name}:{item['decision_id']}"
-                        )
-                verified = self._verified_event(replacement)
-                if event_index is None:
-                    additions.append(verified)
+                if item.get("new_entity_id") and not isinstance(
+                    item.get("candidate_event"), dict
+                ):
+                    identity_actions[str(item["new_entity_id"])] = "replace"
                 else:
-                    replacements[event_index] = verified
-                verified_event_ids.append(_text(verified.get("event_id"), 180))
+                    replacement = decision.get("replacement_event")
+                    if not isinstance(replacement, dict):
+                        raise ValueError(
+                            f"human_review_replacement_missing:{item['decision_id']}"
+                        )
+                    # replace corrects the wording of a real candidate; it may not
+                    # smuggle in a fact with a different identity.
+                    candidate_repr = stable_event_repr(
+                        chapter, item.get("candidate_event")
+                    )
+                    if not candidate_repr:
+                        raise ValueError(
+                            "human_review_replace_requires_candidate:"
+                            f"{item['decision_id']}"
+                        )
+                    replacement_repr = stable_event_repr(chapter, replacement) or {}
+                    _assert_replacement_keeps_identity(
+                        candidate_repr,
+                        replacement_repr,
+                        item["decision_id"],
+                    )
+                    verified = self._verified_event(replacement)
+                    if event_index is None:
+                        additions.append(verified)
+                    else:
+                        replacements[event_index] = verified
+                    verified_event_ids.append(_text(verified.get("event_id"), 180))
             elif action == "confirm":
-                if event_index is not None:
+                if item.get("new_entity_id"):
+                    identity_actions[str(item["new_entity_id"])] = "confirm"
+                source = (
+                    item.get("candidate_event")
+                    if isinstance(item.get("candidate_event"), dict)
+                    else None
+                )
+                if source is None and item.get("category") == "knowledge_boundary":
+                    source = (
+                        decision.get("replacement_event")
+                        if isinstance(decision.get("replacement_event"), dict)
+                        else None
+                    )
+                    if source is None:
+                        raise ValueError(
+                            "human_review_knowledge_boundary_confirm_requires_event:"
+                            f"{item['decision_id']}"
+                        )
+                if source is not None:
+                    verified = self._verified_event(source)
+                    if event_index is not None:
+                        replacements[event_index] = verified
+                    else:
+                        additions.append(verified)
+                    verified_event_ids.append(_text(verified.get("event_id"), 180))
+                elif event_index is not None:
                     replacements[event_index] = self._verified_event(
                         events[event_index]
                     )
                     verified_event_ids.append(item["candidate_event_id"])
-                elif isinstance(item.get("candidate_event"), dict):
-                    verified = self._verified_event(item["candidate_event"])
-                    additions.append(verified)
-                    verified_event_ids.append(_text(verified.get("event_id"), 180))
             else:
                 raise ValueError(f"human_review_action_invalid:{item['decision_id']}")
+            if action == "ignore" and item.get("new_entity_id"):
+                identity_actions[str(item["new_entity_id"])] = "ignore"
             resolved_ids.append(item["decision_id"])
             if item.get("dimension"):
                 resolved_dimensions.add(str(item["dimension"]))
@@ -497,6 +682,7 @@ class HumanReviewService:
             "verified_event_ids": all_verified_ids,
             "affected_dimensions": sorted(affected_dimensions),
             "resolved_dimensions": sorted(resolved_dimensions),
+            "identity_actions": identity_actions,
         }
 
     def record(self, payload: Any) -> dict[str, Any]:
@@ -572,7 +758,12 @@ class HumanReviewService:
             candidate_event = queue_item.get("candidate_event")
             verified_event_id = ""
             verified_event_sha256 = ""
-            if action == "replace":
+            identity_replace = bool(queue_item.get("new_entity_id")) and not isinstance(
+                candidate_event, dict
+            )
+            if action == "replace" and identity_replace:
+                pass
+            elif action == "replace":
                 if not isinstance(replacement, dict):
                     raise ValueError(f"human_review_replacement_missing:{decision_id}")
                 if not isinstance(candidate_event, dict) or not candidate_event:
@@ -583,17 +774,11 @@ class HumanReviewService:
                     binding.chapter, replacement, decision_id, "replacement_event"
                 )
                 candidate_repr = stable_event_repr(binding.chapter, candidate_event) or {}
-                # replace corrects wording; the event identity (type + subject)
-                # must stay the candidate's, so a verdict cannot inject an
-                # unrelated fact into canon.
-                for field_name in ("event_type", "subject"):
-                    if _text(replacement_repr.get(field_name), 180) != _text(
-                        candidate_repr.get(field_name), 180
-                    ):
-                        raise ValueError(
-                            "human_review_replacement_must_keep_"
-                            f"{field_name}:{decision_id}"
-                        )
+                _assert_replacement_keeps_identity(
+                    candidate_repr,
+                    replacement_repr,
+                    decision_id,
+                )
                 replacement_payload = replacement_repr.get("payload")
                 quote = str(
                     (replacement_payload or {}).get("evidence_quote") or ""
@@ -606,14 +791,23 @@ class HumanReviewService:
                 verified_event_sha256 = hashlib.sha256(
                     _canonical_json(replacement_repr).encode("utf-8")
                 ).hexdigest()
-            elif action == "confirm" and isinstance(candidate_event, dict):
-                candidate_repr = self._normalized_event(
-                    binding.chapter, candidate_event, decision_id, "candidate_event"
-                )
-                verified_event_id = _text(candidate_repr.get("event_id"), 180)
-                verified_event_sha256 = hashlib.sha256(
-                    _canonical_json(candidate_repr).encode("utf-8")
-                ).hexdigest()
+            elif action == "confirm":
+                source = candidate_event if isinstance(candidate_event, dict) else None
+                if source is None and queue_item.get("category") == "knowledge_boundary":
+                    source = replacement if isinstance(replacement, dict) else None
+                    if source is None:
+                        raise ValueError(
+                            "human_review_knowledge_boundary_confirm_requires_event:"
+                            f"{decision_id}"
+                        )
+                if isinstance(source, dict):
+                    candidate_repr = self._normalized_event(
+                        binding.chapter, source, decision_id, "candidate_event"
+                    )
+                    verified_event_id = _text(candidate_repr.get("event_id"), 180)
+                    verified_event_sha256 = hashlib.sha256(
+                        _canonical_json(candidate_repr).encode("utf-8")
+                    ).hexdigest()
             by_id[decision_id] = {
                 "decision_id": decision_id,
                 "chapter": binding.chapter,

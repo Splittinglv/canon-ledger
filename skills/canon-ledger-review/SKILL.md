@@ -110,6 +110,8 @@ mkdir -p "${PROJECT_ROOT}/.canon-ledger/tmp"
 
 确认对应正文文件存在且非空；缺正文或缺 as-of 快照立即阻断。
 
+前缀 1..N-1 的 accepted commit 必须仍绑定当前稿纸。若 `write-gate --stage prewrite` 或 `review-pipeline` 报 `prior_chapter_binding_stale`，停止审查，先 `/canon-ledger-write K` 重提最早失绑章，不要对着挖空历史审后文。
+
 ### Step 5：调用统一审查 Agent
 
 必须通过 `Task` 工具调用 `reviewer`。审查方法与维度细则由 reviewer 自带，本 Skill 不展开。
@@ -190,7 +192,7 @@ reviewer 跳过、失败、输出不完整、正文为空、维度跳过、block
   --format text
 ```
 
-过程提示每次不超过两行，只说当前动作和影响，例如“正在生成审查报告：确定穿帮会单列，拿不准的地方交给你确认”。少打扰确认策略：无阻断时不强制询问；manual_checks 可留在报告稍后处理，只有 blocking issue、缺待审正文或用户要求立即修改时才停下询问。
+过程提示每次不超过两行，只说当前动作和影响，例如“正在生成审查报告：确定穿帮会单列，拿不准的地方交给你确认”。少打扰确认策略：确定无误的事实不反复询问；有 `manual_checks` 或确认队列时必须当场走 `/canon-ledger-confirm`，不得把「继续写下一章」当作并列选项。只有 blocking issue、缺待审正文或用户要求立即修改时才另开询问。
 
 需要用户裁决时使用有限选项，并说明影响；例如立即修复 / 仅保存报告稍后处理 / 放弃本次审查。卡住时必须说明卡点、已完成内容和恢复建议，例如“reviewer 结果已保存，审计记录落库失败；重新运行 `/canon-ledger-review {chapter_num}` 会从报告落库继续”。
 
@@ -230,7 +232,7 @@ reviewer 跳过、失败、输出不完整、正文为空、维度跳过、block
 - `review_audits` 是否落库。
 - 阻断问题数量。
 - 用户裁决状态。
-- 如果无阻断，明确可以继续写作。
+- 如果无阻断且确认队列为空，才提示可以继续写作。
 
 状态规则：
 - 有 blocking 问题且用户未选择处理策略时，最终状态为“需要你处理”。
@@ -239,14 +241,12 @@ reviewer 跳过、失败、输出不完整、正文为空、维度跳过、block
 
 异常分类：
 - 已自动处理：重复生成报告、覆盖本次旧审查中间文件、成功补写审计记录。
-- 建议确认：`manual_checks`、命名归属或语义不明确的事实看一眼。
+- 建议确认：`manual_checks` 与确认队列须当场走 `/canon-ledger-confirm`。
 - 必须处理：阻断问题、缺待审正文、reviewer 输出不完整、审计记录落库失败。
 
-下一步建议必须使用任务化语言 + 可复制命令。该章人工事实队列仍有待确认项时（`human-review list --chapter {chapter_num}` 的 `pending` 非空），必须一并给出确认命令，例如：
+下一步建议必须使用任务化语言 + 可复制命令。有审查疑点或人工事实队列待确认时，确认是唯一下一步，不得并列「写下一章」：
 
 ```text
-- 审查无阻断，可以继续写下一章：
-  /canon-ledger-write {next_chapter}
 - 本章还有候选事实等你确认，逐条裁决后系统会自动重新提交本章：
   /canon-ledger-confirm {chapter_num}
 ```
