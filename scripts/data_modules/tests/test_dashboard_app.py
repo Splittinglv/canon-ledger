@@ -480,3 +480,110 @@ def test_dashboard_env_status_endpoints_report_local_rag_state(monkeypatch, tmp_
     assert "embed_api_key" in check_names
     assert "rerank_api_key" in check_names
     assert "vector_db" in check_names
+
+
+def test_dashboard_v3_endpoints_use_head_bound_workflow(monkeypatch, tmp_path):
+    project_root = tmp_path / "book"
+    state_path = project_root / ".canon-ledger" / "state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("{}", encoding="utf-8")
+    from data_modules.canon_v3.service import CanonV3Service
+
+    CanonV3Service(project_root).initialize_new_project()
+    client = _create_dashboard_client(monkeypatch, project_root)
+
+    workflow_response = client.get("/api/canon-v3/workflow")
+    assert workflow_response.status_code == 200
+    workflow = workflow_response.json()
+    assert workflow["state"] == "ready"
+    assert workflow["can_write_next"] is True
+
+    history_response = client.get("/api/canon-v3/history")
+    assert history_response.status_code == 200
+    history = history_response.json()
+    assert history["binding"]["head_hash"] == workflow["head_hash"]
+    assert history["facts"] == []
+
+    commits_response = client.get("/api/commits")
+    assert commits_response.status_code == 200
+    assert commits_response.json()["items"] == []
+
+
+def test_dashboard_fact_pages_ignore_legacy_index_and_return_exact_binding(
+    monkeypatch,
+    tmp_path,
+):
+    project_root = tmp_path / "book"
+    state_path = project_root / ".canon-ledger" / "state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("{}", encoding="utf-8")
+    from data_modules.canon_v3.service import CanonV3Service
+
+    CanonV3Service(project_root).initialize_new_project()
+    index_path = project_root / ".canon-ledger" / "index.db"
+    with sqlite3.connect(index_path) as conn:
+        conn.execute(
+            "CREATE TABLE entities "
+            "(id TEXT, canonical_name TEXT, type TEXT, is_archived INTEGER, "
+            "last_appearance INTEGER)"
+        )
+        conn.execute(
+            "INSERT INTO entities VALUES (?, ?, ?, ?, ?)",
+            ("legacy-forged", "旧索引伪事实", "角色", 0, 99),
+        )
+
+    client = _create_dashboard_client(monkeypatch, project_root)
+    workflow = client.get("/api/canon-v3/workflow").json()
+    expected_binding = {
+        "schema_version": "canon-v3/projection-binding/v1",
+        "head_hash": workflow["head_hash"],
+        "generation": workflow["generation"],
+    }
+    for path in (
+        "/api/canon-v3/entities",
+        "/api/canon-v3/relationships",
+        "/api/canon-v3/state-changes",
+    ):
+        response = client.get(path)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["source"] == "canon_v3_head"
+        assert payload["binding"] == expected_binding
+        assert payload["items"] == []
+
+    # Compatibility aliases remain read-only and return the same exact view.
+    assert client.get("/api/entities").json()["binding"] == expected_binding
+
+
+def test_dashboard_fact_pages_return_409_before_head_or_when_projection_stale(
+    monkeypatch,
+    tmp_path,
+):
+    project_root = tmp_path / "book"
+    state_path = project_root / ".canon-ledger" / "state.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text("{}", encoding="utf-8")
+    client = _create_dashboard_client(monkeypatch, project_root)
+
+    fact_paths = (
+        "/api/canon-v3/entities",
+        "/api/canon-v3/relationships",
+        "/api/canon-v3/state-changes",
+    )
+    for path in fact_paths:
+        before = client.get(path)
+        assert before.status_code == 409
+        assert before.json()["detail"]["workflow"]["state"] == "migration_required"
+
+    from data_modules.canon_v3.service import CanonV3Service
+
+    CanonV3Service(project_root).initialize_new_project()
+    projection_path = project_root / ".story-system" / "v3" / "projections" / "canon.json"
+    projection = json.loads(projection_path.read_text(encoding="utf-8"))
+    projection["binding"]["head_hash"] = "f" * 64
+    projection_path.write_text(json.dumps(projection), encoding="utf-8")
+
+    for path in fact_paths:
+        stale = client.get(path)
+        assert stale.status_code == 409
+        assert stale.json()["detail"]["workflow"]["projection_fresh"] is False

@@ -21,6 +21,7 @@ from typing import Any
 
 from filelock import FileLock
 
+from .canon_evidence import classify_evidence_contract, strict_commit_linked_records
 from .chapter_content_binding import verify_commit_content_binding
 from .commit_artifacts import extraction_list, extraction_text
 from .commit_lineage import (
@@ -31,6 +32,7 @@ from .commit_lineage import (
 from .config import DataModulesConfig
 from .event_log_store import EventLogStore
 from .event_projection_router import EventProjectionRouter
+from .fact_text import bound_chapter_text_for_commit
 from .override_ledger_service import (
     AmendProposalTrigger,
     ensure_override_ledger_columns,
@@ -115,10 +117,25 @@ def load_canonical_commits(
         status = str((payload.get("meta") or {}).get("status") or "")
         if status not in {"accepted", "rejected"}:
             raise ProjectionRebuildError("invalid_commit_status", f"{meta_chapter}:{status}")
+        evidence_classification = classify_evidence_contract(payload)
+        if evidence_classification == "invalid":
+            raise ProjectionRebuildError(
+                "invalid_evidence_contract_envelope",
+                str(meta_chapter),
+            )
         if validate_bindings:
             ok, code = verify_commit_content_binding(root, meta_chapter, payload)
             if not ok:
                 raise ProjectionRebuildError(code, str(meta_chapter))
+            if evidence_classification == "strict":
+                chapter_text = bound_chapter_text_for_commit(root, payload) or ""
+                try:
+                    strict_commit_linked_records(payload, chapter_text)
+                except (TypeError, ValueError) as exc:
+                    raise ProjectionRebuildError(
+                        "evidence_contract_invalid",
+                        f"{meta_chapter}:{exc}",
+                    ) from exc
         seen.add(meta_chapter)
         commits.append(payload)
     commits.sort(key=lambda item: int((item.get("meta") or {}).get("chapter") or 0))
@@ -679,6 +696,11 @@ def rebuild_all_projections(
 ) -> dict[str, Any]:
     """Build in isolation, validate, then install all projection artifacts."""
     root = Path(project_root).expanduser().resolve()
+    if (root / ".story-system" / "v3" / "CURRENT").is_file():
+        raise ProjectionRebuildError(
+            "canon_v3_active_v2_projection_rebuild_disabled",
+            "use canon-v3 rebuild-projection",
+        )
     lock_path = root / ".canon-ledger" / "projection_rebuild.lock"
     status_path = root / REBUILD_STATUS_REL
     root.joinpath(".canon-ledger").mkdir(parents=True, exist_ok=True)
@@ -734,13 +756,22 @@ def rebuild_all_projections(
                 payload["projection_status"] = dict(PROJECTION_STATUS)
                 _apply_stage_events(stage_root, payload)
                 chapter = int((payload.get("meta") or {}).get("chapter") or 0)
+                legacy_replay = classify_evidence_contract(payload) == "legacy"
                 captured: dict[str, dict[str, Any]] = {}
+                projection_kwargs: dict[str, Any] = {
+                    "persist_run": False,
+                    "writer_results_out": captured,
+                }
+                if legacy_replay:
+                    projection_kwargs["allow_legacy_replay"] = True
                 payload = service.apply_projection_writers(
                     payload,
-                    persist_run=False,
-                    writer_results_out=captured,
+                    **projection_kwargs,
                 )
-                service.persist_commit(payload)
+                service.persist_commit(
+                    payload,
+                    allow_legacy_replay=legacy_replay,
+                )
                 writer_results[chapter] = captured
                 projected.append(payload)
             _validate_stage(stage_root, projected)

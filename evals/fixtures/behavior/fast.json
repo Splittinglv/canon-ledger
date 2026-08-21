@@ -1,162 +1,94 @@
 {
-  "schema_version": "canon-ledger-behavior-evals/v1",
+  "schema_version": "canon-ledger-behavior-evals/v2",
   "suite": "fast",
   "cases": [
     {
       "id": "skill_frontmatter",
       "type": "skill_frontmatter",
-      "description": "每个技能都包含可用于路由的前置元数据。"
+      "description": "每个 Skill 都包含可路由元数据。"
     },
     {
       "id": "skill_init_contract",
       "type": "skill_contract",
       "skill": "canon-ledger-init",
-      "description": "`/canon-ledger-init` 保留深入信息收集闸门，并且在用户确认前不写入正式设定。",
-      "required": [
-        "未过充分性闸门，不执行 `canon_ledger.py init`",
-        "用户确认前不得写入",
-        "${CANON_LEDGER_PYTHON}\" -X utf8"
-      ]
+      "description": "初始化技能只能建立经过确认的 Canon v3 起点。",
+      "required": ["canon-v3 initialize", "state=ready", "文风写入 `设定集/文风提示词.md`"]
     },
     {
       "id": "skill_plan_contract",
       "type": "skill_contract",
       "skill": "canon-ledger-plan",
-      "description": "`/canon-ledger-plan` 保留大纲阻断规则，并刷新 Story System 运行时合同。",
-      "required": [
-        "若发现总纲与设定冲突，先阻断",
-        "placeholder-scan",
-        "story-system"
-      ]
+      "description": "规划技能必须区分软计划、硬设定草案与文风。",
+      "required": ["author_axiom_proposals", "不得直接覆盖活动设定", "author-axiom-prepare", "author-axiom-decide", "author-axiom-finalize", "删除旧事实型 `update-state`"]
     },
     {
       "id": "skill_write_contract",
       "type": "skill_contract",
       "skill": "canon-ledger-write",
-      "description": "`/canon-ledger-write` 在合适的流程边界调用运行时闸门。",
-      "required": [
-        "write-gate --chapter {chapter_num} --stage prewrite",
-        "write-gate --chapter {chapter_num} --stage precommit",
-        "write-gate --chapter {chapter_num} --stage postcommit",
-        "projections retry --chapter {chapter_num}"
-      ],
-      "ordered": [
-        [
-          "write-gate --chapter {chapter_num} --stage precommit",
-          "chapter-commit"
-        ],
-        [
-          "chapter-commit",
-          "write-gate --chapter {chapter_num} --stage postcommit"
-        ]
-      ]
+      "description": "写章技能必须遵守有版本的事实事务和写作闸门。",
+      "required": ["expected_stage_digest", "finalize_token", "data-agent phase=extract", "projection_fresh == true"]
     },
     {
       "id": "skill_review_contract",
       "type": "skill_contract",
       "skill": "canon-ledger-review",
-      "description": "`/canon-ledger-review` 以 `reviewer` 输出为依据，并保留阻断问题处理流程。",
-      "required": [
-        "必须通过 `Task` 工具调用 `reviewer`",
-        "review-pipeline",
-        "blocking=true"
-      ]
+      "description": "审查技能只检查长期事实且区分草稿审查与历史审计。",
+      "required": ["Historical audit", "exact candidate draft", "不创建或替换 STAGING", "删除旧 `issues/manual_checks/blocking`"]
+    },
+    {
+      "id": "skill_confirm_contract",
+      "type": "skill_contract",
+      "skill": "canon-ledger-confirm",
+      "description": "确认技能必须精确绑定作者看到的证据与事务版本。",
+      "required": ["canon-v3/decision-request/v2", "target_digest", "material_digest", "canon-v3/finalize-request/v2", "canon-v3/author-axiom-decision-request/v2", "canon-v3/legacy-recertification-publish-request/v1", "repair-cutover --apply"]
     },
     {
       "id": "skill_query_contract",
       "type": "skill_contract",
       "skill": "canon-ledger-query",
-      "description": "`/canon-ledger-query` 保持只读，并优先使用故事系统事实源。",
-      "required": [
-        "只读操作，不修改任何项目文件",
-        "memory-contract load-context",
-        "写前真源"
-      ]
-    },
-    {
-      "id": "skill_learn_contract",
-      "type": "skill_contract",
-      "skill": "canon-ledger-learn",
-      "description": "`/canon-ledger-learn` 通过 `style-memory` 命令行写入 `设定集/文风提示词.md`，不手工编辑文件。",
-      "required": [
-        "style-memory add-item",
-        "--input-file",
-        "style-learn.json",
-        "设定集/文风提示词.md",
-        "不写入 `hard_constraints`",
-        "用户原文不得放进命令"
-      ]
+      "description": "查询技能必须区分活动正史、暂存提议与旧数据。",
+      "required": ["active_canon", "staged_proposal", "legacy_read_only", "不能覆盖 HEAD"]
     },
     {
       "id": "skill_dashboard_contract",
       "type": "skill_contract",
       "skill": "canon-ledger-dashboard",
-      "description": "`/canon-ledger-dashboard` 保持只读，并展示运行时健康状态。",
-      "required": [
-        "只读",
-        "/api/story-runtime/health",
-        "${CANON_LEDGER_PYTHON}\" -m dashboard.server"
-      ]
+      "description": "仪表盘技能只能展示绑定当前 HEAD 的只读事实。",
+      "required": ["/api/canon-v3/workflow", "head_hash, generation", "不能读取 legacy `index.db`"]
     },
     {
       "id": "skill_doctor_contract",
       "type": "skill_contract",
       "skill": "canon-ledger-doctor",
-      "description": "`/canon-ledger-doctor` 保持只读，并在详细诊断前检查项目状态。",
-      "required": [
-        "只读诊断",
-        "project-status",
-        "doctor --format text"
-      ]
+      "description": "诊断技能必须先检查权威工作流和迁移状态。",
+      "required": ["只读", "stage digest", "legacy prefix/genesis 是否需要 recertification"]
+    },
+    {
+      "id": "skill_learn_contract",
+      "type": "skill_contract",
+      "skill": "canon-ledger-learn",
+      "description": "文风学习只能更新风格数据，不能改变 Canon。",
+      "required": ["style-memory add-item", "head_hash/workflow_digest/stage_digest", "必须完全不变"]
     },
     {
       "id": "write_blocks_before_commit",
       "type": "write_blocking_gate",
-      "description": "`/canon-ledger-write` 在提交前保留审查阻断项，并调用运行时闸门。"
+      "description": "写章必须消费 exact stage/finalize 版本并通过三道 v3 gate。"
     },
     {
       "id": "data_agent_artifact_only",
       "type": "data_agent_boundary",
-      "description": "`data-agent` 只生成提交产物，不直接写入投影读取模型。"
+      "description": "data-agent 只生成 v2 typed proposal，不写正史或队列。"
     },
     {
       "id": "artifact_ownership",
       "type": "artifact_ownership",
-      "description": "`reviewer` 返回 JSON，由主流程写入 review_results.json；`data-agent` 只写入临时产物。"
-    },
-    {
-      "id": "commit_drives_projection",
-      "type": "commit_projection_runtime",
-      "description": "`ChapterCommitService` 始终是投影写入的驱动入口。"
+      "description": "reviewer 只读，data-agent 只写唯一 proposal。"
     },
     {
       "id": "dashboard_read_only",
       "type": "dashboard_read_only",
-      "description": "仪表盘只提供 GET 类型的 API。"
-    },
-    {
-      "id": "user_report_minimal_review_skipped",
-      "type": "user_report_probe",
-      "scenario": "minimal_review_skipped",
-      "description": "`/canon-ledger-write --minimal` 的最终报告会说明已跳过 `reviewer`，不会伪装成完整审查通过。"
-    },
-    {
-      "id": "user_report_missing_data_artifacts",
-      "type": "user_report_probe",
-      "scenario": "missing_data_artifacts",
-      "description": "缺少 `data-agent` 产物时，写作报告不能标记为已完成。"
-    },
-    {
-      "id": "user_report_projection_retry_auto_handled",
-      "type": "user_report_probe",
-      "scenario": "projection_retry_auto_handled",
-      "description": "投影重试成功后，报告会将其列为已自动处理。"
-    },
-    {
-      "id": "user_report_review_blocking_must_handle",
-      "type": "user_report_probe",
-      "scenario": "review_blocking_must_handle",
-      "description": "`reviewer` 发现的阻断问题会被列为必须处理。"
+      "description": "Dashboard 只提供 GET API。"
     }
   ]
 }

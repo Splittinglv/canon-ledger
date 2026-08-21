@@ -69,13 +69,15 @@ def test_preflight_on_empty_workspace(tmp_path):
     assert payload.get("ok") is False
 
 
-def test_session_start_emits_plugin_paths(monkeypatch):
+def test_session_start_emits_plugin_paths(monkeypatch, tmp_path):
     import os
 
     env = os.environ.copy()
     env.pop("CANON_LEDGER_DISABLE_SESSION_STATUS_HOOK", None)
     env["CURSOR_PLUGIN_ROOT"] = str(PLUGIN_ROOT)
-    env["CURSOR_PROJECT_DIR"] = str(PLUGIN_ROOT)
+    # Keep the plugin source tree separate from the simulated book workspace;
+    # workflow status legitimately creates its persistent lock in the latter.
+    env["CURSOR_PROJECT_DIR"] = str(tmp_path)
     proc = subprocess.run(
         [sys.executable, str(SESSION_START)],
         capture_output=True,

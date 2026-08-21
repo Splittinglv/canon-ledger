@@ -110,16 +110,20 @@ def _schema_error_message(exc: Exception) -> str:
 def _policy_issues(artifact: str, payload: dict[str, Any], path: str) -> list[dict[str, str]]:
     issues: list[dict[str, str]] = []
     if artifact == "review_result":
-        blocking_count = int(payload.get("blocking_count") or 0)
-        if blocking_count > 0:
+        issue_count = len(payload.get("issues") or [])
+        if issue_count > 0:
             issues.append(
                 _issue(
                     ERROR_BLOCKING_REVIEW,
-                    message=f"review_result 含 {blocking_count} 个阻断问题",
+                    message=f"review_result 含 {issue_count} 个待 runtime 复核的问题",
+                    severity="warning",
                     path=path,
-                    field="blocking_count",
-                    impact="存在阻断级审查问题时不应进入提交。",
-                    repair="先定点修复 blocking issue，或让用户明确裁决后再继续。",
+                    field="issues",
+                    impact=(
+                        "模型 blocking 只是提示；chapter commit 会重新验证本章引文"
+                        "与 N-1 正史锚点，再决定拒绝或转人工。"
+                    ),
+                    repair="继续交给 chapter commit 做 runtime 裁决，禁止据原始 blocking 自动改文。",
                 )
             )
     elif artifact == "fulfillment_result":
@@ -140,20 +144,15 @@ def _policy_issues(artifact: str, payload: dict[str, Any], path: str) -> list[di
     elif artifact == "disambiguation_result":
         pending = payload.get("pending") or []
         if pending:
-            blocking = [
-                item
-                for item in pending
-                if isinstance(item, dict) and bool(item.get("blocking", False))
-            ]
             issues.append(
                 _issue(
                     ERROR_PENDING_DISAMBIGUATION,
                     message=f"disambiguation_result 含 {len(pending)} 个待消歧项",
-                    severity="blocker" if blocking else "warning",
+                    severity="warning",
                     path=path,
                     field="pending",
                     impact="候选事实会留在人工队列，确认前不会进入权威 canon。",
-                    repair="运行 human-review 查看并裁决；普通待确认项不阻断提交。",
+                    repair="交给 runtime 路由；仅 runtime-required 项阻断下一章。",
                 )
             )
     return issues

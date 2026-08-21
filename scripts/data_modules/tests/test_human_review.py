@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from data_modules.chapter_content_binding import build_chapter_binding
 from data_modules.human_review import (
     HumanReviewService,
@@ -121,30 +123,24 @@ def test_decision_does_not_survive_chapter_content_change(tmp_path):
     assert service.list_items(3)[0]["status"] == "pending"
 
 
-def test_human_can_replace_a_candidate(tmp_path):
+def test_v2_generic_replace_is_disabled(tmp_path):
     binding = _binding(tmp_path)
     service = HumanReviewService(tmp_path)
     service.apply_decisions(3, binding, _pending(), [_presence_event()])
     replacement = _presence_event(location="north-gate")
     replacement["event_id"] = "alice-at-north-gate"
-    service.record(
-        {
-            "decisions": [
-                {
-                    "decision_id": "confirm-alice-location",
-                    "action": "replace",
-                    "replacement_event": replacement,
-                }
-            ]
-        }
-    )
-
-    result = service.apply_decisions(3, binding, _pending(), [_presence_event()])
-
-    assert [event["event_id"] for event in result["events"]] == [
-        "alice-at-north-gate"
-    ]
-    assert result["events"][0]["verification"] == "verified"
+    with pytest.raises(ValueError, match="human_review_action_not_offered"):
+        service.record(
+            {
+                "decisions": [
+                    {
+                        "decision_id": "confirm-alice-location",
+                        "action": "replace",
+                        "replacement_event": replacement,
+                    }
+                ]
+            }
+        )
 
 
 def test_human_can_ignore_a_candidate(tmp_path):
@@ -221,6 +217,9 @@ def test_legacy_review_ignore_is_treated_as_rewrite_required(tmp_path):
         }
     ]
     first = service.apply_decisions(3, binding, pending, [])
+    assert first["affected_dimensions"] == []
+    assert first["unresolved"][0]["fact_dimensions"] == []
+    assert first["unresolved"][0]["dimension"] == ""
     decision_id = first["unresolved"][0]["decision_id"]
     service.record(
         {"decisions": [{"decision_id": decision_id, "action": "rewrite"}]}
@@ -244,6 +243,7 @@ def test_legacy_review_ignore_is_treated_as_rewrite_required(tmp_path):
     assert [item["decision_id"] for item in result["rewrite_required"]] == [
         decision_id
     ]
+    assert result["affected_dimensions"] == []
     assert service.list_items(3)[0]["status"] == "rewrite_required"
 
 
@@ -272,8 +272,7 @@ def test_new_binding_can_replace_old_pending_queue_after_re_review(tmp_path):
     assert queue["chapter_binding"]["sha256"] == second_binding["sha256"]
 
 
-def test_replace_must_keep_event_identity_and_carry_evidence(tmp_path):
-    """replace 只能改措辞：事件类型与主体锁定，且必须携带正文证据。"""
+def test_disabled_replace_cannot_bypass_event_identity_checks(tmp_path):
     import pytest
 
     binding = _binding(tmp_path)
@@ -287,7 +286,7 @@ def test_replace_must_keep_event_identity_and_carry_evidence(tmp_path):
         "to_holder": "alice",
         "evidence_quote": "爱丽丝抵达北城。",
     }
-    with pytest.raises(ValueError, match="must_keep_event_type"):
+    with pytest.raises(ValueError, match="human_review_action_not_offered"):
         service.record(
             {
                 "decisions": [
@@ -302,7 +301,7 @@ def test_replace_must_keep_event_identity_and_carry_evidence(tmp_path):
 
     resubjected = _presence_event()
     resubjected["subject"] = "bob"
-    with pytest.raises(ValueError, match="must_keep_subject"):
+    with pytest.raises(ValueError, match="human_review_action_not_offered"):
         service.record(
             {
                 "decisions": [
@@ -316,7 +315,7 @@ def test_replace_must_keep_event_identity_and_carry_evidence(tmp_path):
         )
 
     unevidenced = _presence_event(quote="")
-    with pytest.raises(ValueError, match="missing_evidence|evidence"):
+    with pytest.raises(ValueError, match="human_review_action_not_offered"):
         service.record(
             {
                 "decisions": [
@@ -410,7 +409,7 @@ def _knowledge_pending():
     ]
 
 
-def test_replace_must_keep_information_id(tmp_path):
+def test_disabled_replace_cannot_change_information_identity(tmp_path):
     import pytest
 
     binding = _binding(tmp_path, text="爱丽丝得知密门在钟楼下。")
@@ -425,7 +424,7 @@ def test_replace_must_keep_information_id(tmp_path):
             "canonical_claim": "密门在钟楼下",
         },
     }
-    with pytest.raises(ValueError, match="must_keep_information_id"):
+    with pytest.raises(ValueError, match="human_review_action_not_offered"):
         service.record(
             {
                 "decisions": [
@@ -477,10 +476,332 @@ def test_review_manual_checks_all_fact_categories_enter_queue():
     categories = {item["category"] for item in items}
     assert categories == {"knowledge_boundary", "timeline", "continuity", "setting"}
     timeline = next(item for item in items if item["category"] == "timeline")
-    assert timeline["dimension"] == "presence"
+    assert timeline["fact_dimensions"] == []
+    assert "dimension" not in timeline
     assert timeline["options"] == ["confirm", "rewrite"]
     knowledge = next(item for item in items if item["category"] == "knowledge_boundary")
+    assert knowledge["fact_dimensions"] == []
+    assert "dimension" not in knowledge
     assert knowledge["options"] == ["confirm", "rewrite", "replace"]
+
+
+def test_continuity_check_prefers_explicit_fact_dimensions():
+    items = review_manual_check_items_from_review(
+        {
+            "manual_checks": [
+                {
+                    "category": "continuity",
+                    "location": "第3段",
+                    "description": "王印是否仍由白芷持有",
+                    "evidence": "白芷从袖中取出王印。",
+                    "reason": "上一章似乎已经交给城主",
+                    "fact_dimensions": ["custody", "presence"],
+                    "review_kind": "ambiguity",
+                    "trigger_kind": "ambiguous_fact",
+                    "materiality": "high",
+                    "disposition": "human_required",
+                    "required": True,
+                    "source_event_id": "event-royal-seal-transfer",
+                }
+            ]
+        }
+    )
+
+    assert items[0]["dimension"] == "custody"
+    assert items[0]["fact_dimensions"] == ["custody", "presence"]
+    assert items[0]["source_event_id"] == "event-royal-seal-transfer"
+
+
+def test_manual_review_router_skips_audit_and_ignore_but_keeps_advisory():
+    base = {
+        "category": "continuity",
+        "location": "第3段",
+        "description": "可能存在事实疑点",
+        "reason": "需要按策略分流",
+        "fact_dimensions": ["presence"],
+    }
+    items = review_manual_check_items_from_review(
+        {
+            "manual_checks": [
+                {
+                    **base,
+                    "description": "只留审计",
+                    "materiality": "low",
+                    "disposition": "audit_only",
+                },
+                {
+                    **base,
+                    "description": "明确忽略",
+                    "materiality": "low",
+                    "disposition": "ignore",
+                },
+                {
+                    **base,
+                    "description": "作者可稍后复核",
+                    "evidence": "远处似乎有人影一闪而过。",
+                    "materiality": "low",
+                    "disposition": "advisory",
+                    "required": False,
+                },
+                {
+                    **base,
+                    "description": "卷末正史快照",
+                    "review_kind": "checkpoint",
+                    "trigger_kind": "volume_end",
+                    "materiality": "critical",
+                    "disposition": "human_required",
+                    "required": True,
+                },
+            ]
+        }
+    )
+
+    assert [item["disposition"] for item in items] == [
+        "advisory",
+        "human_required",
+    ]
+    assert [item["blocking"] for item in items] == [False, False]
+
+
+def test_gate_summary_separates_required_and_advisory_items(tmp_path):
+    binding = _binding(tmp_path)
+    service = HumanReviewService(tmp_path)
+    service.persist_queue(
+        3,
+        binding,
+        [
+            {
+                **_pending()[0],
+                "decision_id": "required-check",
+                "candidate_event_id": "required-event",
+                "disposition": "human_required",
+                "required": True,
+            },
+            {
+                **_pending()[0],
+                "decision_id": "advisory-check",
+                "candidate_event_id": "advisory-event",
+                "materiality": "low",
+                "disposition": "advisory",
+                "required": False,
+            },
+            {
+                **_pending()[0],
+                "decision_id": "audit-check",
+                "candidate_event_id": "audit-event",
+                "evidence_quote": "",
+                "materiality": "low",
+                "disposition": "audit_only",
+                "required": False,
+            },
+        ],
+    )
+
+    summary = service.gate_summary(before_chapter=4)
+
+    assert [item["decision_id"] for item in summary["pending"]] == [
+        "ch0003-required-check"
+    ]
+    assert [item["decision_id"] for item in summary["advisory_pending"]] == [
+        "ch0003-advisory-check"
+    ]
+    assert summary["counts"]["pending"] == 1
+    assert summary["counts"]["advisory_pending"] == 1
+    assert all(
+        "audit-check" not in item["decision_id"]
+        for item in service.list_items(3)
+    )
+
+
+def test_advisory_manual_check_does_not_degrade_fact_verification(tmp_path):
+    binding = _binding(tmp_path)
+    pending = review_manual_check_items_from_review(
+        {
+            "manual_checks": [
+                {
+                    "category": "continuity",
+                    "description": "远景人影身份可稍后复核",
+                    "reason": "不影响当前正史判断",
+                    "evidence": "远处似乎有人影一闪而过。",
+                    "fact_dimensions": ["presence"],
+                    "materiality": "low",
+                    "disposition": "advisory",
+                    "required": False,
+                }
+            ]
+        }
+    )
+
+    result = HumanReviewService(tmp_path).apply_decisions(
+        3, binding, pending, []
+    )
+
+    assert len(result["unresolved"]) == 1
+    assert result["affected_dimensions"] == []
+
+
+def test_advisory_candidate_remains_supported_while_waiting(tmp_path):
+    binding = _binding(tmp_path)
+    event = _presence_event()
+    pending = [
+        {
+            **_pending()[0],
+            "candidate_event_id": event["event_id"],
+            "candidate_event": event,
+            "fact_dimensions": ["presence"],
+            "materiality": "low",
+            "disposition": "advisory",
+            "required": False,
+        }
+    ]
+
+    result = HumanReviewService(tmp_path).apply_decisions(
+        3,
+        binding,
+        pending,
+        [event],
+    )
+
+    assert len(result["unresolved"]) == 1
+    assert [item["event_id"] for item in result["events"]] == [event["event_id"]]
+    assert result["events"][0]["verification"] == "supported"
+    assert result["affected_dimensions"] == []
+
+
+def test_gate_summary_escalates_advisory_canon_changes_until_replayed(tmp_path):
+    for action in ("confirm", "ignore"):
+        root = tmp_path / action
+        binding = _binding(root)
+        event = _presence_event()
+        pending = [
+            {
+                **_pending()[0],
+                "candidate_event_id": event["event_id"],
+                "candidate_event": event,
+                "fact_dimensions": ["presence"],
+                "materiality": "low",
+                "disposition": "advisory",
+                "required": False,
+            }
+        ]
+        service = HumanReviewService(root)
+        first = service.apply_decisions(3, binding, pending, [event])
+        decision_id = first["unresolved"][0]["decision_id"]
+        decision = {"decision_id": decision_id, "action": action}
+        service.record({"decisions": [decision]})
+
+        summary = service.gate_summary(before_chapter=4)
+        if action == "confirm":
+            assert summary["not_replayed"] == []
+            assert summary["advisory_not_replayed"][0][
+                "decision_action"
+            ] == "confirm"
+            continue
+
+        assert summary["advisory_not_replayed"] == []
+        assert summary["not_replayed"][0]["decision_action"] == action
+
+        # Once the exact decision receipt is present in the chapter commit,
+        # the temporary replay blocker must clear.
+        listed = service.list_items(3)[0]
+        commit_path = (
+            root / ".story-system" / "commits" / "chapter_003.commit.json"
+        )
+        commit_path.parent.mkdir(parents=True, exist_ok=True)
+        commit_path.write_text(
+            json.dumps(
+                {
+                    "provenance": {
+                        "human_review": {
+                            "resolved_decision_ids": [decision_id],
+                            "decision_receipts": [
+                                {
+                                    "decision_id": decision_id,
+                                    "decision_sha256": listed[
+                                        "decision_sha256"
+                                    ],
+                                }
+                            ],
+                        }
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        replayed = service.gate_summary(before_chapter=4)
+        assert replayed["not_replayed"] == []
+
+
+def test_gate_summary_escalates_advisory_rewrite_to_blocker(tmp_path):
+    binding = _binding(tmp_path)
+    pending = [
+        {
+            "decision_id": "advisory-prose-bug",
+            "source": "review_manual_check",
+            "category": "timeline",
+            "reason": "作者需要判断这是否是时间线穿帮",
+            "evidence_quote": "爱丽丝抵达北城。",
+            "options": ["confirm", "rewrite"],
+            "fact_dimensions": [],
+            "review_kind": "ambiguity",
+            "materiality": "low",
+            "disposition": "advisory",
+            "required": False,
+        }
+    ]
+    service = HumanReviewService(tmp_path)
+    first = service.apply_decisions(3, binding, pending, [])
+    service.record(
+        {
+            "decisions": [
+                {
+                    "decision_id": first["unresolved"][0]["decision_id"],
+                    "action": "rewrite",
+                }
+            ]
+        }
+    )
+
+    summary = service.gate_summary(before_chapter=4)
+
+    assert summary["advisory_rewrite_required"] == []
+    assert summary["rewrite_required"][0]["decision_action"] == "rewrite"
+
+
+def test_checkpoint_can_offer_rewrite_and_enters_rewrite_state(tmp_path):
+    binding = _binding(tmp_path)
+    service = HumanReviewService(tmp_path)
+    event = _presence_event()
+    pending = [
+        {
+            **_pending()[0],
+            "candidate_event_id": event["event_id"],
+            "candidate_event": event,
+            "review_kind": "checkpoint",
+            "trigger_kind": "author_marked",
+            "materiality": "high",
+            "disposition": "human_required",
+            "required": True,
+            "options": ["confirm", "ignore", "rewrite"],
+        }
+    ]
+    first = service.apply_decisions(3, binding, pending, [event])
+
+    service.record(
+        {
+            "decisions": [
+                {
+                    "decision_id": first["unresolved"][0]["decision_id"],
+                    "action": "rewrite",
+                }
+            ]
+        }
+    )
+    resolved = service.apply_decisions(3, binding, pending, [event])
+
+    assert resolved["events"] == []
+    assert len(resolved["rewrite_required"]) == 1
 
 
 def test_timeline_review_check_confirm_without_event_clears_queue(tmp_path):
@@ -537,7 +858,7 @@ def test_character_review_confirm_can_close_doubt_without_inventing_fact(tmp_pat
     assert resolved["resolved_decision_ids"] == [decision_id]
 
 
-def test_character_review_replace_can_backfill_explicit_known_fact(tmp_path):
+def test_character_review_cannot_backfill_fact_with_v2_replace(tmp_path):
     binding = _binding(tmp_path, text="爱丽丝径直推开了密门。")
     service = HumanReviewService(tmp_path)
     pending = review_manual_check_items_from_review(
@@ -571,22 +892,18 @@ def test_character_review_replace_can_backfill_explicit_known_fact(tmp_path):
         },
     }
 
-    service.record(
-        {
-            "decisions": [
-                {
-                    "decision_id": decision_id,
-                    "action": "replace",
-                    "replacement_event": replacement,
-                }
-            ]
-        }
-    )
-    resolved = service.apply_decisions(3, binding, pending, [])
-
-    assert resolved["unresolved"] == []
-    assert resolved["events"][0]["event_id"] == "alice-knows-secret-door"
-    assert resolved["events"][0]["verification"] == "verified"
+    with pytest.raises(ValueError, match="human_review_action_not_offered"):
+        service.record(
+            {
+                "decisions": [
+                    {
+                        "decision_id": decision_id,
+                        "action": "replace",
+                        "replacement_event": replacement,
+                    }
+                ]
+            }
+        )
 
 
 def test_extraction_candidate_cannot_offer_rewrite_action(tmp_path):

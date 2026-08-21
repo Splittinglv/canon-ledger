@@ -1666,21 +1666,75 @@ def build_user_report(
     if stage not in VALID_STAGES:
         raise ValueError(f"unknown user report stage: {stage}")
 
-    if stage == "write":
-        if not chapter:
-            status = build_project_status(root)
-            chapter = int(status.get("target_chapter") or 0)
-        return build_write_report(root, chapter=int(chapter or 0), volume=volume)
-    if stage == "review":
-        if not chapter:
-            status = build_project_status(root)
-            chapter = int(status.get("target_chapter") or 0)
-        return build_review_report(root, chapter=int(chapter or 0), volume=volume)
-    if stage == "confirm":
-        return build_confirm_report(root, chapter=chapter, volume=volume)
-    if stage == "init":
-        return build_init_report(root, chapter=chapter, volume=volume)
-    return build_plan_report(root, chapter=chapter, volume=volume)
+    from .workflow_authority import WorkflowAuthority
+
+    # Reports are a workflow surface, not an alternate gate.  This path is
+    # deliberately unconditional: no CURRENT means bootstrap/migration is the
+    # primary action, never that a legacy stage report may invite the next
+    # write.
+    workflow = WorkflowAuthority(root).snapshot()
+    state = str(workflow.get("state") or "invalid")
+    report = _new_report(
+        root,
+        stage=stage,
+        chapter=chapter or workflow.get("chapter"),
+        volume=volume,
+    )
+    report["workflow_snapshot"] = workflow
+    report["primary_action"] = dict(workflow.get("primary_action") or {})
+    _add_file(
+        report,
+        label="Canon v3 当前版本",
+        path=".story-system/v3/CURRENT",
+        status="ready" if workflow.get("head_hash") else "missing",
+        note=str(workflow.get("head_hash") or ""),
+    )
+    if workflow.get("transaction_hash"):
+        _add_file(
+            report,
+            label="待发布事实事务",
+            path=".story-system/v3/STAGING.json",
+            status=state,
+            note=str(workflow.get("stage_digest") or workflow.get("transaction_hash") or ""),
+        )
+    _add_file(
+        report,
+        label="HEAD 事实投影",
+        path=".story-system/v3/projections/canon.json",
+        status=(
+            "ready"
+            if workflow.get("projection_fresh")
+            else ("stale" if workflow.get("head_hash") else "missing")
+        ),
+    )
+    overall_map = {
+        "ready": STATUS_COMPLETED,
+        "ready_to_finalize": STATUS_PARTIAL,
+        "awaiting_human": STATUS_NEEDS_USER,
+        "rewrite_required": STATUS_NEEDS_USER,
+        "recompile_required": STATUS_NEEDS_USER,
+        "projection_rebuild_required": STATUS_PARTIAL,
+        "migration_required": STATUS_NEEDS_USER,
+        "invalid": STATUS_FAILED,
+    }
+    report["overall_status"] = overall_map.get(state, STATUS_FAILED)
+    primary = workflow.get("primary_action") or {}
+    description = str(primary.get("label") or workflow.get("recovery_action") or "修复工作流")
+    command = str(primary.get("command") or "")
+    if state not in {"ready", "ready_to_finalize"}:
+        _add_manual_issue(
+            report,
+            "must_handle" if state != "projection_rebuild_required" else "auto_handled",
+            code=f"canon_v3_{state}",
+            title=f"Canon v3 状态：{state}",
+            reason="所有入口均以同一个 workflow snapshot 为准。",
+            impact="当前状态不允许绕过审核、正文绑定或投影一致性继续写下一章。",
+            next_action=description,
+            command=command,
+            source="canon_v3_workflow",
+        )
+    report["next_actions"] = [{"description": description, "command": command}]
+    return report
 
 
 def _format_issue_item(item: dict[str, Any]) -> str:

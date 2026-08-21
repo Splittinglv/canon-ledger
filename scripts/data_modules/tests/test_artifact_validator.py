@@ -200,7 +200,9 @@ def test_artifact_validator_separates_blockers_from_author_advisories(tmp_path):
         _with_binding({"pending": [{"mention": "宗主"}]}),
     )
 
-    assert validate_review_result(review)["errors"][0]["type"] == ERROR_BLOCKING_REVIEW
+    review_report = validate_review_result(review)
+    assert review_report["ok"] is True
+    assert review_report["warnings"][0]["type"] == ERROR_BLOCKING_REVIEW
 
     fulfillment_report = validate_fulfillment_result(fulfillment)
     assert fulfillment_report["ok"] is True
@@ -238,8 +240,10 @@ def test_artifact_validator_blocks_only_explicit_strict_or_blocking_policy(tmp_p
         validate_fulfillment_result(fulfillment)["errors"][0]["type"]
         == ERROR_MISSED_OUTLINE_NODE
     )
+    disambiguation_report = validate_disambiguation_result(disambiguation)
+    assert disambiguation_report["ok"] is True
     assert (
-        validate_disambiguation_result(disambiguation)["errors"][0]["type"]
+        disambiguation_report["warnings"][0]["type"]
         == ERROR_PENDING_DISAMBIGUATION
     )
 

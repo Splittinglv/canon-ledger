@@ -416,10 +416,27 @@ def _trusted_commit_chapters(
     # copy that marker.  Re-deriving the expected chunks from the accepted
     # commit makes the structured projection the allowlist.
     cache: dict[int, tuple[str, dict[str, str]]] = {}
+    v3_cutover: int | None = None
+    if (project_root / ".story-system" / "v3" / "CURRENT").is_file():
+        try:
+            from .canon_v3.service import CanonV3Service
+
+            workflow = CanonV3Service(project_root).workflow_snapshot()
+            raw_cutover = workflow.get("cutover_chapter")
+            v3_cutover = int(raw_cutover) if raw_cutover is not None else -1
+        except Exception:
+            # When v3 authority cannot be read, no legacy retrieval row is
+            # safe enough to inject into a writing context.
+            v3_cutover = -1
     for row in rows or []:
         source_chapter = _safe_int(_value(row, "chapter", 0))
         if source_chapter not in cache:
             allowed = 0 < source_chapter <= int(chapter_limit)
+            if v3_cutover is not None:
+                # K and earlier belong to the immutable imported prefix. Rows
+                # after K come from a superseded v2 suffix; v3 RAG projection
+                # is not implemented yet, so fail closed for those chapters.
+                allowed = allowed and source_chapter <= v3_cutover
             expected_chunks: dict[str, str] = {}
             commit_path = (
                 project_root

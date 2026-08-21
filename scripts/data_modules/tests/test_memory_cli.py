@@ -11,7 +11,11 @@ import pytest
 
 from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.chapter_content_binding import build_chapter_binding
-from .review_test_helpers import standard_review, write_current_chapter_contract
+from .review_test_helpers import (
+    inject_hard_evidence_quotes,
+    standard_review,
+    write_current_chapter_contract,
+)
 
 _scripts_dir = str(Path(__file__).resolve().parent.parent.parent)
 if _scripts_dir not in sys.path:
@@ -35,9 +39,25 @@ def _make_project(tmp_path: Path):
 def _persist_current_entity(project: Path) -> None:
     chapter_path = project / "正文" / "第0001章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
-    chapter_path.write_text("萧炎在第一章正式登场。", encoding="utf-8")
-    binding = build_chapter_binding(project, 1)
+    extraction, chapter_text = inject_hard_evidence_quotes(
+        {
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [
+                {
+                    "entity_id": "xiaoyan",
+                    "canonical_name": "萧炎",
+                    "entity_type": "角色",
+                    "tier": "核心",
+                }
+            ],
+        },
+        chapter=1,
+        chapter_text="萧炎在第一章正式登场。",
+    )
+    chapter_path.write_text(chapter_text, encoding="utf-8")
     write_current_chapter_contract(project, 1)
+    binding = build_chapter_binding(project, 1)
     payload = ChapterCommitService(project).build_commit(
         chapter=1,
         review_result=standard_review(binding),
@@ -50,16 +70,7 @@ def _persist_current_entity(project: Path) -> None:
         },
         disambiguation_result={"pending": [], "chapter_binding": binding},
         extraction_result={
-            "accepted_events": [],
-            "state_deltas": [],
-            "entity_deltas": [
-                {
-                    "entity_id": "xiaoyan",
-                    "canonical_name": "萧炎",
-                    "entity_type": "角色",
-                    "tier": "核心",
-                }
-            ],
+            **extraction,
             "chapter_binding": binding,
         },
     )

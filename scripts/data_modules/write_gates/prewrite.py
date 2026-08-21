@@ -80,7 +80,8 @@ def _human_review_gate_issue(
         )
 
     candidates: list[tuple[int, int, str, dict[str, Any]]] = []
-    # 同一章内：确认需要改文 > 已裁决未重放 > 尚未裁决。
+    # 同一章内：确认需要改文 > 会改变正史但尚未重放 > 强制待裁决。
+    # 未裁决 advisory 与只做 confirm 的 advisory 仍由 warning 分支处理。
     priorities = {
         "rewrite_required": 0,
         "not_replayed": 1,
@@ -214,6 +215,28 @@ def run_prewrite_gate(project_root: Path, chapter: int) -> dict[str, Any]:
     )
     if human_review_issue is not None:
         errors.append(human_review_issue)
+    advisory_counts = human_review_summary.get("counts") or {}
+    advisory_total = sum(
+        int(advisory_counts.get(key) or 0)
+        for key in (
+            "advisory_pending",
+            "advisory_rewrite_required",
+            "advisory_not_replayed",
+        )
+    )
+    if advisory_total:
+        warnings.append(
+            issue(
+                "human_review_advisory",
+                message=f"前文章节有 {advisory_total} 项非强制人工审核或确认待回放",
+                impact=(
+                    "这些项目尚未产生正史删除或替换；作者仅确认但未回放的"
+                    "项目也不会阻止继续写作。"
+                ),
+                repair="可按需要运行 /canon-ledger-confirm 处理，也可以稍后集中复核。",
+                details={"summary": human_review_summary},
+            )
+        )
 
     from ..projection_rebuild import projection_coverage_gaps
 

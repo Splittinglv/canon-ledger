@@ -1,42 +1,27 @@
----
-name: system-data-flow-redirect
-purpose: 重定向到权威版本
----
+# 新项目 Canon v3 数据流
 
-<context>
-初始化与查询共用同一份当前数据主链说明，避免重复维护。
-</context>
-
-<instructions>
-
-## 权威版本位置
-
-`${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-query/references/system-data-flow.md`
-
-## 加载方式
-
-```bash
-cat "${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-query/references/system-data-flow.md"
+```text
+作者确认的初始化方案
+  ├─ 软计划 → 大纲 / Story System contracts
+  ├─ style → 设定集/文风提示词.md
+  └─ 硬设定 → managed author-axiom manifest
+                         │
+                         ▼
+                 Canon v3 genesis
+                         │
+                         ▼
+                  CURRENT + projection
 ```
 
-## 快速参考
+初始化完成的权威标志不是 `state.json` 或目录存在，而是：
 
-### 目录结构
-```
-项目根目录/
-├── 正文/           # 章节文件
-├── 大纲/           # 卷纲/章纲
-├── 设定集/         # 世界观/力量体系/角色卡
-└── .canon-ledger/
-    ├── state.json              # 当前状态投影
-    ├── index.db                # SQLite 投影
-    ├── memory_scratchpad.json  # 一致性投影
-    └── projection_manifest.json
+```text
+workflow.state=ready
+can_write_next=true
+projection_fresh=true
+bootstrap_mode=new_project
 ```
 
-### 当前结构核心
-- `.story-system` 合同和绑定的章节提交是事实源。
-- `.canon-ledger` 内的数据均为可按 accepted commits 重建的读模型。
-- 章合同必须完整保留目标与必须覆盖节点。
+`.canon-ledger/state.json`、`index.db`、摘要和 RAG 都不是正史。大纲与章合同描述未来方向，不证明事件已发生。文风文件永远排除在 author axioms 和 Canon 之外。
 
-</instructions>
+若目标目录已有 accepted legacy prefix，init 不得创建空 genesis；必须进入 legacy cutover。参考书拆解输出只是候选，作者确认并写入对应软计划/style/硬设定轨之前不生效。

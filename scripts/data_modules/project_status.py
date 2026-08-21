@@ -64,6 +64,52 @@ def next_action_for_phase(snapshot: ProjectPhaseSnapshot) -> str:
 
 
 def build_project_status(project_root: str | Path | None, chapter: int | None = None) -> dict[str, Any]:
+    if project_root:
+        candidate_root = Path(project_root).expanduser().resolve()
+        from .workflow_authority import WorkflowAuthority
+
+        workflow = WorkflowAuthority(candidate_root).snapshot()
+        raw_latest = workflow.get("latest_chapter")
+        latest = int(raw_latest or 0)
+        expected_next = int(workflow.get("expected_next_chapter") or (latest + 1))
+        target = int(chapter) if chapter is not None else expected_next
+        state = str(workflow.get("state") or "invalid")
+        allowed_chapters = {
+            int(item) for item in workflow.get("allowed_write_chapters") or []
+        }
+        target_allowed = target in allowed_chapters
+        can_write_target = bool(
+            state == "ready"
+            and workflow.get("can_write_next")
+            and target_allowed
+        )
+        blocking = [] if can_write_target else [state]
+        if state == "ready" and not target_allowed:
+            blocking.append("chapter_out_of_sequence")
+
+        # Contracts and the old project phase remain useful planning hints,
+        # but never override the Canon authority or its primary action.
+        advisory = resolve_project_phase(candidate_root, chapter=chapter)
+        primary_action = workflow.get("primary_action") or {}
+        next_action = str(primary_action.get("label") or "")
+        if state == "ready" and not target_allowed:
+            next_action = f"改写现有 v3 章节，或继续写第 {expected_next} 章"
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "project_root": str(candidate_root),
+            "project": _project_title(candidate_root),
+            "latest_accepted_chapter": latest,
+            "target_chapter": target,
+            "phase": f"canon_v3:{state}",
+            "blocking": blocking,
+            "warnings": list(advisory.warnings),
+            "next_action": next_action,
+            "primary_action": dict(primary_action),
+            "evidence": {
+                "workflow_snapshot": workflow,
+                "contract_phase_advisory": advisory.to_dict(),
+            },
+        }
     snapshot = resolve_project_phase(project_root, chapter=chapter)
     root = Path(snapshot.project_root) if snapshot.project_root else None
     return {

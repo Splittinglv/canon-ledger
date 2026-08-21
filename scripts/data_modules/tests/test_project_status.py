@@ -31,9 +31,14 @@ def test_project_status_json_shape(tmp_path):
 
     assert report["schema_version"] == SCHEMA_VERSION
     assert report["project"] == "测试书"
-    assert report["phase"] == "chapter_contract_ready"
+    assert report["phase"] == "canon_v3:migration_required"
     assert report["target_chapter"] == 1
-    assert report["next_action"] == "运行 /canon-ledger-write 1"
+    assert report["blocking"] == ["migration_required"]
+    assert report["primary_action"]["code"] == "initialize_v3"
+    assert report["next_action"] == "初始化 Canon v3"
+    assert report["evidence"]["contract_phase_advisory"]["phase"] == (
+        "chapter_contract_ready"
+    )
 
 
 def test_project_status_summary_is_short_and_machine_source_is_json(tmp_path):
@@ -43,7 +48,7 @@ def test_project_status_summary_is_short_and_machine_source_is_json(tmp_path):
     summary = format_project_status(report, "summary")
     payload = json.loads(format_project_status(report, "json"))
 
-    assert "阶段：init_ready" in summary
+    assert "阶段：canon_v3:migration_required" in summary
     assert payload["schema_version"] == SCHEMA_VERSION
 
 

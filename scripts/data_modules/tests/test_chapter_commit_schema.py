@@ -223,7 +223,10 @@ def test_accepted_event_model_normalizes_aliases_before_story_event_validation()
             {
                 "type": "scene_open",
                 "characters": ["xiaoyan"],
-                "payload": {"content": "新的谜团"},
+                "payload": {
+                    "content": "新的谜团",
+                    "evidence_quote": "新的谜团",
+                },
             }
         ],
     )

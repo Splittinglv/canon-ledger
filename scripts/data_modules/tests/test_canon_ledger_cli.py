@@ -61,6 +61,28 @@ def _make_cli_init_ready_project(project_root: Path) -> None:
         path.write_text("placeholder\n", encoding="utf-8")
 
 
+def test_v3_current_freezes_legacy_fact_store_mutators_but_keeps_queries(tmp_path):
+    module = _load_canon_ledger_module()
+    current = tmp_path / ".story-system" / "v3" / "CURRENT"
+    current.parent.mkdir(parents=True)
+    current.write_text("0" * 64 + "\n", encoding="utf-8")
+
+    assert module._v3_legacy_mutation_reason(tmp_path, "memory", ["query"]) == ""
+    assert module._v3_legacy_mutation_reason(tmp_path, "index", ["stats"]) == ""
+    assert module._v3_legacy_mutation_reason(
+        tmp_path, "memory", ["bootstrap"]
+    ) == "canon_v3_active_legacy_memory_write_disabled:bootstrap"
+    assert module._v3_legacy_mutation_reason(
+        tmp_path, "rag", ["index-chapter"]
+    ) == "canon_v3_active_legacy_rag_write_disabled:index-chapter"
+    assert module._v3_legacy_mutation_reason(
+        tmp_path, "entity", ["register-alias"]
+    ) == "canon_v3_active_legacy_entity_write_disabled:register-alias"
+    assert module._v3_legacy_mutation_reason(
+        tmp_path, "update-state", []
+    ) == "canon_v3_active_legacy_update-state_write_disabled"
+
+
 def test_init_does_not_resolve_existing_project_root(monkeypatch):
     module = _load_canon_ledger_module()
 

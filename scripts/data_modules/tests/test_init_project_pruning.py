@@ -42,6 +42,12 @@ def test_init_skips_dead_templates_and_empty_libraries_for_single_protagonist(tm
         ).read_text(encoding="utf-8")
     )
     assert review_contract["review_thresholds"] == {"blocking_count": 0}
+    from data_modules.canon_v3.service import CanonV3Service
+
+    assert (project_root / ".story-system" / "v3" / "CURRENT").is_file()
+    workflow = CanonV3Service(project_root).workflow_snapshot()
+    assert workflow["state"] == "ready"
+    assert workflow["can_write_next"] is True
 
 
 def test_init_master_outline_does_not_prefill_future_volume_rows(tmp_path, monkeypatch):

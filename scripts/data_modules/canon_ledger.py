@@ -88,6 +88,73 @@ PASSTHROUGH_TOOLS = {
 }
 
 
+_V3_LEGACY_READ_COMMANDS = {
+    "memory": {"stats", "query", "dump", "conflicts"},
+    "rag": {"stats", "search"},
+    "entity": {"lookup", "lookup-all", "list-aliases"},
+    "state": {"get-progress", "get-entity", "list-entities"},
+    "index": {
+        "stats",
+        "get-chapter",
+        "recent-appearances",
+        "entity-appearances",
+        "search-scenes",
+        "get-entity",
+        "get-core-entities",
+        "get-protagonist",
+        "get-entities-by-type",
+        "get-by-alias",
+        "get-aliases",
+        "get-relationships",
+        "get-relationship-events",
+        "get-relationship-graph",
+        "get-relationship-timeline",
+        "get-state-changes",
+        "list-invalid",
+        "get-recent-review-metrics",
+        "get-review-trend-stats",
+        "get-writing-checklist-score",
+        "get-recent-writing-checklist-scores",
+        "get-writing-checklist-score-trend",
+        "get-debt-summary",
+        "get-recent-reading-power",
+        "get-chapter-reading-power",
+        "get-pattern-usage-stats",
+        "get-hook-type-stats",
+        "get-reader-signals",
+        "get-pending-overrides",
+        "get-overdue-overrides",
+        "get-active-debts",
+        "get-overdue-debts",
+    },
+}
+
+
+def _v3_legacy_mutation_reason(
+    project_root: Path,
+    tool: str,
+    forwarded_args: list[str],
+) -> str:
+    """Return a stable blocker for retired legacy fact writers.
+
+    Canon v3 is the only production fact writer even before CURRENT exists;
+    otherwise an uninitialized/migration-required project could keep mutating
+    the prefix that cutover is supposed to freeze.
+    """
+    if tool in {"update-state", "chapter-commit", "review-pipeline"}:
+        return f"canon_v3_active_legacy_{tool}_write_disabled"
+    allowed = _V3_LEGACY_READ_COMMANDS.get(tool)
+    if allowed is None:
+        return ""
+    command = next(
+        (token for token in forwarded_args if token and not token.startswith("-")),
+        "",
+    )
+    if not command or command in allowed:
+        return ""
+    return f"canon_v3_active_legacy_{tool}_write_disabled:{command}"
+
+
 def _passthrough_tail(argv: list[str], tool: str) -> list[str]:
     i = 0
     while i < len(argv):
@@ -303,19 +370,27 @@ def cmd_chapter_binding(args: argparse.Namespace) -> int:
 
 
 def cmd_projections(args: argparse.Namespace) -> int:
-    from .projections import format_projection_report, replay_projections, retry_projection
+    from .canon_v3.projection import rebuild_projection
 
     root = _resolve_root(args.project_root)
-    if args.projection_action == "retry":
-        report = retry_projection(root, chapter=args.chapter)
-    else:
-        report = replay_projections(
-            root,
-            start_chapter=args.from_chapter,
-            end_chapter=args.to_chapter,
-        )
-    print(format_projection_report(report, args.format))
-    return 0 if report.get("ok") else 1
+    try:
+        projection = rebuild_projection(root)
+    except Exception as exc:
+        payload = {
+            "ok": False,
+            "error": "canon_v3_projection_rebuild_failed",
+            "message": str(exc),
+            "replacement": "canon-v3 rebuild-projection",
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 1
+    payload = {
+        "ok": True,
+        "replacement": "canon-v3 rebuild-projection",
+        "projection": projection,
+    }
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
 
 
 def cmd_user_report(args: argparse.Namespace) -> int:
@@ -461,74 +536,150 @@ def cmd_use(args: argparse.Namespace) -> int:
 
 
 def cmd_human_review(args: argparse.Namespace) -> int:
-    from .human_review import HumanReviewService
+    from .canon_v3.service import CanonV3Service
 
     root = _resolve_root(args.project_root)
-    service = HumanReviewService(root)
+    workflow = CanonV3Service(root).workflow_snapshot()
     if args.human_review_action == "list":
-        items = service.list_items(chapter=args.chapter)
         payload = {
-            "schema_version": "canon-ledger-human-review-list/v2",
+            "schema_version": "canon-v3/human-review-list/v1",
             "chapter": args.chapter,
-            "pending": [
-                item for item in items if item.get("status") == "pending"
-            ],
-            "rewrite_required": [
-                item
-                for item in items
-                if item.get("status") == "rewrite_required"
-            ],
-            "resolved": [
-                item for item in items if item.get("status") == "resolved"
-            ],
+            "state": workflow.get("state"),
+            "stage_digest": workflow.get("stage_digest"),
+            "transaction_hash": workflow.get("transaction_hash"),
+            "cases": workflow.get("cases") or [],
+            "replacement": "/canon-ledger-confirm",
         }
     else:
-        decision_path = Path(args.input_file).expanduser()
-        if not decision_path.is_absolute():
-            decision_path = root / decision_path
-        decision_path = decision_path.resolve()
-        try:
-            decision_path.relative_to(root.resolve())
-        except ValueError as exc:
-            raise ValueError(
-                "human-review input-file 必须位于 project_root 内"
-            ) from exc
-        payload = service.record(
-            json.loads(decision_path.read_text(encoding="utf-8"))
-        )
-        recorded_ids = set(payload.get("recorded") or [])
-        recorded_items = [
-            item
-            for item in service.list_items()
-            if item.get("decision_id") in recorded_ids
-        ]
-        rewrite_chapters = sorted(
-            {
-                int(item.get("chapter") or 0)
-                for item in recorded_items
-                if item.get("status") == "rewrite_required"
-                and int(item.get("chapter") or 0) > 0
-            }
-        )
-        resolved_chapters = sorted(
-            {
-                int(item.get("chapter") or 0)
-                for item in recorded_items
-                if item.get("status") == "resolved"
-                and int(item.get("chapter") or 0) > 0
-            }
-        )
-        if rewrite_chapters:
-            payload["next_action"] = (
-                f"修改第 {rewrite_chapters[0]} 章正文后运行 "
-                f"/canon-ledger-write {rewrite_chapters[0]}"
-            )
-        elif resolved_chapters:
-            payload["next_action"] = (
-                f"运行 /canon-ledger-confirm {resolved_chapters[0]} "
-                "使裁决进入正史提交"
-            )
+        payload = {
+            "ok": False,
+            "error": "canon_v3_legacy_human_review_resolve_disabled",
+            "message": "旧 human-review resolve 已退役；请读取当前 workflow cases 并使用 canon-v3 decide v2。",
+            "replacement": "/canon-ledger-confirm",
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _read_project_json(project_root: Path, input_file: str) -> dict:
+    from security_utils import resolve_inside_project
+
+    path = resolve_inside_project(
+        project_root,
+        Path(input_file).expanduser(),
+        reject_leaf_symlink=True,
+    )
+    if not path.is_file():
+        raise ValueError(f"输入文件不存在：{path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("输入 JSON 顶层必须是 object")
+    return payload
+
+
+def cmd_canon_v3(args: argparse.Namespace) -> int:
+    """Operate the breaking v3 prepare/decide/finalize transaction chain."""
+
+    from .canon_v3.projection import read_projection, rebuild_projection
+    from .canon_v3.service import CanonV3Service
+
+    root = _resolve_root(args.project_root)
+    service = CanonV3Service(root)
+    from .workflow_authority import WorkflowAuthority
+
+    authority = WorkflowAuthority(root)
+    try:
+        action = args.canon_v3_action
+        if action == "initialize":
+            head = service.initialize_new_project()
+            payload = {"head_hash": head, "workflow": authority.snapshot()}
+        elif action == "prepare":
+            payload = service.prepare(_read_project_json(root, args.input_file))
+        elif action == "decide":
+            payload = service.record_decisions(
+                _read_project_json(root, args.input_file)
+            )
+        elif action == "finalize":
+            payload = service.finalize(
+                _read_project_json(root, args.input_file)
+            )
+        elif action == "author-axiom-prepare":
+            payload = service.prepare_author_axioms(
+                _read_project_json(root, args.input_file)
+            )
+        elif action == "author-axiom-decide":
+            payload = service.record_author_axiom_decisions(
+                _read_project_json(root, args.input_file)
+            )
+        elif action == "author-axiom-finalize":
+            payload = service.finalize_author_axioms(
+                _read_project_json(root, args.input_file)
+            )
+        elif action == "author-axiom-status":
+            payload = service.author_axiom_status()
+        elif action == "author-axioms":
+            payload = service.active_author_axioms()
+        elif action == "status":
+            payload = authority.snapshot()
+        elif action == "rebuild-projection":
+            payload = rebuild_projection(root)
+        elif action == "history":
+            payload = read_projection(root, require_fresh=True)
+        elif action == "migrate":
+            from .canon_v3.migration import migrate_legacy
+
+            payload = migrate_legacy(
+                root,
+                cutover_chapter=args.cutover_chapter,
+            )
+        elif action == "audit-cutover":
+            from .canon_v3.migration import audit_cutover
+
+            payload = audit_cutover(
+                root,
+                cutover_chapter=args.cutover_chapter,
+            )
+        elif action == "repair-cutover":
+            if args.dry_run:
+                from .canon_v3.migration import repair_cutover_dry_run
+
+                if args.input_file:
+                    raise ValueError("repair-cutover --dry-run 不接受 --input-file")
+                payload = repair_cutover_dry_run(
+                    root,
+                    cutover_chapter=args.cutover_chapter,
+                )
+            else:
+                from .canon_v3.migration import repair_cutover_apply
+
+                if not args.input_file:
+                    raise ValueError(
+                        "repair-cutover --apply 必须提供项目内 --input-file"
+                    )
+                if args.cutover_chapter is not None:
+                    raise ValueError(
+                        "repair-cutover --apply 的边界已绑定在 detached plan；"
+                        "不能同时提供 --cutover-chapter"
+                    )
+                payload = repair_cutover_apply(
+                    root,
+                    _read_project_json(root, args.input_file),
+                )
+        else:  # pragma: no cover - argparse closes this set.
+            raise ValueError(f"未知 canon-v3 action：{action}")
+    except Exception as exc:
+        error = {
+            "ok": False,
+            "error": exc.__class__.__name__,
+            "message": str(exc),
+        }
+        print(json.dumps(error, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 1
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    if action == "status":
+        return 0 if payload.get("state") not in {"invalid", "migration_required"} else 1
     return 0
 
 
@@ -644,6 +795,102 @@ def main() -> None:
     )
     p_human_review_resolve.add_argument("--input-file", required=True)
     p_human_review_resolve.set_defaults(func=cmd_human_review)
+
+    p_canon_v3 = sub.add_parser(
+        "canon-v3",
+        help="Canon v3 唯一事实事务链（prepare / decide / finalize）",
+    )
+    canon_v3_sub = p_canon_v3.add_subparsers(
+        dest="canon_v3_action",
+        required=True,
+    )
+    p_v3_initialize = canon_v3_sub.add_parser(
+        "initialize", help="为无旧提交的新项目创建 v3 genesis"
+    )
+    p_v3_initialize.set_defaults(func=cmd_canon_v3)
+    p_v3_prepare = canon_v3_sub.add_parser(
+        "prepare", help="校验证据并创建 staging transaction"
+    )
+    p_v3_prepare.add_argument("--input-file", required=True)
+    p_v3_prepare.set_defaults(func=cmd_canon_v3)
+    p_v3_decide = canon_v3_sub.add_parser(
+        "decide", help="记录与当前 transaction 精确绑定的人工决定"
+    )
+    p_v3_decide.add_argument("--input-file", required=True)
+    p_v3_decide.set_defaults(func=cmd_canon_v3)
+    p_v3_finalize = canon_v3_sub.add_parser(
+        "finalize", help="核对 exact stage/finalize token 后原子发布 Canon HEAD"
+    )
+    p_v3_finalize.add_argument("--input-file", required=True)
+    p_v3_finalize.set_defaults(func=cmd_canon_v3)
+    p_v3_axiom_prepare = canon_v3_sub.add_parser(
+        "author-axiom-prepare",
+        help="从受管 draft byte-span 创建独立硬设定事务",
+    )
+    p_v3_axiom_prepare.add_argument("--input-file", required=True)
+    p_v3_axiom_prepare.set_defaults(func=cmd_canon_v3)
+    p_v3_axiom_decide = canon_v3_sub.add_parser(
+        "author-axiom-decide",
+        help="记录与 axiom stage/material 精确绑定的人工决定",
+    )
+    p_v3_axiom_decide.add_argument("--input-file", required=True)
+    p_v3_axiom_decide.set_defaults(func=cmd_canon_v3)
+    p_v3_axiom_finalize = canon_v3_sub.add_parser(
+        "author-axiom-finalize",
+        help="原子发布 axiom HEAD；不推进章节序列",
+    )
+    p_v3_axiom_finalize.add_argument("--input-file", required=True)
+    p_v3_axiom_finalize.set_defaults(func=cmd_canon_v3)
+    p_v3_axiom_status = canon_v3_sub.add_parser(
+        "author-axiom-status",
+        help="读取独立硬设定事务的 exact cases/tokens",
+    )
+    p_v3_axiom_status.set_defaults(func=cmd_canon_v3)
+    p_v3_axioms = canon_v3_sub.add_parser(
+        "author-axioms",
+        help="读取当前 HEAD 的 active author-axiom records",
+    )
+    p_v3_axioms.set_defaults(func=cmd_canon_v3)
+    p_v3_status = canon_v3_sub.add_parser(
+        "status", help="输出 gate/CLI/report 共用的 workflow snapshot"
+    )
+    p_v3_status.set_defaults(func=cmd_canon_v3)
+    p_v3_rebuild = canon_v3_sub.add_parser(
+        "rebuild-projection", help="按当前 HEAD 重建一次性事实投影"
+    )
+    p_v3_rebuild.set_defaults(func=cmd_canon_v3)
+    p_v3_history = canon_v3_sub.add_parser(
+        "history", help="读取与当前 HEAD 精确绑定的事实历史"
+    )
+    p_v3_history.set_defaults(func=cmd_canon_v3)
+    p_v3_migrate = canon_v3_sub.add_parser(
+        "migrate", help="在章节边界冻结 v2 前缀并切换到 v3"
+    )
+    p_v3_migrate.add_argument("--cutover-chapter", type=int, default=None)
+    p_v3_migrate.set_defaults(func=cmd_canon_v3)
+    p_v3_audit = canon_v3_sub.add_parser(
+        "audit-cutover", help="只读审计 legacy 前缀、证据、目标与身份准入"
+    )
+    p_v3_audit.add_argument("--cutover-chapter", type=int, default=None)
+    p_v3_audit.set_defaults(func=cmd_canon_v3)
+    p_v3_repair = canon_v3_sub.add_parser(
+        "repair-cutover", help="只读生成或显式发布 detached 重新认证链"
+    )
+    p_v3_repair.add_argument("--cutover-chapter", type=int, default=None)
+    repair_mode = p_v3_repair.add_mutually_exclusive_group(required=True)
+    repair_mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="只读生成逐项审核材料与精确 publish token",
+    )
+    repair_mode.add_argument(
+        "--apply",
+        dest="apply_recertification",
+        action="store_true",
+        help="消费全部逐项人工确认并 CAS 发布重新认证链",
+    )
+    p_v3_repair.add_argument("--input-file", default="")
+    p_v3_repair.set_defaults(func=cmd_canon_v3)
 
     # Pass-through to data modules
     p_index = sub.add_parser("index", help="转发到 index_manager")
@@ -763,6 +1010,24 @@ def main() -> None:
     # 其余工具：统一解析 project_root 后前置给下游
     project_root = _resolve_root(args.project_root)
     forward_args = ["--project-root", str(project_root)]
+
+    mutation_blocker = _v3_legacy_mutation_reason(project_root, tool, rest)
+    if mutation_blocker:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": mutation_blocker,
+                    "message": (
+                        "旧事实写入口已退役；无论 CURRENT 是否存在，事实变更都必须走 "
+                        "Canon v3 initialize/migrate/prepare/decide/finalize。"
+                    ),
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     if tool == "index":
         raise SystemExit(_run_data_module("index_manager", [*forward_args, *rest]))

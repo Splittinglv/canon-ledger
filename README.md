@@ -1,133 +1,249 @@
 # 叙典 CanonLedger
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-7.2.0-brightgreen.svg)](.cursor-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-8.0.0-brightgreen.svg)](.cursor-plugin/plugin.json)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 
 记住故事事实，不替你决定文风。
 
-**叙典 CanonLedger** 是长篇小说一致性引擎。它让 AI 写到几百章后仍然记得住设定、接得住伏笔、守得住章纲；具体的写作风格和文笔由作者与当前模型自定义。
+叙典是面向长篇小说的长期一致性插件。它在每章完成后核对“什么已经发生、谁知道什么、谁在哪里、物品在谁手里、时间和规则是否穿帮”，并把后续章节真正需要依赖的事实写入可验证正史。
 
-叙典由 Splittinglv 发起并发布，仓库为 [Splittinglv/canon-ledger](https://github.com/Splittinglv/canon-ledger)。它使用自己的产品名、命令、数据空间和版本规划，不跟踪其他仓库的后续版本。代码、测试与文档大量使用生成式 AI 辅助完成。许可与历史来源见 [NOTICE.md](NOTICE.md) 与 [ATTRIBUTION.md](ATTRIBUTION.md)。
+具体的文风、文笔、视角、口吻、节奏和写作偏好由作者与当前模型自定义。你可以把整本书的长期偏好写进 `设定集/文风提示词.md`，也可以每章临时覆盖；插件不会把这些偏好变成强制事实检查。
 
-叙典的默认产品边界是**长期一致性状态机**：插件负责故事别写崩，不负责把句子写成某种网文腔。
-
-## 产品使用逻辑
-
-插件把要求分成三条轨道，避免“这章想怎么写”意外覆盖历史事实：
-
-- **事实轨**：作者初始化设定 / 人工确认 / 已接受章节事实；普通剧情或文风要求不能覆盖。
-- **剧情轨**：你这轮的剧情要求 > 章纲 > 模型自由发挥。
-- **风格轨**：你这轮的文风要求 > `设定集/文风提示词.md` > 当前模型默认。
-
-只有你明确说“修改设定、追认、重置既有事实”等意图时，系统才把冲突当成 retcon 候选交你确认。
-
-### 默认守什么
+## 产品边界
 
 | 默认会做 | 默认不会做 |
-|---------|-----------|
-| 以总纲 / 卷纲 / 章纲作为剧情方向并报告偏离 | 强制章纲完成度或替作者决定剧情取舍 |
-| 核对设定、时间线、伏笔、角色知识边界 | 润色、Anti-AI 终检、风格适配 |
-| 登记本章新事实 | 把书面语 / 口语当缺陷来改 |
-| 章纲保留目标、时间、禁区 | 强制每章钩子、打脸爽点、CBN 骨架 |
+|---|---|
+| 核对作者硬设定、时间线和跨章事实 | 给文笔、AI 味、节奏或爽点评分 |
+| 维护人物状态、关系、知识、在场和物品持有 | 强制某种网文腔、句式或章长 |
+| 记录伏笔/开放问题和承诺 | 把人物动机或剧情取舍判成穿帮 |
+| 关键正史节点和实质歧义交作者确认 | 因极低概率、无证据猜测阻断写作 |
+| 章纲作为剧情方向并单独报告 | 默认强制章纲完成度 |
 
-写章前的合同和检索也按这个边界裁：插件只随包发布命名规则、人设与关系、金手指与设定三张一致性表，写法、桥段、爽点、场景写法等技法表和题材模板已从插件移除，不存在被塞进上下文的路径。
+误判偏保守或多一次人工检查不是系统故障；没有证据的事实进入正史、关键事实绕过确认、决定错绑、重放残留和 HEAD/投影分裂才是必须阻止的问题。
 
-仍生效的世界规则、未回收伏笔、未兑现承诺和当前人物关系不会因“只取前几条”、章节距离或上下文预算被静默丢弃。预算不足时只裁检索命中、近期索引变化等软证据；事实来源的完整度与可信度分开记录，覆盖不足或等待人工确认时不会把“没记录到”误判成“绝对不存在”。
+## Canon v3：唯一事实事务链
 
-初始化时作者明确给出的主角欲望与缺陷、世界规模、势力、力量体系和金手指代价会写入闭合结构的 `MASTER_SETTING.initial_canon`，从首章开始进入一致性上下文；不会把初始化模板里的文风或题材处方混进去。写第 N 章时，人物状态、关系、时间线、一般事实、伏笔和承诺统一从正文绑定且已接受的第 `1..N-1` 章提交重放；历史改写不会读取未来章的当前快照。四类运行合同缺失或历史正文绑定失效时会明确阻断，不会把“读不到”伪装成“没有约束”。
+模型不能直接写状态、实体、时间线或人工队列。每章只有一条生产写链：
 
-规划阶段后续写回 `设定集/*.md` 的新角色、地点、势力、规则和能力限制，会在刷新 Story System 时生成带来源路径、字节数和 SHA-256 的闭合设定快照，并从下一章起进入 canon。写回使用“字段：值”、项目符号或 Markdown 表格；设定文件改了却没刷新合同时，写作上下文会报 `stale_setting_canon` 并阻断。只有 `设定集/文风提示词.md` 不进入这份事实快照；其它设定集里的结构化内容即使出现风格、写作、镜头、旁白、读者、节奏、反转等词，也按事实处理。
+```text
+正文 + 作者硬设定
+  -> FactCandidate（逐字段 SourceRef + support_map）
+  -> ReviewObservation + 完整 ScanAttestation
+  -> canon-v3 prepare
+  -> 必要时 canon-v3 decide
+  -> canon-v3 finalize
+  -> immutable commit/manifest
+  -> 原子切换 .story-system/v3/CURRENT
+  -> 按同一 HEAD 重建投影
+```
 
-同一章重新提交时，新的正文绑定提交会替换该章旧版本，并从全部当前 canonical commits 顺序重建状态、实体索引、时间线、伏笔/承诺、事件、摘要与检索库；旧版本删除的事实不会残留。`projections retry` 会识别缺失或失败的读模型，`projections replay` 始终执行隔离构建、校验、原子安装；中途失败保留原读模型，不把半套结果装进项目。
+data-agent 的唯一事实产物是：
 
-模型生成的自由文本摘要不会直接进入默认写作包；历史承接改由已绑定正文的结构化事件、状态、硬约束和事实型 RAG 提供，避免摘要里的写法建议被误当成默认文风。
-模型抽取的世界规则也只能描述故事世界内的人、物、制度或环境；以章节、段落、句子、读者或作者为对象的反转、悬念、爽点等章法配方会被拒绝，不能伪装成硬 canon。
+```text
+.canon-ledger/tmp/canon_v3_proposal.json
+```
 
-事实审查只有三种明确模式：`standard` 检查设定、时间线、连续性、知识边界和明确机械规则；`fast` 跳过最后一项并标成降级；`minimal` 明确记录“跳过审查”，绝不伪装成完整通过。只有直接证据表明两条事实不能同时成立时才判为 issue；转场耗时、同义信息、人物动机、一般因果等容易误判的内容进入“待作者确认”，不自动改文、不阻断提交。审查不生成文笔评分、节奏评分或所谓 AI 味反模式。
+它严格使用 `canon-v3/proposal-batch/v2`，除 typed candidates、observations 和 attestations 外，还绑定 parent HEAD、workflow、entity registry、active author axioms 和已有 STAGING 版本。
 
-章末抽取也采用同一原则：明确事件进入 canon；语义不确定的知识、在场或物品持有，以及审查里拿不准的时间线、在场和规则疑点，都写入 `.canon-ledger/human-review/queue/`。写完本章后默认当场确认。更早章只要还有未裁决项、已确认穿帮但未返工的项，或已保存但尚未重放生效的裁决，下一章的写前门禁都会硬阻断；只允许回到最早的问题章闭环。裁决只对当时的正文字节版本生效。
+### 证据要求
 
-日常裁决用 `/canon-ledger-confirm N`：系统逐条展示证据原文和现有记录。对审查疑点，`confirm` 表示作者确认不是穿帮，`rewrite` 表示确认穿帮并要求修改正文，队列可提供 `replace` 用于明确追认/替换事实；对抽取候选事实，仍用 confirm / ignore / replace，其中 `ignore` 只表示不记录该候选事实。无 `rewrite` 时，系统落库后用 `chapter-commit --from-last-commit` 重放本章提交，把已确认事实升级为 `verified` 并重建投影；任一项选 `rewrite` 就不重放旧正文，唯一下一步是 `/canon-ledger-write N`。底层 CLI 依然可用：`human-review list --chapter N` 查看队列、`human-review resolve --input-file <项目内 JSON>` 写入裁决；正文改动后旧裁决不会自动沿用。
+每个候选事实的每个非空字段都必须由 `support_map` 绑定到真实来源：
 
-### 文风怎么自定义
+- `manuscript_span`：当前章节 SHA-256、精确 UTF-8 byte `[start,end)`、逐字 quote 和 quote SHA-256。
+- `author_axiom`：作者拥有的 JSON 设定文件 SHA-256、精确 JSON Pointer、叶值和 value SHA-256。
 
-只改书项目里的 `设定集/文风提示词.md`，写在「作者提示词」标题下面。插件不会用词库覆盖它。
+人物/组织、物品、地点分别使用 `actor`、`item`、`location` 身份命名空间。首次身份或新别名要经人工确认；同一命名空间也允许多个同名实例，必须通过 `new_instance/link_to/identity_links` 人工确认新建或消歧，绝不默认取第一个。同名人物不会自动改写同名地点或物品。重写旧章时只使用该章 N-1 已存在的身份注册，未来章节的别名不会倒灌。
 
-- 可以写视角、句长、对话习惯、禁忌修辞、想贴近的作品
-- 留空就按当前模型自己的文风写
-- 剧情、设定、伏笔不要写进这个文件，那些走大纲和设定集
-- 也可以用 `/canon-ledger-learn` 把明确的文风偏好追加进这个文件；完全相同的条目会去重
+只有“引文在正文里出现”并不足以入正史；角色、物品、地点、持有人、前后状态等 claim 字段必须由它绑定的来源实际支持。无法可靠判断时转人工，不能猜。
 
-已有书可把 `templates/output/设定集-文风提示词.md` 复制到该书的 `设定集/文风提示词.md`。
+模型不再提交 `accepted_events`、`state_deltas`、`entity_deltas` 或 `timeline_events`。运行时只从通过证据验证和人工策略的 typed candidates 派生 CanonEffects。
 
-### 命令怎么用
+所有可变事实统一经过 Active Slot Registry：跨章更新绑定 exact `prior_fact_digest`，同章连续变化绑定 `prior_effect_id`；承诺兑现、伏笔关闭必须命中 active prior。状态字段、知识命题与正文显示词分离；新承诺、新伏笔、新时间事件和规则违反按 candidate+evidence 生成独立实例，因此相同措辞不会相互覆盖。`omit/rewrite/correct` 的负裁决会随不可变 commit/manifest 谱系保留，重新 prepare 不能让它们消失。
 
-日常顺序：开书父目录 → `/canon-ledger-init` → 按需改文风提示词 → `/canon-ledger-plan` → `/canon-ledger-write`。审查、查询、学习按需插入。
+### 完整事实扫描
 
-**`/canon-ledger-init` 开新书**
+进入 `prepare` 前，扫描证明必须绑定当前正文 SHA，并覆盖：
 
-必收：书名、题材、规模（字数或章数）、主角姓名 / 欲望 / 缺陷、世界规模、力量体系。确认摘要后才生成项目。
+```text
+setting, timeline, continuity, character, logic
+```
 
-不说就不问、不阻断：金手指、反套路、卖点公式、参考书拆解、目标读者、平台、感情线。插件不随包提供题材套路库或爽点模板——题材只作为分类标签写入 `project_info.genre`。想拆书当灵感，要先明确选「从参考书开始」，拆完经你确认才会写进项目。
+同时必须列出全部 exact candidate digests。覆盖不完整时 fail closed；不能把 partial scan 伪装为“未发现问题”。正文明示发生、后续必须记住的事实不得静默遗漏。
 
-**`/canon-ledger-plan 1` 拆卷拆章**
+## 人工确认
 
-必写：卷摘要、关键人物、伏笔；每章的目标、时间锚点、章内时间跨度、与上章时间差、倒计时（无则写无）、关键实体、本章变化、本章禁区。时间线是硬约束，回跳必须标闪回。
+运行时会把模型观察与内置策略合并，并始终取最强级别。模型可以请求更多审核，但不能降低 checkpoint。
 
-可选，有则写、没有不补：章末钩子、爽点、CBN / CPN / CEN。不要为了凑密度给每章编一个打脸点。
+### checkpoint
 
-章纲中的目标、阻力、代价、时间信息、本章变化、核心冲突、视角、关键实体、结构化节点、禁区、章末未闭合问题与钩子会完整按结构进入章合同；即使上下文预算裁掉章纲原文，这些结构化字段也不会被裁掉。现代章合同的目标为空时，写前门禁和直接提交都会独立阻断；成功提交会把权威目标写入 `outline_snapshot.goal`。提交门禁会核对 `must_cover_nodes` 与 data-agent 的完成清单形状，遗漏默认作为 advisory 报告；只有作者显式选择 `strict` 时才阻断。插件不会往章纲补文风处方。要稳定指定文风与文笔，请使用本轮要求或 `设定集/文风提示词.md`。
+关键长期节点，例如核心角色永久状态、重大关系、世界硬规则、永久力量变化、关键物品、核心秘密、重大时间变化、重大承诺/开放问题、retcon 和卷末快照。
 
-**`/canon-ledger-write 4` 写一章**
+只允许：
 
-流程：整理本章依据 → 起草 → 事实审查 → 只改已证实的穿帮 → 登记明确事实 / 排队歧义 → 备份 → 有待确认则当场确认。字数跟你或大纲走，插件不规定章长。`--fast` 减轻审查；`--minimal` 跳过审查修补。钩子和 CBN 不是硬约束。
+- `approve`：批准当前 exact candidate。
+- `rewrite`：修改正文并完整重跑。
 
-**`/canon-ledger-review` 查事实**
+### ambiguity
 
-只查设定、时间线、连续性、角色知识边界和明确规则冲突。不查人物动机、一般因果，不评好不好看、像不像网文。证据不足的疑点进入人工确认，不冒充确定问题。
+有正文锚点、会影响长期事实，但系统无法唯一解释的候选。
 
-**`/canon-ledger-confirm 4` 裁决待确认事实**
+允许：
 
-逐条展示确认队列（抽取歧义 + 审查疑点）。审查疑点选 confirm / rewrite / 可选 replace；抽取候选事实选 confirm / ignore / replace。系统自动落库裁决：无 rewrite 才重放本章提交，有 rewrite 则停止重放并要求重新 `/canon-ledger-write N`。省略章节号则从最早未闭环章节开始处理。正文改过的章节会被拒绝重放，提示重新 `/canon-ledger-write`。有待确认项时这是写完一章后的唯一下一步；确认穿帮后，返工问题章是唯一下一步。
+- `approve`：接受当前候选。
+- `omit`：本次不入正史；只用于真正歧义，不能静默丢弃正文明确发生的关键事实。
+- `correct`：作者提供同 candidate ID 的完整修订候选，随后重新做证据校验、五维扫描、checkpoint 和 prepare。
+- `rewrite`：修改正文并完整重跑。
 
-**`/canon-ledger-query` 查书内状态**
+不提供通用 `replace`。人工决定请求必须回显作者看到的 `stage_digest`、transaction、target、material、decision head，以及章节 SHA、candidate/effect/source、父 HEAD、既有事实和 policy；任一变化都会拒绝旧操作，不能把旧选择转接到新 STAGING。
 
-查角色、伏笔、力量、势力、运行时合同。
+`omit/rewrite/correct` 同时保存与证据呈现无关的 `semantic_claim_digest`。同一事实仅换 source、扩大引文或删除 observation 后不能自动复活；需要作者显式重新考虑。
 
-**`/canon-ledger-learn` 记长期文风**
+日常命令：
 
-例如「对白更口语化，少用排比」。命令只写入 `设定集/文风提示词.md`，不进入事实快照、硬约束或 scratchpad。设定、伏笔和时间线请改设定集，或等章末提交自动提炼。
+```text
+/canon-ledger-confirm 12
+```
 
-**`/canon-ledger-dashboard` / `/canon-ledger-doctor`**
+确认流底层只调用 `canon-v3 decide`。`correct` 和 `rewrite` 都不会在旧 transaction 上直接发布。
 
-只读面板和项目体检，不参与写作。
+## Workflow snapshot 是唯一门禁
 
-### 工作区
+CLI、write gate、报告、context、Skills 和 Dashboard 读取同一个 `canon-v3/workflow-snapshot/v2` 及其 `workflow_digest`。无 CURRENT 时也不得回落 legacy：
 
-插件仓库和书稿分开。打开书的**父目录**当工作区，用 `/canon-ledger-init` 按书名建子目录，不要把书写进本仓库。
+| state | 含义 | 恢复动作 |
+|---|---|---|
+| `ready` | CURRENT 与投影一致 | `can_write_next=true` 时可写下一章 |
+| `ready_to_finalize` | transaction 已满足发布条件 | 运行 `canon-v3 finalize` |
+| `awaiting_human` | 有 required case，HEAD 未改变 | 当场 `/canon-ledger-confirm N` |
+| `rewrite_required` | 已确认事实冲突或作者选 rewrite | 修改本章并完整重跑 |
+| `recompile_required` | 正文、HEAD 或候选修订变化 | 重新 binding、scan、prepare |
+| `projection_rebuild_required` | 正史已发布但读模型未追上 | `canon-v3 rebuild-projection` |
+| `migration_required` | 尚未切 v3、旧前缀变化或旧 schema 待重新认证 | 按 `bootstrap_mode` initialize/migrate/repair |
+| `invalid` | 内容寻址对象或引用校验失败 | 停止写作并体检 |
 
-安装只有本地：把本仓库加进 Cursor「添加本地目录」，或符号链接到 `~/.cursor/plugins/local/canon-ledger`。`.cursor-plugin/marketplace.json` 是给本机识别用的，不是官方商店上架包。改完代码后执行 **Developer: Reload Window**。
+只有 `state=ready`、`can_write_next=true` 且 projection fresh 才能继续下一章。`ready_to_finalize`、暂存 transaction、合同就绪或旧报告里的 blocking 数量都不表示完成。
 
-## 核心能力
+## 日常使用
 
-| 能力 | 命令 | 说明 |
-|------|------|------|
-| 深度初始化 | `/canon-ledger-init` | 收集故事核，生成设定集、总纲和 Story System。金手指 / 卖点可选 |
-| 卷纲规划 | `/canon-ledger-plan` | 基于总纲拆卷、拆章、补时间线。钩子 / 爽点 / CBN 可选 |
-| 章节创作 | `/canon-ledger-write` | 备上下文、起草、事实审查、登记事实、备份。不改文风 |
-| 事实审查 | `/canon-ledger-review` | 查长期事实穿帮；不确定项转人工，不评文风、动机或剧情选择 |
-| 人工确认 | `/canon-ledger-confirm` | 对话里逐条裁决歧义事实和审查疑点；无返工项才重放，确认穿帮则要求改正文 |
-| 状态查询 | `/canon-ledger-query` | 查询角色、伏笔、力量体系和运行时状态 |
-| 项目学习 | `/canon-ledger-learn` | 把长期文风和写作偏好写入 `设定集/文风提示词.md` |
-| 可视化面板 | `/canon-ledger-dashboard` | 只读浏览状态、实体图谱 |
-| 项目体检 | `/canon-ledger-doctor` | 检查目录、数据库、RAG、依赖和 Dashboard 产物 |
+### 开新书
+
+```text
+/canon-ledger-init
+/canon-ledger-plan 1
+/canon-ledger-write 1
+```
+
+新项目首次使用 v3 时会创建 genesis：
+
+```bash
+python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
+  --project-root "<PROJECT_ROOT>" canon-v3 initialize
+```
+
+### 写一章
+
+```text
+/canon-ledger-write 12
+```
+
+流程：整理 N-1 事实 → 按作者/模型文风起草 → 固化正文 binding → data-agent 提候选 → reviewer 五维事实扫描 → `prepare` → 当场人工确认或改正文 → `finalize` → 验证 ready。
+
+### 规划与长期硬设定
+
+卷纲、章纲和剧情目标是软计划，不表示事件已经发生。规划过程中新增或修改世界规则、角色永久设定等硬内容时，先保存为 author-axiom proposal；完成 v3 recertification/finalize 前，query 和写作上下文继续使用上一个 active axiom digest。这样 `/canon-ledger-plan` 不会成为第二条事实写入路径。
+
+### 自定义长期文风
+
+编辑 `设定集/文风提示词.md`，例如：
+
+- 视角和人称；
+- 句长、对话习惯和禁忌修辞；
+- 希望接近的作品气质；
+- 全书长期写作偏好。
+
+优先级是：本轮用户要求 > 全书文风提示词 > 当前模型默认。这个文件不进入 Canon 事实快照，不触发一致性审核。也可以用 `/canon-ledger-learn` 追加长期偏好。
+
+## 从 v2 迁移
+
+先备份书项目，并确认最后一个只读 v2 章节边界 K。查看状态：
+
+```bash
+python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
+  --project-root "<PROJECT_ROOT>" canon-v3 status
+```
+
+冻结已验证 v2 前缀并创建 v3 genesis：
+
+```bash
+python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
+  --project-root "<PROJECT_ROOT>" canon-v3 migrate --cutover-chapter K
+```
+
+`migrate` 先生成 detached cutover plan：所有 event/delta/timeline/entity 输入都转成 typed legacy candidates，真实正文 span、identity resolution、slot transition 和 normalized facts 分别留下 admission receipt。旧 opaque ID 只是 alias，不能直接决定 promise/loop/knowledge/timeline/rule slot；alias 与 namespace 先统一后才折叠状态。无法证明的项进入人工 recertification，而不是带着事实洞继续。全部通过后才 CAS 切换 CURRENT。
+
+8.0 以前的 legacy genesis 和未发布 STAGING 默认进入 `migration_required/recertification`。旧 positive decisions 不自动复用；负裁决会转成语义谱系。旧 HEAD 和对象保留只读，修复链在 detached 区域完成后原子切换。
+
+重新认证先只读生成逐项材料：
+
+```bash
+python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
+  --project-root "<PROJECT_ROOT>" canon-v3 repair-cutover --dry-run
+```
+
+作者通过 `/canon-ledger-confirm` 逐项确认全部 admission、identity、target、suffix 与旧裁决后，
+插件生成精确绑定 `expected_current_head + detached_plan_digest + publish_token` 的请求，再执行：
+
+```bash
+python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
+  --project-root "<PROJECT_ROOT>" canon-v3 repair-cutover --apply \
+  --input-file ".canon-ledger/tmp/canon_v3_recertification_publish.json"
+```
+
+partial/stale/concurrent 请求不会切换 CURRENT；响应丢失只能重放同一请求。
+
+### cutover 后的规则
+
+- K 以内的 v1/v2 commit 是**只读前缀**。
+- K 之后只有 `canon-v3 prepare/decide/finalize` 可以写事实。
+- 不再支持 v2 `chapter-commit` 写入、`--from-last-commit` replay、旧 `human-review resolve` 或长期双写。
+- 修改 K 以内正文会使迁移来源摘要失效并 fail closed。必须从最早受影响章节重新建立后缀边界，旧人工决定默认重新确认；不能继续在旧 prefix 上写下一章。
+
+## CLI
+
+统一入口：
+
+```bash
+python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
+  --project-root "<PROJECT_ROOT>" canon-v3 <action>
+```
+
+常用 action：
+
+```text
+initialize
+migrate --cutover-chapter K
+status
+prepare --input-file .canon-ledger/tmp/canon_v3_proposal.json
+decide --input-file .canon-ledger/tmp/canon_v3_decisions.json
+finalize --input-file .canon-ledger/tmp/canon_v3_finalize.json
+audit-cutover
+repair-cutover --dry-run
+repair-cutover --apply --input-file .canon-ledger/tmp/canon_v3_recertification_publish.json
+author-axiom-prepare --input-file .canon-ledger/tmp/canon_v3_author_axiom_proposal.json
+author-axiom-decide --input-file .canon-ledger/tmp/canon_v3_author_axiom_decisions.json
+author-axiom-finalize --input-file .canon-ledger/tmp/canon_v3_author_axiom_finalize.json
+author-axiom-status
+author-axioms
+history
+rebuild-projection
+```
+
+v3 不可变对象、活动 manifest、CURRENT 和 projection binding 位于 `.story-system/v3/`。派生投影可以删除重建，不能反向成为正史来源。
 
 ## 安装
 
-需要 **Python 3.10+** 和 Cursor。
-
-### 1. 安装 Python 依赖
+需要 Python 3.10+ 和 Cursor。
 
 ```bash
 python3 -m venv .venv
@@ -136,46 +252,33 @@ python -m pip install -r scripts/requirements.txt
 python -m pip install -r dashboard/requirements.txt
 ```
 
-插件不会假定 Cursor 调用到的系统 `python3` 已安装依赖。启动脚本会依次选择：显式设置的 `CANON_LEDGER_PYTHON`、插件目录下的 `.venv`、`~/.cursor/canon-ledger/.venv`，最后才检查当前或系统解释器；只有能导入插件依赖的解释器才会被使用。
-
-本地目录安装按上面的命令在仓库根创建 `.venv` 即可。若 Cursor 使用的是复制到缓存中的插件包，建议创建共享运行环境：
-
-```bash
-python3 -m venv ~/.cursor/canon-ledger/.venv
-~/.cursor/canon-ledger/.venv/bin/python -m pip install -r "/absolute/path/to/canon-ledger/scripts/requirements.txt"
-~/.cursor/canon-ledger/.venv/bin/python -m pip install -r "/absolute/path/to/canon-ledger/dashboard/requirements.txt"
-```
-
-需要固定解释器时，可在启动 Cursor 前设置 `CANON_LEDGER_PYTHON=/absolute/path/to/python`。该解释器缺少依赖时，插件会明确报错并停止受保护写入，不会静默改用一个不完整的 Python。
-
-### 2. 把本仓库装成本地 Cursor 插件
-
-Cursor 的 **Settings → Plugins → 添加本地目录** 认的是 **marketplace**，不是单独的 `plugin.json`。本仓库根目录已包含 `.cursor-plugin/marketplace.json`。
-
-**方法 A（推荐，开发与使用同一份代码）：**
+本地开发推荐把仓库链接到 Cursor 插件目录：
 
 ```bash
 mkdir -p ~/.cursor/plugins/local
 ln -s "/absolute/path/to/canon-ledger" ~/.cursor/plugins/local/canon-ledger
 ```
 
-然后执行 **Developer: Reload Window**。
+然后执行 **Developer: Reload Window**。也可以在 Cursor **Settings → Plugins → 添加本地目录** 中选择包含 `.cursor-plugin/marketplace.json` 的仓库根目录。
 
-**方法 B：** 在 **Settings → Plugins** 里添加本地目录，选本仓库根目录（必须能看到 `.cursor-plugin/marketplace.json`）。装好后重载窗口，Agent 聊天应能看到 `/canon-ledger-*`。
+插件按顺序选择显式 `CANON_LEDGER_PYTHON`、插件目录 `.venv`、`~/.cursor/canon-ledger/.venv`，最后才检查系统解释器；缺依赖时受保护写入会停止，不会静默换成不完整环境。
 
-### 3. 打开书项目的父目录当工作区
+### 开发验收
 
-```text
-/canon-ledger-init
-```
+默认 `pytest` 运行当前 Canon v3 产品验收。依赖已删除 v2 writer/replay 的冻结规格由固定
+清单排除，不会为了通过它们而恢复 legacy 写入口；范围与显式审计方式见
+[当前产品测试与 retired v2 规格](references/testing-current-vs-retired-v2.md)。
 
-初始化会按书名在工作区下创建子目录：
+### 工作区
+
+插件仓库和书稿分开。打开书的父目录作为工作区：
 
 ```text
 workspace/
 ├── .cursor/canon-ledger-current-project
 └── 你的书名/
     ├── .story-system/
+    │   └── v3/
     ├── .canon-ledger/
     ├── 正文/
     ├── 大纲/
@@ -184,90 +287,8 @@ workspace/
     └── 审查报告/
 ```
 
-文风、必填项和可选技法见上文「产品使用逻辑」。已有书可把 `templates/output/设定集-文风提示词.md` 复制到该书的 `设定集/文风提示词.md`。
+## 项目与许可
 
-### 4. 配置 RAG（可选）
+叙典由 Splittinglv 发起并发布，仓库为 [Splittinglv/canon-ledger](https://github.com/Splittinglv/canon-ledger)。代码、测试和文档大量使用生成式 AI 辅助完成。
 
-RAG 只用于从已提交章节补查人物状态、地点、关系、规则/伏笔/承诺状态等结构化事实，不索引章节摘要或场景原文，也不生成文风、桥段或节奏建议。默认写章上下文会自动查询检索库；结果为空不会阻断写作。
-
-进入书项目根目录，把 `.env.example` 复制为 `.env` 并填写 API Key。Embedding Key 是可选增强：未填写时，章节事实仍会建立 BM25 关键词索引并可被默认写作链召回；填写后才增加语义向量召回。Rerank Key 也可留空。
-
-也可以把全局 Key 放在 `~/.cursor/canon-ledger/.env`。
-
-最小配置：
-
-```bash
-EMBED_BASE_URL=https://api-inference.modelscope.cn/v1
-EMBED_MODEL=Qwen/Qwen3-Embedding-8B
-EMBED_API_KEY=your_embed_api_key
-
-RERANK_BASE_URL=https://api.jina.ai/v1
-RERANK_MODEL=jina-reranker-v3
-RERANK_API_KEY=your_rerank_api_key
-```
-
-### 4.1 子代理模型（可选）
-
-写章用的 `context-agent` / `reviewer` / `data-agent`，以及拆书用的 `deconstruction-agent`，默认跟当前聊天同一个模型。
-
-要单独指定时，改书项目里的 `.canon-ledger/subagent-models.json`（新书初始化会生成；旧书可从插件 `templates/output/subagent-models.json` 复制）。也可以放一份到 `~/.cursor/canon-ledger/subagent-models.json`，作为所有书的默认。
-
-```json
-{
-  "default": "inherit",
-  "agents": {
-    "context-agent": "inherit",
-    "reviewer": "inherit",
-    "data-agent": "kimi-k3-max",
-    "deconstruction-agent": "inherit"
-  }
-}
-```
-
-`inherit` 或不写 = 不传 Task 的 `model`。填具体值时必须是 Cursor Task 当前允许的模型 id，不要用展示名。本轮对话里点名的模型优先于这个文件。
-
-查询当前生效配置：
-
-```bash
-python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" --project-root "<PROJECT_ROOT>" subagent-models --format json
-```
-
-### 5. 开始写
-
-按「产品使用逻辑」走：`/canon-ledger-plan 1` → `/canon-ledger-write 1`。需要时再 `/canon-ledger-review`、`/canon-ledger-confirm`、`/canon-ledger-query`、`/canon-ledger-dashboard`。
-
-## CLI
-
-所有命令行工具从 `scripts/canon_ledger.py` 进入：
-
-```bash
-python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" --project-root "<PROJECT_ROOT>" <子命令> [参数]
-```
-
-常用：`preflight`、`where`、`doctor`、`write-gate`、`chapter-commit`、`human-review`、`projections`、`subagent-models`。
-
-插件根定位：环境变量 `CANON_LEDGER_PLUGIN_ROOT` / `CURSOR_PLUGIN_ROOT`，或 `~/.cursor/plugins/local/canon-ledger`。Skill 统一执行受信引导脚本 `scripts/bootstrap_env.py`（内部复用 `scripts/export_cursor_env.py` 的清单校验），把其输出的固定六行数据协议逐行 `read` 赋值，不执行其输出，也不扫描缓存目录寻找脚本。所有 Skill 的引导代码块逐字一致，hooks 只放行与随包 SKILL.md 完全相同的引导块。
-
-## 产品边界与历史来源
-
-叙典采用自己的产品名、命令和数据空间：`/canon-ledger-*`、`scripts/canon_ledger.py`、`.canon-ledger/` 与 `CANON_LEDGER_*` 是唯一受支持的当前接口。本版本按独立产品发布，不提供旧插件命令、环境变量、运行目录或项目数据的迁移入口。
-
-代码最初从 [lingfengQAQ/webnovel-writer](https://github.com/lingfengQAQ/webnovel-writer) v6.2.1 导入，并继续按 GNU GPL v3 发布。当前产品不是该项目的官方发行版，也不跟踪其后续版本。派生范围、基线提交和主要修改见 [ATTRIBUTION.md](ATTRIBUTION.md)；许可与非官方关系声明见 [NOTICE.md](NOTICE.md)。
-
-测试中的剧情、章纲、文风指令和审查问题统一使用自然中文句子；JSON 字段、枚举、命令、路径、错误码与 agent 名等协议标识保留原值。
-
-## 版本
-
-| 版本 | 说明 |
-|------|------|
-| **v7.2.0 (当前)** | 堵住正史静默改写与前缀脱节；伏笔/关系必须有正文证据；同名新 ID 转人工；知识边界确认后「不该知道」可自动成 issue。 |
-| **v7.1.0** | 新增 /canon-ledger-confirm 对话式人工确认与 chapter-commit 重放；Skill 引导样板收敛为受信脚本 bootstrap_env.py。 |
-| **v7.0.2** | 收口残留的写法口径，保住含节奏/氛围/反转的设定事实。 |
-| **v7.0.1** | 仓库更名为 Splittinglv/canon-ledger，并明确生成式 AI 辅助开发说明。 |
-| **v7.0.0** | 更名为叙典 CanonLedger，启用独立命令、运行目录与产品身份。 |
-| **v6.2.2** | 长期一致性真源可重建、设定写回可验证；文风仍由作者或模型决定。 |
-| **v6.2.1** | 上游引擎 v6.2.1 的 Cursor 本地插件。只守事实一致性；文风只读 `设定集/文风提示词.md` 或按模型默认写。未上架官方商店。 |
-
-## 开源协议
-
-GNU GPL v3。见 [LICENSE](LICENSE)、[NOTICE.md](NOTICE.md)、[ATTRIBUTION.md](ATTRIBUTION.md) 与 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。项目发起、生成式 AI 辅助开发与历史贡献关系见 [AUTHORS.md](AUTHORS.md)。
+代码最初从 [lingfengQAQ/webnovel-writer](https://github.com/lingfengQAQ/webnovel-writer) v6.2.1 导入，并继续按 GNU GPL v3 发布。派生范围和基线见 [ATTRIBUTION.md](ATTRIBUTION.md)，非官方关系与许可声明见 [NOTICE.md](NOTICE.md) 和 [LICENSE](LICENSE)。

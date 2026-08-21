@@ -751,6 +751,14 @@ def init_project(
         + "\n",
     )
 
+    # New books enter the single Canon v3 write path before the first chapter.
+    # CURRENT points at an immutable empty genesis and the disposable projection
+    # is already bound to it, so the first prewrite gate has one authoritative
+    # workflow state. Existing projects use the explicit migration command.
+    from data_modules.canon_v3.service import CanonV3Service
+
+    CanonV3Service(project_path).initialize_new_project()
+
     # Git 初始化（仅当项目目录内尚无 .git 且 Git 可用）
     git_dir = project_path / ".git"
     if not git_dir.exists():
@@ -817,6 +825,7 @@ __pycache__/
     print(f"\nProject initialized at: {project_path}")
     print("Key files:")
     print(" - .canon-ledger/state.json")
+    print(" - .story-system/v3/CURRENT")
     print(" - .canon-ledger/subagent-models.json")
     print(" - 设定集/世界观.md")
     print(" - 设定集/力量体系.md")

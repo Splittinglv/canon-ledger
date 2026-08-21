@@ -573,8 +573,8 @@ def _has_validated_bootstrap_block(command: str) -> bool:
     """Match an exact shipped bootstrap block that runs ``bootstrap_env.py``.
 
     The hint-prefixed bootstrap may only run as the verbatim block shipped in
-    a SKILL.md code fence; any edited variant loses the exemption and falls
-    back to the strict path checks.
+    a Skill or its shared Canon v3 protocol; any edited variant loses the
+    exemption and falls back to the strict path checks.
     """
     candidate = command.strip()
     if "/scripts/bootstrap_env.py" not in candidate or "_PLUGIN_ROOT_HINT" not in candidate:
@@ -583,11 +583,14 @@ def _has_validated_bootstrap_block(command: str) -> bool:
         r"^```(?:bash|sh)\s*$\n(.*?)^```\s*$",
         re.MULTILINE | re.DOTALL,
     )
-    skills_root = Path(__file__).resolve().parents[1] / "skills"
+    plugin_root = Path(__file__).resolve().parents[1]
+    skills_root = plugin_root / "skills"
     try:
-        skill_paths = sorted(skills_root.glob("*/SKILL.md"))
-        for skill_path in skill_paths:
-            text = skill_path.read_text(encoding="utf-8")
+        shipped_paths = sorted(skills_root.glob("*/SKILL.md")) + [
+            plugin_root / "references" / "canon-v3-skill-protocol.md"
+        ]
+        for shipped_path in shipped_paths:
+            text = shipped_path.read_text(encoding="utf-8")
             for match in fence_pattern.finditer(text):
                 shipped = match.group(1).strip()
                 if (
@@ -1179,6 +1182,11 @@ def _command_mentions_protected_runtime(command: str) -> bool:
 
 
 def _looks_like_runtime_bypass(command: str, *, base_directory: Path) -> bool:
+    # The exact shipped bootstrap is a closed, reviewed capability bundle. It
+    # establishes variables inside the shell, so the pre-execution hook cannot
+    # validate its later `${SCRIPTS_DIR}` command from the parent environment.
+    if _has_validated_bootstrap_block(command):
+        return False
     # 规范守卫行是 skill 代码块的首行断链自检（: "${VAR:?...}"），对判定透明；
     # 仅剥离与随包文本逐字一致的行，改写过的变体不享受豁免、照常全文扫描。
     command = _strip_env_guard_lines(command)

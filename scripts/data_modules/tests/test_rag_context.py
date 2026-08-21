@@ -18,7 +18,11 @@ from data_modules.rag_context import empty_rag_assist, load_rag_assist
 from data_modules.vector_projection_writer import VectorProjectionWriter
 import data_modules.memory_contract_adapter as memory_contract_adapter_module
 import data_modules.rag_context as rag_context_module
-from .review_test_helpers import standard_review, write_current_chapter_contract
+from .review_test_helpers import (
+    inject_hard_evidence_quotes,
+    standard_review,
+    write_current_chapter_contract,
+)
 
 
 _RAG_ASSIST_KEYS = {
@@ -71,13 +75,33 @@ def _config(tmp_path: Path, *, embed_api_key: str = "") -> DataModulesConfig:
 
 
 def _trusted_commit(chapter: int = 3) -> dict:
+    source_event_id = f"medicine-owner-{chapter}"
     return {
         "meta": {"chapter": chapter, "status": "accepted"},
         "projection_status": {"vector": "done"},
         "extraction_result": {
-            "accepted_events": [],
+            "accepted_events": [
+                {
+                    "event_id": source_event_id,
+                    "chapter": chapter,
+                    "sequence": None,
+                    "verification": "supported",
+                    "event_type": "character_state_changed",
+                    "subject": "medicine_box",
+                    "payload": {
+                        "field": "owner",
+                        "new": "shopkeeper",
+                        "evidence_quote": "药箱的保管人变为掌柜。",
+                    },
+                }
+            ],
             "state_deltas": [
-                {"entity_id": "medicine_box", "field": "owner", "new": "shopkeeper"}
+                {
+                    "entity_id": "medicine_box",
+                    "field": "owner",
+                    "new": "shopkeeper",
+                    "source_event_id": source_event_id,
+                }
             ],
             "entity_deltas": [],
             "timeline_events": [],
@@ -94,10 +118,19 @@ def _write_trusted_commit(project_root: Path, chapter: int = 3) -> dict:
 
     chapter_file = project_root / "正文" / f"第{chapter:04d}章.md"
     chapter_file.parent.mkdir(parents=True, exist_ok=True)
-    if not chapter_file.exists():
-        chapter_file.write_text("阿青把药箱交给掌柜。", encoding="utf-8")
-    binding = build_chapter_binding(project_root, chapter)
+    chapter_text = (
+        chapter_file.read_text(encoding="utf-8")
+        if chapter_file.exists()
+        else "阿青把药箱交给掌柜。"
+    )
+    extraction, chapter_text = inject_hard_evidence_quotes(
+        _trusted_commit(chapter)["extraction_result"],
+        chapter=chapter,
+        chapter_text=chapter_text,
+    )
+    chapter_file.write_text(chapter_text, encoding="utf-8")
     write_current_chapter_contract(project_root, chapter)
+    binding = build_chapter_binding(project_root, chapter)
     service = ChapterCommitService(project_root)
     payload = service.build_commit(
         chapter=chapter,
@@ -111,7 +144,7 @@ def _write_trusted_commit(project_root: Path, chapter: int = 3) -> dict:
         },
         disambiguation_result={"pending": [], "chapter_binding": binding},
         extraction_result={
-            **_trusted_commit(chapter)["extraction_result"],
+            **extraction,
             "chapter_binding": binding,
         },
     )

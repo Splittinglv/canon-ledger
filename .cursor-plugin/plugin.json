@@ -1,7 +1,7 @@
 {
   "name": "canon-ledger",
-  "version": "7.2.0",
-  "description": "叙典 CanonLedger：长篇小说长期一致性引擎。默认只守设定、时间线、伏笔和章纲；文风由作者与模型自定义。",
+  "version": "8.0.0",
+  "description": "叙典 CanonLedger：只守长篇小说长期事实一致性；文风、文笔与章纲履约由作者和模型自由决定。",
   "author": {
     "name": "Splittinglv"
   },

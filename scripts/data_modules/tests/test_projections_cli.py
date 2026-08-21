@@ -73,8 +73,14 @@ def _make_rejected_commit(project_root: Path, chapter: int) -> None:
     payload = _build_bound_commit(
         service,
         chapter=chapter,
-        review_result={"blocking_count": 1},
-        fulfillment_result={"planned_nodes": [], "covered_nodes": [], "missed_nodes": [], "extra_nodes": []},
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": ["本章必须完成"],
+            "covered_nodes": [],
+            "missed_nodes": ["本章必须完成"],
+            "extra_nodes": [],
+            "enforcement": "strict",
+        },
         disambiguation_result={"pending": []},
         extraction_result={"state_deltas": [], "entity_deltas": [], "accepted_events": []},
     )

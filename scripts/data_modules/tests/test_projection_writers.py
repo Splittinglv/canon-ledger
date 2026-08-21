@@ -14,21 +14,35 @@ from data_modules.memory_projection_writer import MemoryProjectionWriter
 from data_modules.state_projection_writer import StateProjectionWriter
 from data_modules.summary_projection_writer import SummaryProjectionWriter
 from data_modules.vector_projection_writer import VectorProjectionWriter
-from .review_test_helpers import standard_review, write_current_chapter_contract
+from .review_test_helpers import (
+    inject_hard_evidence_quotes,
+    standard_review,
+    write_current_chapter_contract,
+)
 
 
 def _build_bound_commit(service: ChapterCommitService, **kwargs):
     chapter = int(kwargs["chapter"])
     chapter_path = service.project_root / "正文" / f"第{chapter:04d}章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
-    if not chapter_path.exists():
-        chapter_path.write_text(f"第{chapter}章测试正文\n", encoding="utf-8")
-    binding = build_chapter_binding(service.project_root, chapter)
+    chapter_text = (
+        chapter_path.read_text(encoding="utf-8")
+        if chapter_path.exists()
+        else f"第{chapter}章测试正文\n"
+    )
+    extraction, chapter_text = inject_hard_evidence_quotes(
+        kwargs["extraction_result"],
+        chapter=chapter,
+        chapter_text=chapter_text,
+    )
+    kwargs["extraction_result"] = extraction
+    chapter_path.write_text(chapter_text, encoding="utf-8")
     write_current_chapter_contract(
         service.project_root,
         chapter,
         planned_nodes=list(kwargs["fulfillment_result"].get("planned_nodes") or []),
     )
+    binding = build_chapter_binding(service.project_root, chapter)
     if "blocking_count" in kwargs["review_result"]:
         kwargs["review_result"] = standard_review(
             binding,

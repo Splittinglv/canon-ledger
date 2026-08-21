@@ -9,10 +9,15 @@ from pathlib import Path
 from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.chapter_content_binding import build_chapter_binding
 from data_modules.story_runtime_sources import load_runtime_sources
-from .review_test_helpers import standard_review
+from .review_test_helpers import inject_hard_evidence_quotes, standard_review
 
 
-def _write_runtime_contracts(project_root: Path, chapter: int) -> None:
+def _write_runtime_contracts(
+    project_root: Path,
+    chapter: int,
+    *,
+    planned_nodes: list[str] | None = None,
+) -> None:
     story_root = project_root / ".story-system"
     (story_root / "chapters").mkdir(parents=True, exist_ok=True)
     (story_root / "volumes").mkdir(parents=True, exist_ok=True)
@@ -34,7 +39,7 @@ def _write_runtime_contracts(project_root: Path, chapter: int) -> None:
                 "meta": {"contract_type": "CHAPTER_BRIEF", "chapter": chapter},
                 "chapter_directive": {
                     "goal": f"完成第{chapter}章的事实推进",
-                    "must_cover_nodes": [],
+                    "must_cover_nodes": list(planned_nodes or []),
                     "forbidden_zones": [],
                 },
             },
@@ -130,29 +135,42 @@ def test_load_runtime_sources_excludes_accepted_commit_after_prose_changes(tmp_p
 
 
 def test_load_runtime_sources_exposes_rejected_status_without_rejected_facts(tmp_path):
-    _write_runtime_contracts(tmp_path, chapter=3)
+    planned_node = "揭示未来秘密"
+    _write_runtime_contracts(tmp_path, chapter=3, planned_nodes=[planned_node])
     chapter_path = tmp_path / "正文" / "第0003章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
-    chapter_path.write_text("第3章被拒正文\n", encoding="utf-8")
+    extraction, chapter_text = inject_hard_evidence_quotes(
+        {
+            "accepted_events": [],
+            "state_deltas": [
+                {
+                    "entity_id": "future_secret",
+                    "field": "identity",
+                    "new": "spoiler",
+                }
+            ],
+            "entity_deltas": [],
+        },
+        chapter=3,
+        chapter_text="第3章被拒正文\n",
+    )
+    chapter_path.write_text(chapter_text, encoding="utf-8")
     binding = build_chapter_binding(tmp_path, 3)
     service = ChapterCommitService(tmp_path)
     rejected = service.build_commit(
         chapter=3,
-        review_result=standard_review(binding, blocking_count=1),
+        review_result=standard_review(binding),
         fulfillment_result={
-            "planned_nodes": [],
+            "planned_nodes": [planned_node],
             "covered_nodes": [],
-            "missed_nodes": [],
+            "missed_nodes": [planned_node],
             "extra_nodes": [],
+            "enforcement": "strict",
             "chapter_binding": binding,
         },
         disambiguation_result={"pending": [], "chapter_binding": binding},
         extraction_result={
-            "accepted_events": [],
-            "state_deltas": [
-                {"entity_id": "future_secret", "field": "identity", "new": "spoiler"}
-            ],
-            "entity_deltas": [],
+            **extraction,
             "chapter_binding": binding,
         },
     )

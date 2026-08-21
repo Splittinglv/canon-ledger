@@ -1,11 +1,6 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react'
 import { useDashboardContext } from '../App.jsx'
-import {
-    fetchEntities,
-    fetchRelationships,
-    fetchRelationshipEvents,
-    fetchStateChanges,
-} from '../api.js'
+import { fetchCanonCharacters } from '../api.js'
 import Badge from '../components/Badge.jsx'
 import ChartWrapper from '../components/ChartWrapper.jsx'
 import DataTable from '../components/DataTable.jsx'
@@ -250,7 +245,10 @@ export default function CharactersPage() {
     const [selected, setSelected] = useState(null)
     const [changes, setChanges] = useState([])
     const [playing, setPlaying] = useState(false)
-    const latestChapter = getLatestChapter(projectInfo)
+    const [canonBinding, setCanonBinding] = useState(null)
+    const [canonLatestChapter, setCanonLatestChapter] = useState(0)
+    const [canonError, setCanonError] = useState('')
+    const latestChapter = canonLatestChapter || getLatestChapter(projectInfo)
     const [graphChapter, setGraphChapter] = useState(latestChapter)
 
     useEffect(() => {
@@ -260,51 +258,41 @@ export default function CharactersPage() {
     useEffect(() => {
         let cancelled = false
 
-        Promise.allSettled([
-            fetchEntities(),
-            fetchRelationships({ limit: 1000 }),
-            fetchRelationshipEvents({ limit: 5000 }),
-        ]).then(results => {
-            if (cancelled) return
-
-            const entityRows = results[0].status === 'fulfilled' ? results[0].value : []
-            setEntities(entityRows)
-            setRelationships(results[1].status === 'fulfilled' ? results[1].value : [])
-            setRelationshipEvents(results[2].status === 'fulfilled' ? results[2].value : [])
-
-            if (entityRows.length) {
-                setSelected(current => current || entityRows[0])
-            }
-        })
+        fetchCanonCharacters()
+            .then(payload => {
+                if (cancelled) return
+                const entityRows = payload.entities || []
+                setEntities(entityRows)
+                setRelationships(payload.relationships || [])
+                setRelationshipEvents(payload.relationship_events || [])
+                setChanges(payload.state_changes || [])
+                setCanonBinding(payload.binding || null)
+                setCanonLatestChapter(Number(payload.latest_chapter) || 0)
+                setCanonError('')
+                if (entityRows.length) {
+                    setSelected(current => current || entityRows[0])
+                }
+            })
+            .catch(() => {
+                if (cancelled) return
+                setEntities([])
+                setRelationships([])
+                setRelationshipEvents([])
+                setChanges([])
+                setCanonBinding(null)
+                setCanonLatestChapter(0)
+                setCanonError('Canon 正史视图尚未就绪，请先完成初始化、迁移或投影重建。')
+            })
 
         return () => {
             cancelled = true
         }
     }, [refreshToken])
 
-    useEffect(() => {
-        if (!selected?.id) {
-            setChanges([])
-            return
-        }
-
-        let cancelled = false
-        fetchStateChanges({ entity: selected.id, limit: 30 })
-            .then(payload => {
-                if (!cancelled) {
-                    setChanges(payload)
-                }
-            })
-            .catch(() => {
-                if (!cancelled) {
-                    setChanges([])
-                }
-            })
-
-        return () => {
-            cancelled = true
-        }
-    }, [selected])
+    const selectedChanges = useMemo(
+        () => changes.filter(row => row.entity_id === selected?.id).slice(0, 30),
+        [changes, selected],
+    )
 
     const advanceGraphRef = useRef(null)
     advanceGraphRef.current = () => {
@@ -344,8 +332,19 @@ export default function CharactersPage() {
         <section className="dashboard-page">
             <header className="page-header">
                 <h2>角色图鉴</h2>
-                <Badge tone="green">{filteredEntities.length} / {entities.length} 个实体</Badge>
+                <div className="header-actions">
+                    {canonBinding ? (
+                        <Badge tone="blue">
+                            HEAD {String(canonBinding.head_hash || '').slice(0, 8)} · G{canonBinding.generation || 0}
+                        </Badge>
+                    ) : null}
+                    <Badge tone="green">{filteredEntities.length} / {entities.length} 个实体</Badge>
+                </div>
             </header>
+
+            {canonError ? (
+                <div className="empty-state compact"><p>{canonError}</p></div>
+            ) : null}
 
             <TypeFilter types={types} value={typeFilter} onChange={setTypeFilter} />
 
@@ -421,7 +420,7 @@ export default function CharactersPage() {
                                     <div className="section-label">STATE CHANGES</div>
                                     <div className="card-title">状态变化历史</div>
                                 </div>
-                                <Badge tone="amber">{changes.length} 条</Badge>
+                                <Badge tone="amber">{selectedChanges.length} 条</Badge>
                             </div>
                             <DataTable
                                 columns={[
@@ -437,7 +436,7 @@ export default function CharactersPage() {
                                         render: row => `${row.old_value ?? '—'} → ${row.new_value ?? '—'}`,
                                     },
                                 ]}
-                                rows={changes}
+                                rows={selectedChanges}
                                 rowKey={(row, index) => `${row.entity_id || 'entity'}-${row.chapter || 0}-${index}`}
                                 pageSize={6}
                                 emptyText="暂无状态变化记录"

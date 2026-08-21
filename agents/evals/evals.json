@@ -3,54 +3,80 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "审查第4章正文。chapter=4, chapter_file='正文/第0004章-迦南学院的考验.md', project_root='agents/evals/files/test-project', scripts_dir 为本插件的 scripts 目录。",
-      "expected_output": "输出结构化 JSON 问题清单，并对 5 个维度逐项给出结论（dimension_results）",
-      "files": [
-        "agents/evals/files/test-project/正文/第0004章-迦南学院的考验.md",
-        "agents/evals/files/test-project/.canon-ledger/state.json",
-        "agents/evals/files/test-project/.canon-ledger/summaries/ch0003.md",
-        "agents/evals/files/test-project/.canon-ledger/memory_scratchpad.json"
-      ],
+      "prompt": "对 exact candidate draft 做完整事实扫描；输入同时提供 chapter SHA、parent HEAD、active author axiom 和 entity registry digest。",
+      "expected_output": "严格 reviewer-output/v2 JSON，只含 observations、scan attestations 和 extraction completeness。",
+      "files": [],
       "expectations": [
-        "输出是合法 JSON，包含 issues 数组和 summary 字符串",
-        "包含 dimension_results，逐项覆盖 setting/timeline/continuity/character/logic 五个维度",
-        "每个维度的 conclusion 非空（无问题时为 pass）",
-        "每个 issue 的 category 属于 setting/timeline/continuity/character/logic 之一",
-        "每个 issue 都有 severity、category、location、description 字段",
-        "每个 issue 都有 evidence 字段且非空",
-        "没有输出 overall_score（reviewer 不评分）",
-        "没有输出 pass/fail 判定（reviewer 只列问题）",
-        "除 JSON 字段、固定枚举、路径和正文原样引用外，所有审查说明都使用自然中文，没有英文句子"
+        "不自行提取或修改 candidate",
+        "complete attestation 绑定 chapter、HEAD、axiom、registry 和全部 candidate digests",
+        "五维精确覆盖 setting/timeline/continuity/character/logic",
+        "不输出 issues、manual_checks、blocking_count、评分或 pass/fail"
       ]
     },
     {
       "id": 2,
-      "prompt": "审查第4章正文，检查设定一致性。chapter=4, chapter_file='正文/第0004章-迦南学院的考验.md', project_root='agents/evals/files/test-project', scripts_dir 为本插件的 scripts 目录。",
-      "expected_output": "识别出正文中萧炎使用了'吸力控制'（药老指导），这与设定一致；但不应报告虚假的设定冲突",
-      "files": [
-        "agents/evals/files/test-project/正文/第0004章-迦南学院的考验.md",
-        "agents/evals/files/test-project/.canon-ledger/state.json",
-        "agents/evals/files/test-project/设定集/世界观.md"
-      ],
+      "prompt": "正文与 exact prior custody 事实不能同时成立：同一 canonical item 的持有人无交接地从甲变成乙。",
+      "expected_output": "输出 confirmed_conflict，并引用本章逐字证据和 exact prior fact digest。",
+      "files": [],
       "expectations": [
-        "输出是合法 JSON",
-        "不会把萧炎的斗者九星报告为设定冲突（与 state.json 一致）",
-        "不会虚构 state.json 中不存在的信息来报告问题",
-        "除 JSON 字段、固定枚举、路径和正文原样引用外，所有审查说明都使用自然中文，没有英文句子"
+        "observation kind=confirmed_conflict",
+        "prior_fact_digests 非空且指向 custody prior",
+        "不把确定冲突降级为低概率猜测",
+        "reviewer 不直接决定 rewrite 或写队列"
       ]
     },
     {
       "id": 3,
-      "prompt": "审查第4章正文，检查连贯性。chapter=4, chapter_file='正文/第0004章-迦南学院的考验.md', project_root='agents/evals/files/test-project', scripts_dir 为本插件的 scripts 目录。上一章摘要在 .canon-ledger/summaries/ch0003.md。",
-      "expected_output": "检查与上章的衔接，上章结尾在迦南学院演武场、黄昏，本章开头在'晨光'；若正文没有过夜或转场说明，应写入 manual_checks 交作者确认，不得在缺少不能同时成立的证据时输出 blocking issue",
-      "files": [
-        "agents/evals/files/test-project/正文/第0004章-迦南学院的考验.md",
-        "agents/evals/files/test-project/.canon-ledger/summaries/ch0003.md"
-      ],
+      "prompt": "核心角色在正文明确证据下永久失明，与旧事实不冲突。",
+      "expected_output": "不伪造冲突，但产生核心永久状态 checkpoint observation。",
+      "files": [],
       "expectations": [
-        "输出是合法 JSON",
-        "黄昏接到晨光若缺少过夜或转场说明，应写入 timeline 或 continuity 的 manual_checks，不得因此输出 blocking issue",
-        "除 JSON 字段、固定枚举、路径和正文原样引用外，所有审查说明都使用自然中文，没有英文句子"
+        "包含 checkpoint observation",
+        "不输出 confirmed_conflict",
+        "最终人工级别仍由 compiler policy 取最强值"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "某角色看了一眼门；只有极低概率猜测他知道门后秘密，正文没有使用该秘密，也没有 information slot 或证据锚点。",
+      "expected_output": "忽略无锚点低概率猜测。",
+      "files": [],
+      "expectations": [
+        "不生成 ambiguity、checkpoint 或 advisory observation",
+        "不因此阻止 complete scan"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "句子很长、修辞华丽、节奏慢、对白不口语，但所有长期事实一致。",
+      "expected_output": "文风和文笔完全排除在事实扫描外。",
+      "files": [],
+      "expectations": [
+        "不生成 style/prose observation",
+        "不给文风修改建议",
+        "事实五维仍可 complete"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "正文明确发生了一个会影响后文的长期事实，但 exact candidate draft 未包含它。",
+      "expected_output": "报告 extraction_incomplete，不签 complete attestation。",
+      "files": [],
+      "expectations": [
+        "extraction_incomplete 非空",
+        "scan_attestations 不包含 status=complete",
+        "要求 data-agent 重新 extract，不能静默丢失事实"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "对历史章节范围做 audit；输入包含各章当时的 parent HEAD。",
+      "expected_output": "输出 HEAD-bound audit observations，不生成可确认队列或 STAGING。",
+      "files": [],
+      "expectations": [
+        "每章只使用对应 as-of prior，不读取未来事实",
+        "结果明确是 audit-only",
+        "不调用 prepare/decide/finalize"
       ]
     }
   ]

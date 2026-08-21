@@ -116,18 +116,20 @@ def _eval_write_blocking_gate(root: Path, case: dict[str, Any]) -> dict[str, Any
     path = _plugin_root(root) / "skills" / "canon-ledger-write" / "SKILL.md"
     text = _read(path)
     required = [
-        "blocking=true",
-        "write-gate --chapter {chapter_num} --stage prewrite",
-        "write-gate --chapter {chapter_num} --stage precommit",
-        "write-gate --chapter {chapter_num} --stage postcommit",
-        "chapter-commit",
+        "state == ready",
+        "can_write_next == true",
+        "--stage prewrite",
+        "--stage precommit",
+        "postcommit gate",
+        "expected_stage_digest",
+        "finalize_token",
     ]
     missing = [item for item in required if item not in text]
-    precommit_pos = text.find("write-gate --chapter {chapter_num} --stage precommit")
-    commit_pos = text.find("chapter-commit")
+    precommit_pos = text.find("--stage precommit")
+    commit_pos = text.rfind("执行 exact finalize")
     ordering_ok = precommit_pos >= 0 and commit_pos >= 0 and precommit_pos < commit_pos
     if not ordering_ok:
-        missing.append("提交前闸门必须位于 chapter-commit 之前")
+        missing.append("提交前闸门必须位于 canon-v3 finalize 之前")
     return _result(
         case,
         passed=not missing,
@@ -140,10 +142,11 @@ def _eval_data_agent_boundary(root: Path, case: dict[str, Any]) -> dict[str, Any
     path = _plugin_root(root) / "agents" / "data-agent.md"
     text = _read(path)
     required = [
-        "三份 JSON",
-        "`.canon-ledger/tmp/`",
-        "不直接写 state/index/summaries/memory",
-        "chapter-commit",
+        "`.canon-ledger/tmp/canon_v3_proposal.json`",
+        "`canon-v3/proposal-batch/v2`",
+        "不是正史写入者",
+        "每个 source 都必须被 support map 至少一个字段使用",
+        "不得写 delta、人工队列或正史",
     ]
     missing = [item for item in required if item not in text]
     forbidden_patterns = [
@@ -155,7 +158,7 @@ def _eval_data_agent_boundary(root: Path, case: dict[str, Any]) -> dict[str, Any
     return _result(
         case,
         passed=not missing and not forbidden,
-        reason="data-agent 只负责生成产物，职责边界符合预期。" if not missing and not forbidden else "data-agent 职责边界发生偏移。",
+        reason="data-agent 只负责生成 v3 事实提议，职责边界符合预期。" if not missing and not forbidden else "data-agent 职责边界发生偏移。",
         evidence=missing + forbidden or [str(path.relative_to(root))],
     )
 
@@ -163,29 +166,28 @@ def _eval_data_agent_boundary(root: Path, case: dict[str, Any]) -> dict[str, Any
 def _eval_artifact_ownership(root: Path, case: dict[str, Any]) -> dict[str, Any]:
     plugin_root = _plugin_root(root)
     write_text = _read(plugin_root / "skills" / "canon-ledger-write" / "SKILL.md")
-    review_text = _read(plugin_root / "skills" / "canon-ledger-review" / "SKILL.md")
     reviewer_tools = _frontmatter(_read(plugin_root / "agents" / "reviewer.md")).get("tools", "")
     data_tools = _frontmatter(_read(plugin_root / "agents" / "data-agent.md")).get("tools", "")
     missing: list[str] = []
     if "Write" in reviewer_tools:
-        missing.append("reviewer 不应持 Write（review_results.json 由主流程落盘）")
+        missing.append("reviewer 不应持 Write（canon_v3_review.json 由主流程落盘）")
     if "Write" not in data_tools:
-        missing.append("data-agent 应持 Write（它是 tmp artifact 的唯一写入者）")
-    for text, owner in ((write_text, "canon-ledger-write"), (review_text, "canon-ledger-review")):
-        if "主流程" not in text or ".canon-ledger/tmp/review_results.json" not in text:
-            missing.append(f"{owner}: 缺 reviewer→主流程落盘 review_results.json 的所有权说明")
-    for item in (
-        "唯一写入者",
-        "主流程只检查文件存在与 schema",
-        "不直接写 state/index/summaries/memory/vectors/projection",
+        missing.append("data-agent 应持 Write（它是 canon_v3_proposal.json 的写入者）")
+    data_text = _read(plugin_root / "agents" / "data-agent.md")
+    reviewer_text = _read(plugin_root / "agents" / "reviewer.md")
+    for item, haystack in (
+        (".canon-ledger/tmp/canon_v3_proposal.json", data_text),
+        ("不得修改候选、写人工队列", reviewer_text),
+        ("reviewer", write_text),
+        ("data-agent phase=assemble", write_text),
     ):
-        if item not in write_text:
-            missing.append(f"canon-ledger-write 缺写入所有权红线：{item}")
+        if item not in haystack:
+            missing.append(f"缺写入所有权红线：{item}")
     return _result(
         case,
         passed=not missing,
         reason="产物写入权与工具及提示词一致。" if not missing else "产物写入权发生偏移。",
-        evidence=missing or ["reviewer→主流程 review_results.json；data-agent→tmp artifacts"],
+        evidence=missing or ["reviewer→主流程 canon_v3_review.json；data-agent→canon_v3_proposal.json"],
     )
 
 
@@ -213,7 +215,7 @@ def _eval_commit_projection_runtime(root: Path, case: dict[str, Any]) -> dict[st
                 },
                 "chapter_directive": {
                     "goal": "验证阻断提交仍能驱动状态投影",
-                    "must_cover_nodes": [],
+                    "must_cover_nodes": ["完成关键事实节点"],
                     "forbidden_zones": [],
                 },
             },
@@ -222,12 +224,13 @@ def _eval_commit_projection_runtime(root: Path, case: dict[str, Any]) -> dict[st
         service = ChapterCommitService(project_root)
         payload = service.build_commit(
             chapter=1,
-            review_result=_review_artifact(binding, blocking=True),
+            review_result=_review_artifact(binding, blocking=False),
             fulfillment_result={
-                "planned_nodes": [],
+                "planned_nodes": ["完成关键事实节点"],
                 "covered_nodes": [],
-                "missed_nodes": [],
+                "missed_nodes": ["完成关键事实节点"],
                 "extra_nodes": [],
+                "enforcement": "strict",
                 "chapter_binding": binding,
             },
             disambiguation_result={"pending": [], "chapter_binding": binding},

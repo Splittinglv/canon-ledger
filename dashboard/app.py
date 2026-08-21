@@ -11,7 +11,7 @@ import sys
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager, closing
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -249,6 +249,197 @@ def _projection_status_for_commit(project_root: Path, chapter: int, commit_paylo
     return commit_payload.get("projection_status") or {}, "commit", {}
 
 
+def _canon_dashboard_view() -> dict[str, Any]:
+    """Build one disposable dashboard view from an exact fresh Canon HEAD."""
+
+    from data_modules.canonical_history import load_canonical_history
+    from data_modules.workflow_authority import (
+        CanonReadModelUnavailable,
+        WorkflowAuthority,
+    )
+
+    authority = WorkflowAuthority(_get_project_root())
+    try:
+        workflow, projection = authority.require_fresh_projection()
+    except CanonReadModelUnavailable as exc:
+        workflow = authority.snapshot()
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "canon_v3_read_model_unavailable",
+                "message": str(exc),
+                "workflow": workflow,
+            },
+        ) from exc
+    latest = int(workflow.get("latest_chapter") or 0)
+    history = load_canonical_history(_get_project_root(), latest)
+    post_read_workflow = authority.snapshot()
+    if post_read_workflow.get("workflow_digest") != workflow.get("workflow_digest"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "canon_v3_workflow_changed_during_dashboard_read",
+                "workflow": post_read_workflow,
+            },
+        )
+    if history.invalid_sources:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "canon_v3_compatibility_view_invalid",
+                "invalid_sources": list(history.invalid_sources),
+                "workflow": workflow,
+            },
+        )
+    return {
+        "workflow": workflow,
+        "projection": projection,
+        "history": history,
+        "binding": dict(projection.get("binding") or {}),
+    }
+
+
+def _bound_items(view: dict[str, Any], items: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "binding": dict(view["binding"]),
+        "source": "canon_v3_head",
+        "items": items,
+    }
+
+
+def _dashboard_entities(view: dict[str, Any]) -> list[dict[str, Any]]:
+    history = view["history"]
+    protagonist = str(
+        ((history.initial_canon.get("protagonist") or {}).get("name") or "")
+    )
+    rows: list[dict[str, Any]] = []
+    for stable_id, raw in sorted(history.entities.items()):
+        if not isinstance(raw, dict):
+            continue
+        entity_id = str(raw.get("id") or stable_id)
+        name = str(raw.get("name") or entity_id)
+        attributes = raw.get("attributes") if isinstance(raw.get("attributes"), dict) else {}
+        rows.append(
+            {
+                "id": entity_id,
+                "canonical_name": name,
+                "type": str(raw.get("type") or "实体"),
+                "namespace": str(raw.get("namespace") or "actor"),
+                "tier": str(raw.get("tier") or ""),
+                "aliases": [str(item) for item in raw.get("aliases") or []],
+                "first_appearance": int(raw.get("first_appearance") or 0),
+                "last_appearance": int(raw.get("last_appearance") or 0),
+                "desc": str(raw.get("desc") or raw.get("description") or ""),
+                "current_json": json.dumps(attributes, ensure_ascii=False, sort_keys=True),
+                "is_archived": 0,
+                "is_protagonist": bool(protagonist and name == protagonist),
+            }
+        )
+    rows.sort(key=lambda row: (-int(row["last_appearance"]), row["id"]))
+    return rows
+
+
+def _entity_id_lookup(view: dict[str, Any]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for row in _dashboard_entities(view):
+        for value in (row["id"], row["canonical_name"], *(row.get("aliases") or [])):
+            token = str(value or "").strip()
+            if token and token not in lookup:
+                lookup[token] = row["id"]
+    return lookup
+
+
+def _relationship_row(
+    raw: dict[str, Any],
+    lookup: dict[str, str],
+) -> dict[str, Any] | None:
+    claim = raw.get("claim") if isinstance(raw.get("claim"), dict) else raw.get("payload")
+    claim = claim if isinstance(claim, dict) else {}
+    kind = str(claim.get("kind") or raw.get("category") or "")
+    if kind not in {"relationship", "relationship_changed"}:
+        return None
+    subject = str(
+        claim.get("subject")
+        or raw.get("subject")
+        or raw.get("from_entity")
+        or ""
+    )
+    object_name = str(
+        claim.get("object")
+        or raw.get("object")
+        or raw.get("to_entity")
+        or raw.get("field")
+        or ""
+    )
+    if not subject or not object_name:
+        return None
+    relation = str(
+        claim.get("after")
+        or claim.get("relationship")
+        or claim.get("state")
+        or raw.get("value")
+        or "关联"
+    )
+    return {
+        "id": str(raw.get("fact_digest") or raw.get("id") or raw.get("effect_id") or ""),
+        "from_entity": lookup.get(subject, subject),
+        "to_entity": lookup.get(object_name, object_name),
+        "type": relation,
+        "event_type": "relationship_changed",
+        "description": relation,
+        "chapter": int(raw.get("chapter") or raw.get("source_chapter") or 0),
+        "revision": int(raw.get("revision") or 0),
+    }
+
+
+def _dashboard_state_changes(
+    view: dict[str, Any],
+    *,
+    entity: str | None = None,
+) -> list[dict[str, Any]]:
+    lookup = _entity_id_lookup(view)
+    rows: list[dict[str, Any]] = []
+    for raw in view["history"].state_changes:
+        if not isinstance(raw, dict):
+            continue
+        claim = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
+        kind = str(claim.get("kind") or raw.get("category") or "")
+        if kind not in {
+            "character_state",
+            "character_state_changed",
+            "power_breakthrough",
+        }:
+            continue
+        subject = str(
+            claim.get("subject")
+            or raw.get("subject")
+            or raw.get("entity_id")
+            or ""
+        )
+        entity_id = lookup.get(subject, subject)
+        if entity and entity_id != entity:
+            continue
+        rows.append(
+            {
+                "id": str(raw.get("fact_digest") or raw.get("id") or ""),
+                "entity_id": entity_id,
+                "field": str(
+                    claim.get("canonical_field")
+                    or claim.get("attribute")
+                    or claim.get("system")
+                    or raw.get("field")
+                    or "state"
+                ),
+                "old_value": claim.get("before", raw.get("old_value")),
+                "new_value": claim.get("after", raw.get("value")),
+                "chapter": int(raw.get("source_chapter") or raw.get("chapter") or 0),
+                "revision": int(raw.get("revision") or 0),
+            }
+        )
+    rows.sort(key=lambda row: (-row["chapter"], row["id"]))
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # 应用工厂
 # ---------------------------------------------------------------------------
@@ -291,15 +482,107 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
 
     @app.get("/api/project/info")
     def project_info():
-        """返回 state.json 完整内容（只读）。"""
-        return _load_state_payload(required=True)
+        """Return project metadata while keeping legacy facts advisory-only."""
+
+        from data_modules.workflow_authority import WorkflowAuthority
+
+        raw = _load_state_payload(required=True)
+        workflow = WorkflowAuthority(_get_project_root()).snapshot()
+        factual_keys = {
+            "protagonist_state",
+            "plot_threads",
+            "chapter_meta",
+            "relationships",
+            "entities",
+        }
+        payload = {key: value for key, value in raw.items() if key not in factual_keys}
+        payload["legacy_advisory"] = {
+            key: raw[key] for key in factual_keys if key in raw
+        }
+        progress = payload.get("progress") if isinstance(payload.get("progress"), dict) else {}
+        progress = dict(progress)
+        if workflow.get("latest_chapter") is not None:
+            progress["current_chapter"] = int(workflow.get("latest_chapter") or 0)
+        payload["progress"] = progress
+        payload["canon_binding"] = {
+            "head_hash": workflow.get("head_hash"),
+            "generation": int(workflow.get("generation") or 0),
+        }
+        payload["workflow"] = workflow
+        return payload
 
     @app.get("/api/story-runtime/health")
     def story_runtime_health():
         return _build_story_runtime_health_report(_get_project_root())
 
+    @app.get("/api/canon-v3/workflow")
+    def canon_v3_workflow():
+        """Return the same v3 snapshot used by CLI, reports, and write gates."""
+        from data_modules.workflow_authority import WorkflowAuthority
+
+        return WorkflowAuthority(_get_project_root()).snapshot()
+
+    @app.get("/api/canon-v3/history")
+    def canon_v3_history():
+        return _canon_dashboard_view()["projection"]
+
+    @app.get("/api/canon-v3/facts")
+    def canon_v3_facts(
+        family: Optional[str] = None,
+        include_history: bool = False,
+    ):
+        """Return active or historical facts from one exact HEAD binding."""
+
+        view = _canon_dashboard_view()
+        source_rows = (
+            view["projection"].get("history")
+            if include_history
+            else view["projection"].get("facts")
+        ) or []
+        rows = [dict(item) for item in source_rows if isinstance(item, dict)]
+        if family:
+            rows = [
+                row
+                for row in rows
+                if str((row.get("claim") or {}).get("kind") or "") == family
+            ]
+        payload = _bound_items(view, rows)
+        payload["view"] = "history" if include_history else "active"
+        return payload
+
+    @app.get("/api/canon-v3/characters")
+    def canon_v3_characters():
+        """Return the entire character fact page from one atomic view."""
+
+        view = _canon_dashboard_view()
+        lookup = _entity_id_lookup(view)
+        relationships = [
+            normalized
+            for raw in view["history"].canonical_facts
+            if isinstance(raw, dict)
+            and (normalized := _relationship_row(raw, lookup)) is not None
+        ]
+        relationship_events = [
+            normalized
+            for raw in view["projection"].get("history") or []
+            if isinstance(raw, dict)
+            and (normalized := _relationship_row(raw, lookup)) is not None
+        ]
+        relationships.sort(key=lambda row: (-row["chapter"], row["id"]))
+        relationship_events.sort(key=lambda row: (-row["chapter"], row["id"]))
+        return {
+            "binding": dict(view["binding"]),
+            "source": "canon_v3_head",
+            "latest_chapter": int(view["workflow"].get("latest_chapter") or 0),
+            "entities": _dashboard_entities(view),
+            "relationships": relationships,
+            "relationship_events": relationship_events,
+            "state_changes": _dashboard_state_changes(view),
+        }
+
     # ===========================================================
-    # API：实体数据库（index.db 只读查询）
+    # API：HEAD-bound Canon 事实视图。index.db 仅保留分析/旧数据用途，
+    # 不再驱动人物、关系、状态或章节事实页面。
     # ===========================================================
 
     def _get_db() -> sqlite3.Connection:
@@ -320,49 +603,55 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
                 return []
             raise HTTPException(status_code=500, detail=f"数据库查询失败: {exc}") from exc
 
-    @app.get("/api/entities")
+    @app.get("/api/canon-v3/entities")
+    @app.get("/api/entities", include_in_schema=False)
     def list_entities(
         entity_type: Optional[str] = Query(None, alias="type"),
         include_archived: bool = False,
     ):
-        """列出所有实体（可按类型过滤）。"""
-        with closing(_get_db()) as conn:
-            q = "SELECT * FROM entities"
-            params: list = []
-            clauses: list[str] = []
-            if entity_type:
-                clauses.append("type = ?")
-                params.append(entity_type)
-            if not include_archived:
-                clauses.append("is_archived = 0")
-            if clauses:
-                q += " WHERE " + " AND ".join(clauses)
-            q += " ORDER BY last_appearance DESC"
-            rows = conn.execute(q, params).fetchall()
-            return [dict(r) for r in rows]
+        """列出 exact HEAD 中的实体（可按类型过滤）。"""
+        view = _canon_dashboard_view()
+        rows = _dashboard_entities(view)
+        if entity_type:
+            rows = [row for row in rows if row.get("type") == entity_type]
+        if not include_archived:
+            rows = [row for row in rows if not row.get("is_archived")]
+        return _bound_items(view, rows)
 
     @app.get("/api/entities/{entity_id}")
     def get_entity(entity_id: str):
-        with closing(_get_db()) as conn:
-            row = conn.execute("SELECT * FROM entities WHERE id = ?", (entity_id,)).fetchone()
-            if not row:
-                raise HTTPException(404, "实体不存在")
-            return dict(row)
+        view = _canon_dashboard_view()
+        row = next(
+            (item for item in _dashboard_entities(view) if item["id"] == entity_id),
+            None,
+        )
+        if row is None:
+            raise HTTPException(404, "实体不存在")
+        return {
+            "binding": dict(view["binding"]),
+            "source": "canon_v3_head",
+            "item": row,
+        }
 
-    @app.get("/api/relationships")
+    @app.get("/api/canon-v3/relationships")
+    @app.get("/api/relationships", include_in_schema=False)
     def list_relationships(entity: Optional[str] = None, limit: int = 200):
-        with closing(_get_db()) as conn:
-            if entity:
-                rows = conn.execute(
-                    "SELECT * FROM relationships WHERE from_entity = ? OR to_entity = ? ORDER BY chapter DESC LIMIT ?",
-                    (entity, entity, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM relationships ORDER BY chapter DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
-            return [dict(r) for r in rows]
+        view = _canon_dashboard_view()
+        lookup = _entity_id_lookup(view)
+        rows = [
+            normalized
+            for raw in view["history"].canonical_facts
+            if isinstance(raw, dict)
+            and (normalized := _relationship_row(raw, lookup)) is not None
+        ]
+        if entity:
+            rows = [
+                row
+                for row in rows
+                if entity in {row["from_entity"], row["to_entity"]}
+            ]
+        rows.sort(key=lambda row: (-row["chapter"], row["id"]))
+        return _bound_items(view, rows[: max(0, int(limit))])
 
     @app.get("/api/relationship-events")
     def list_relationship_events(
@@ -371,49 +660,71 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         to_chapter: Optional[int] = None,
         limit: int = 200,
     ):
-        with closing(_get_db()) as conn:
-            q = "SELECT * FROM relationship_events"
-            params: list = []
-            clauses: list[str] = []
-            if entity:
-                clauses.append("(from_entity = ? OR to_entity = ?)")
-                params.extend([entity, entity])
-            if from_chapter is not None:
-                clauses.append("chapter >= ?")
-                params.append(from_chapter)
-            if to_chapter is not None:
-                clauses.append("chapter <= ?")
-                params.append(to_chapter)
-            if clauses:
-                q += " WHERE " + " AND ".join(clauses)
-            q += " ORDER BY chapter DESC, id DESC LIMIT ?"
-            params.append(limit)
-            rows = conn.execute(q, params).fetchall()
-            return [dict(r) for r in rows]
+        view = _canon_dashboard_view()
+        lookup = _entity_id_lookup(view)
+        rows = [
+            normalized
+            for raw in view["projection"].get("history") or []
+            if isinstance(raw, dict)
+            and (normalized := _relationship_row(raw, lookup)) is not None
+        ]
+        if entity:
+            rows = [
+                row
+                for row in rows
+                if entity in {row["from_entity"], row["to_entity"]}
+            ]
+        if from_chapter is not None:
+            rows = [row for row in rows if row["chapter"] >= from_chapter]
+        if to_chapter is not None:
+            rows = [row for row in rows if row["chapter"] <= to_chapter]
+        rows.sort(key=lambda row: (-row["chapter"], row["id"]))
+        return _bound_items(view, rows[: max(0, int(limit))])
 
     @app.get("/api/chapters")
     def list_chapters():
-        with closing(_get_db()) as conn:
-            rows = conn.execute("SELECT * FROM chapters ORDER BY chapter ASC").fetchall()
-            normalized = []
-            for row in rows:
-                item = dict(row)
-                item["characters"] = _parse_json_value(item.get("characters"), [])
-                normalized.append(item)
-            return normalized
+        view = _canon_dashboard_view()
+        rows = [
+            {
+                "chapter": int(item.get("chapter") or 0),
+                "revision": int(item.get("revision") or 0),
+                "commit_hash": str(item.get("commit_hash") or ""),
+                "transaction_hash": str(item.get("transaction_hash") or ""),
+                "characters": [],
+                "title": "",
+                "summary": "",
+            }
+            for item in view["projection"].get("chapters") or []
+            if isinstance(item, dict)
+        ]
+        rows.sort(key=lambda row: row["chapter"])
+        return _bound_items(view, rows)
 
     @app.get("/api/scenes")
     def list_scenes(chapter: Optional[int] = None, limit: int = 500):
-        with closing(_get_db()) as conn:
-            if chapter is not None:
-                rows = conn.execute(
-                    "SELECT * FROM scenes WHERE chapter = ? ORDER BY scene_index ASC", (chapter,)
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM scenes ORDER BY chapter ASC, scene_index ASC LIMIT ?", (limit,)
-                ).fetchall()
-            return [dict(r) for r in rows]
+        view = _canon_dashboard_view()
+        rows: list[dict[str, Any]] = []
+        for index, raw in enumerate(view["projection"].get("history") or [], start=1):
+            if not isinstance(raw, dict):
+                continue
+            claim = raw.get("claim") if isinstance(raw.get("claim"), dict) else {}
+            if claim.get("kind") != "presence_observed":
+                continue
+            source_chapter = int(raw.get("chapter") or 0)
+            if chapter is not None and source_chapter != int(chapter):
+                continue
+            rows.append(
+                {
+                    "id": str(raw.get("fact_digest") or raw.get("effect_id") or ""),
+                    "chapter": source_chapter,
+                    "scene_index": int(claim.get("scene_index") or index),
+                    "entity_id": str(claim.get("subject") or ""),
+                    "location": str(claim.get("location") or ""),
+                    "presence": str(claim.get("presence") or ""),
+                }
+            )
+        rows.sort(key=lambda row: (row["chapter"], row["scene_index"], row["id"]))
+        return _bound_items(view, rows[: max(0, int(limit))])
 
     @app.get("/api/reading-power")
     def list_reading_power(limit: int = 50):
@@ -440,21 +751,22 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
 
     @app.get("/api/stats/chapter-trend")
     def chapter_trend(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
+        from data_modules.workflow_authority import WorkflowAuthority
+
+        workflow = WorkflowAuthority(_get_project_root()).snapshot()
+        cutover = int(workflow.get("cutover_chapter") or 0)
+        active_chapters = {
+            *range(1, cutover + 1),
+            *(int(value) for value in workflow.get("active_chapters") or []),
+        }
         state = _load_state_payload()
         strand_map = _build_strand_map(state)
 
-        with closing(_get_db()) as conn:
-            total_rows = _fetchall_safe(conn, "SELECT COUNT(*) AS count FROM chapters")
-            latest_rows = _fetchall_safe(conn, "SELECT MAX(chapter) AS chapter FROM chapters")
-            rows = _fetchall_safe(
-                conn,
-                """
-                WITH selected_chapters AS (
-                    SELECT chapter, title, location, word_count, characters, summary
-                    FROM chapters
-                    ORDER BY chapter DESC
-                    LIMIT ? OFFSET ?
-                )
+        if (_canon_ledger_dir() / "index.db").is_file():
+            with closing(_get_db()) as conn:
+                rows = _fetchall_safe(
+                    conn,
+                    """
                 SELECT
                     c.chapter,
                     c.title,
@@ -466,47 +778,104 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
                     rp.override_count,
                     rp.debt_balance,
                     rm.severity_counts
-                FROM selected_chapters c
+                FROM chapters c
                 LEFT JOIN chapter_reading_power rp ON rp.chapter = c.chapter
                 LEFT JOIN review_metrics rm ON rm.end_chapter = c.chapter
                 ORDER BY c.chapter ASC
                 """,
-                (limit, offset),
-            )
+                )
+        else:
+            rows = []
 
         items = []
         for row in rows:
             chapter = int(row.get("chapter") or 0)
+            if chapter not in active_chapters:
+                continue
             items.append(
                 {
                     "chapter": chapter,
                     "title": row.get("title") or "",
-                    "location": row.get("location") or "",
                     "word_count": int(row.get("word_count") or 0),
-                    "characters": _parse_json_value(row.get("characters"), []),
-                    "summary": row.get("summary") or "",
+                    "location": "",
+                    "characters": [],
+                    "summary": "",
                     "review_severity_counts": _parse_json_value(row.get("severity_counts"), {}),
                     "is_transition": bool(row.get("is_transition")),
                     "override_count": int(row.get("override_count") or 0),
                     "debt_balance": float(row.get("debt_balance") or 0.0),
                     "strand": strand_map.get(chapter, ""),
                     "volume": _resolve_volume_for_chapter(state, chapter),
+                    "legacy_advisory": {
+                        "location": row.get("location") or "",
+                        "characters": _parse_json_value(row.get("characters"), []),
+                        "summary": row.get("summary") or "",
+                    },
                 }
             )
 
         return {
-            "items": items,
-            "total": int(total_rows[0]["count"] or 0) if total_rows else 0,
-            "latest_chapter": int(latest_rows[0]["chapter"] or 0) if latest_rows else 0,
+            "binding": {
+                "head_hash": workflow.get("head_hash"),
+                "generation": int(workflow.get("generation") or 0),
+            },
+            "source": "canon_v3_head_with_legacy_analytics",
+            "items": items[offset : offset + limit],
+            "total": len(items),
+            "latest_chapter": int(workflow.get("latest_chapter") or 0),
             "limit": limit,
             "offset": offset,
         }
 
     @app.get("/api/commits")
     def list_commits(limit: int = Query(20, ge=1, le=200)):
+        from data_modules.workflow_authority import WorkflowAuthority
+
+        workflow = WorkflowAuthority(_get_project_root()).snapshot()
+        binding = {
+            "head_hash": workflow.get("head_hash"),
+            "generation": int(workflow.get("generation") or 0),
+        }
+        if workflow.get("head_hash"):
+            from data_modules.canon_v3.projection import projection_is_fresh
+            from data_modules.canon_v3.repository import CanonV3Repository
+
+            repository = CanonV3Repository(_get_project_root())
+            fresh = projection_is_fresh(_get_project_root())
+            items = []
+            for commit_hash, payload in repository.current_commits():
+                items.append(
+                    {
+                        "chapter": int(payload.get("chapter") or 0),
+                        "revision": int(payload.get("revision") or 0),
+                        "status": "accepted",
+                        "projection_status": {"canon": "done" if fresh else "pending"},
+                        "projection_source": "canon_v3_head",
+                        "projection_run": {},
+                        "write_fact_role": "canon_v3_immutable_commit",
+                        "contract_refs": {},
+                        "path": f"v3/commits/{commit_hash}.json",
+                        "updated_at": "",
+                    }
+                )
+            items.sort(key=lambda item: item["chapter"], reverse=True)
+            return {
+                "binding": binding,
+                "source": "canon_v3_head",
+                "items": items[:limit],
+                "total": len(items),
+                "limit": limit,
+            }
         commits_dir = _story_system_dir() / "commits"
         if not commits_dir.is_dir():
-            return {"items": [], "total": 0, "limit": limit}
+            return {
+                "binding": binding,
+                "source": "legacy_read_only",
+                "workflow_digest": workflow.get("workflow_digest"),
+                "items": [],
+                "total": 0,
+                "limit": limit,
+            }
 
         items = []
         for path in commits_dir.glob("chapter_*.commit.json"):
@@ -540,7 +909,14 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
             )
 
         items.sort(key=lambda item: item["chapter"], reverse=True)
-        return {"items": items[:limit], "total": len(items), "limit": limit}
+        return {
+            "binding": binding,
+            "source": "legacy_read_only",
+            "workflow_digest": workflow.get("workflow_digest"),
+            "items": items[:limit],
+            "total": len(items),
+            "limit": limit,
+        }
 
     @app.get("/api/contracts/summary")
     def contracts_summary():
@@ -624,30 +1000,24 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
             "checked_at": datetime.now(timezone.utc).isoformat(),
         }
 
-    @app.get("/api/state-changes")
+    @app.get("/api/canon-v3/state-changes")
+    @app.get("/api/state-changes", include_in_schema=False)
     def list_state_changes(entity: Optional[str] = None, limit: int = 100):
-        with closing(_get_db()) as conn:
-            if entity:
-                rows = conn.execute(
-                    "SELECT * FROM state_changes WHERE entity_id = ? ORDER BY chapter DESC LIMIT ?",
-                    (entity, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM state_changes ORDER BY chapter DESC LIMIT ?", (limit,)
-                ).fetchall()
-            return [dict(r) for r in rows]
+        view = _canon_dashboard_view()
+        rows = _dashboard_state_changes(view, entity=entity)
+        return _bound_items(view, rows[: max(0, int(limit))])
 
     @app.get("/api/aliases")
     def list_aliases(entity: Optional[str] = None):
-        with closing(_get_db()) as conn:
-            if entity:
-                rows = conn.execute(
-                    "SELECT * FROM aliases WHERE entity_id = ?", (entity,)
-                ).fetchall()
-            else:
-                rows = conn.execute("SELECT * FROM aliases").fetchall()
-            return [dict(r) for r in rows]
+        view = _canon_dashboard_view()
+        rows = [
+            {"entity_id": row["id"], "alias": alias}
+            for row in _dashboard_entities(view)
+            for alias in row.get("aliases") or []
+            if not entity or row["id"] == entity
+        ]
+        rows.sort(key=lambda row: (row["entity_id"], row["alias"]))
+        return _bound_items(view, rows)
 
     # ===========================================================
     # API：扩展表（v5.3+ / v5.4+）

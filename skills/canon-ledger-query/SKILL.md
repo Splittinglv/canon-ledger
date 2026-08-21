@@ -1,140 +1,99 @@
 ---
 name: canon-ledger-query
-description: 查询书项目中的角色、伏笔、力量体系、势力与运行时状态。用户询问设定、角色名、伏笔或使用 /canon-ledger-query 时使用。
+description: 查询活动 Canon HEAD 中的角色、关系、规则、时间线、知识、物品持有、承诺和开放问题，并明确区分 STAGING 与 legacy 只读数据。
 ---
 
-# Information Query Skill
+# 查询故事事实
 
-## Use when
+开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)。查询是只读操作，不改变 STAGING、HEAD 或 projection。
 
-用户询问关于故事设定、角色、力量体系、势力、伏笔、金手指、时间线等项目内信息时触发。
+## 1. 固定查询版本
 
-## 项目根保护
+先读取 `canon-v3 status`，在结果中记录：
+
+```text
+state
+workflow_digest
+head_hash / generation
+projection_fresh
+latest_chapter
+```
+
+正常事实回答只使用活动 HEAD。若 `projection_fresh=false` 或状态为 `projection_rebuild_required`，当前公开查询面不会绕过投影直接读取对象历史：停止事实回答，只建议执行 `canon-v3 rebuild-projection`；重建失败则转 `/canon-ledger-doctor`。不能回退 state/index，也不能把 stale 投影包装成“截至 HEAD”。
+
+## 2. 数据层分离
+
+查询结果明确分为：
+
+1. `active_canon`：当前 HEAD 中已生效事实，可作为后续写作依据。
+2. `staged_proposal`：当前事务的待确认提议，只在用户明确询问草稿审核时展示，不能称为已发生。
+3. `legacy_read_only`：迁移前旧数据，仅供定位和修复；不能与 active canon 合并回答。
+4. `draft_setting`：磁盘上尚未 recertify 的硬设定草案，不能冒充 active author axiom。
+5. `style`：文风偏好，仅在用户询问写法时返回，不作为事实。
+
+任何 staged、legacy、draft setting 或 style 结果都不能覆盖 HEAD，也不能参与活动事实的肯定回答。
+
+## 3. 只使用已有公开查询面
+
+先按数据层选择公开 facade：
+
+| 数据层 | 公开 facade | 约束 |
+|---|---|---|
+| `active_canon` | `canon-v3 history`；active hard settings 用 `canon-v3 author-axioms`；Dashboard 已启动时可用 `/api/canon-v3/facts`、`/api/canon-v3/entities`、`/api/canon-v3/relationships`、`/api/canon-v3/state-changes` | 只在 fresh projection 下返回；响应须绑定当前 `head_hash/generation`；author axioms 只来自不可变 commit |
+| `staged_proposal` | `canon-v3 status` 的当前 `cases[].review_material` | 仅在用户明确问当前审核草案时展示；不是 active facts |
+| `legacy_read_only` | migration/recertification 状态下的 `canon-v3 audit-cutover` | 仅返回审计实际暴露的旧前缀/准入材料；不能回答的字段直接说明“公开 facade 未提供” |
+| `style` | `style-memory show` | 只返回作者文风提示词，不得与事实结果合并 |
+| `draft_setting` | 当前没有可证明已认证状态的公共查询 facade | fail-closed；不得直接读设定文件后把内容称为 Canon |
+
+调用示例：
 
 ```bash
-# 这段引导仅适用于 POSIX shell（sh/bash/zsh）；Windows 请使用 Git Bash 或 WSL。
-# 缓存安装必须使用 Cursor 注入的插件根；不扫描缓存目录寻找可执行脚本。
-# bootstrap_env.py 输出固定六行数据协议：逐行 read 赋值，禁止 eval/source 执行输出。
-_PLUGIN_ROOT_HINT="${CANON_LEDGER_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-}}"
-if [ -z "$_PLUGIN_ROOT_HINT" ]; then
-  _PLUGIN_ROOT_HINT="${HOME}/.cursor/plugins/local/canon-ledger"
-fi
-_ENV_LINES="$(python3 -X utf8 "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py")" || {
-  echo "ERROR: 插件根不可信或安装不完整。请使用 Cursor 注入的插件根，或安装到 ~/.cursor/plugins/local/canon-ledger" >&2
-  exit 1
-}
-_ENV_PARSE_OK=1
-{
-  IFS= read -r CANON_LEDGER_PLUGIN_ROOT || _ENV_PARSE_OK=0
-  IFS= read -r CURSOR_PLUGIN_ROOT || _ENV_PARSE_OK=0
-  IFS= read -r SCRIPTS_DIR || _ENV_PARSE_OK=0
-  IFS= read -r WORKSPACE_ROOT || _ENV_PARSE_OK=0
-  IFS= read -r CURSOR_PROJECT_DIR || _ENV_PARSE_OK=0
-  IFS= read -r CANON_LEDGER_PYTHON || _ENV_PARSE_OK=0
-} <<EOF
-$_ENV_LINES
-EOF
-if [ "$_ENV_PARSE_OK" -ne 1 ]; then
-  echo "ERROR: 无法解析插件环境协议" >&2
-  exit 1
-fi
-export CANON_LEDGER_PLUGIN_ROOT CURSOR_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR CANON_LEDGER_PYTHON
-unset _PLUGIN_ROOT_HINT _ENV_LINES _ENV_PARSE_OK
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 history
+
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 author-axioms
+
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" style-memory show
 ```
 
-```bash
-: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
-export SKILL_ROOT="${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-query"
-export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${WORKSPACE_ROOT}" where)"
-```
-- `PROJECT_ROOT` 必须包含 `.canon-ledger/state.json`
-- **禁止**在 `${CANON_LEDGER_PLUGIN_ROOT}/` 下读取或写入项目文件
+legacy 审计只有在 workflow 指向 cutover/recertification 时才调用。若上述 facade 没有该种查询能力，停止并说明缺失，不扫描 object store、不通读 manifest/commit/decision 文件，也不借 `index.db`、旧 `knowledge query-*` 或 RAG 猜答案；尤其不能用 index aliases 替代 v3 entity registry。
 
-## 查询分类 → 最窄工具
+## 4. 选择最窄 v3 视图
 
-先识别查询类型，再用下表最窄工具。不默认全量加载，只在综合 / 跨多类型查询时用 `memory-contract load-context`。
+按问题选择最窄的 HEAD-bound/as-of 接口：
 
-| 查询类型 | 关键词 | 最窄工具 |
-|---------|--------|---------|
-| 角色历史状态 | 某角色在第N章时 / 时间点状态 / 境界变化 | `knowledge query-entity-state` |
-| 实体关系 | 关系 / 敌友 / 师徒 / 阵营归属 | `knowledge query-relationships` |
-| 世界规则 | 力量规则 / 设定铁律 / 境界体系约束 | `memory-contract query-rules` |
-| 伏笔 / open loop | 伏笔 / 紧急伏笔 / 未闭合悬念 | `memory-contract get-open-loops` |
-| 综合 / 复杂 | 跨多类型、需要时间线 + 长期记忆联合 | `memory-contract load-context` |
-| 静态设定 | 角色卡 / 力量体系 / 世界观 / 势力 / 标签格式 | `Grep` + `Read` 设定集 |
+| 问题 | 查询视图 |
+|---|---|
+| 人物状态、身份、别名 | canonical entity + state history |
+| 关系 | relationship facts/history |
+| 世界规则与违反 | active rule + violation occurrences |
+| 知识边界 | actor + proposition knowledge slot |
+| 在场 | presence history/current physical presence |
+| 物品归属 | canonical item custody |
+| 承诺、开放问题 | active obligations + lifecycle history |
+| 时间线 | occurrence timeline as of 指定章节 |
+| 综合写作上下文 | `memory-contract load-context --chapter N`，内部截至 N-1 |
 
-## 引用加载策略
+这些领域视图当前统一由 `canon-v3 history` 或 Dashboard 的 HEAD-bound 事实接口承载；不得承诺另一个尚不存在的 as-of CLI。需要精确旧章视图但公开响应没有对应 revision 时，停止并说明能力缺口。
 
-按查询类型按需加载，先识别再加载。路径说明：`references/` 指 skill 私有 `skills/canon-ledger-query/references/`；`../../references/` 指共享 references。
+## 5. 时间与旧章
 
-| 查询类型 | Reference | 实际路径 |
-|---------|-----------|---------|
-| 数据流 / 优先级 | 数据流规范 | `${SKILL_ROOT}/references/system-data-flow.md` |
-| 伏笔分析 | 伏笔分析 | `${SKILL_ROOT}/references/advanced/foreshadowing.md` |
-| 格式查询 | 标签规范 | `${SKILL_ROOT}/references/tag-specification.md` |
+用户问第 N 章时，明确区分：
 
-不得同时加载两个以上 reference，除非用户请求明确跨多类型。
+- “写第 N 章前知道什么”：as-of N-1。
+- “第 N 章发布后状态”：as-of N。
+- 历史 revision：必须标记所查 manifest/head，不混入未来事实。
 
-## 查询流程
+## 6. 输出
 
-1. **识别查询类型**：按「查询分类 → 最窄工具」表匹配关键词。
-2. **按优先级定位写前真源**（写前真源 → 写后真源 → 投影层）：
-   1. `.story-system/MASTER_SETTING.json` - 全书合同：题材路由、`setting_canon` 设定快照、`initial_canon` 初始化角色事实。写前清洗后 `master_constraints` 为空，文风不在合同里
-   2. `.story-system/volumes/*.json` - 卷级合同：有效事实在 `volume_goal`（卷名、摘要、本卷目标、预期结束状态、核心冲突、章节范围）。`selected_pacing`、`selected_tropes`、`selected_scenes` 写前清洗后为空，不是合同事实
-   3. `.story-system/chapters/*.json` - 章级合同：权威在 `chapter_directive`（`goal`、`must_cover_nodes`、`forbidden_zones`、时间锚点等章纲事实）。`override_allowed.chapter_focus` 只是 `goal` 的别名；`dynamic_context` 固定为空，不是检索到的写法材料
-   4. latest accepted `.story-system/commits/chapter_XXX.commit.json` - 写后事实（已发布章节的定稿状态）
-   5. `memory-contract` 系列查询 - 记忆编排结果（长期记忆、伏笔、时间线）
-   6. `.canon-ledger/state.json` / `index.db` - 只读投影层（角色卡、章节列表）。不要通读整份 `state.json` 当事实源；查询记忆请用带 `--as-of-chapter` 的 `memory-contract`
+先回答结论，再列：
 
-   **优先级说明**：
-   - 写前真源（1-3）：作者开写前必须遵守的"大纲、设定、禁区"
-   - 写后真源（4）：已发布章节的"定稿状态"，不可篡改
-   - 投影层（5-6）：从写后真源自动生成的"查询视图"，方便快速检索
+- 查询版本（HEAD/generation/as-of chapter）；
+- 命中的事实及其来源章节；
+- 若有歧义，列出多个 canonical instances，不自动选第一个；
+- 数据属于 active、staged、legacy 还是 draft setting；
+- 无结果时说明是“未记录”，不要推断成“没有发生”。
 
-3. **调用最窄工具检索**：按类型只调用所需命令，不默认全量 `load-context`。用户问第 N 章或「当前」时，`{N-1}` 取该章上一章或最新 accepted 章号。所有 `memory-contract` 补查必须带 `--as-of-chapter {N-1}`（`load-context` 用 `--chapter {N}`，内部截至 N-1）。禁止把整份 `.canon-ledger/state.json` 当事实源通读。
-
-```bash
-: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}" "${PROJECT_ROOT:?PROJECT_ROOT 未设置：请先在同一个 shell 会话中执行本 skill 解析项目根的代码块，再重试本块}"
-# 角色历史状态：某实体在指定章节时的状态
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" knowledge query-entity-state --entity "{entity_id}" --at-chapter {N}
-
-# 实体关系：某实体在指定章节时的所有关系
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" knowledge query-relationships --entity "{entity_id}" --at-chapter {N}
-
-# 世界规则
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" memory-contract query-rules --as-of-chapter {N-1}
-
-# 伏笔 / open loop
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" memory-contract get-open-loops --as-of-chapter {N-1}
-
-# 仅综合 / 复杂查询：需要时间线 + 长期记忆联合时才用
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${PROJECT_ROOT}" memory-contract load-context --chapter {chapter_num}
-```
-
-   静态设定（角色卡 / 力量体系 / 世界观 / 标签格式）直接用 `Grep` 定位行号再 `Read` 取片段，不经 memory-contract。
-
-4. **格式化输出**：按下方模板输出。
-
-## 输出格式
-
-```markdown
-# 查询结果：{关键词}
-
-## 概要
-- **匹配类型**: {type}
-- **数据源**: {实际命中的真源 / 投影层}
-- **匹配数量**: X 条
-
-## 详细信息
-{结构化数据，含文件路径和行号}
-
-## 数据一致性检查
-{state.json 与静态文件的差异，若无差异则省略}
-```
-
-## 边界与失败恢复
-
-- 只读操作，不修改任何项目文件
-- 若数据源缺失，明确告知用户缺少什么文件
-- 若查询无匹配，返回空结果并建议检查范围
-- 若 `.story-system/` 合同缺失或损坏，必须阻断并提示先修复合同；不得降级为不完整事实查询
+文风、剧情取舍和人物动机问题可按作者偏好回答，但不得包装为 Canon 查询结果。

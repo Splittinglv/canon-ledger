@@ -135,19 +135,26 @@ def test_export_cursor_env_prints_json_data(monkeypatch, tmp_path):
 
 def test_all_skills_parse_cursor_environment_as_data_without_cache_discovery():
     skill_files = sorted((PLUGIN_ROOT / "skills").glob("canon-ledger-*/SKILL.md"))
+    protocol = (PLUGIN_ROOT / "references" / "canon-v3-skill-protocol.md").read_text(
+        encoding="utf-8"
+    )
 
     assert len(skill_files) == 9
     for skill_file in skill_files:
         text = skill_file.read_text(encoding="utf-8")
-        assert "scripts/bootstrap_env.py" in text, skill_file
-        assert "IFS= read -r CANON_LEDGER_PYTHON" in text, skill_file
-        assert '"${CANON_LEDGER_PYTHON}"' in text, skill_file
+        assert "references/canon-v3-skill-protocol.md" in text, skill_file
         assert "WEBNOVEL_" not in text, skill_file
         assert "CLAUDE" not in text.upper(), skill_file
         assert "python -X utf8" not in text, skill_file
         assert 'eval "$_EXPORT"' not in text, skill_file
         assert ".rglob(" not in text, skill_file
         assert "Invoke-Expression" not in text, skill_file
+
+    assert "scripts/bootstrap_env.py" in protocol
+    assert "IFS= read -r CANON_LEDGER_PYTHON" in protocol
+    assert '"${CANON_LEDGER_PYTHON}"' in protocol
+    assert 'eval "$_EXPORT"' not in protocol
+    assert ".rglob(" not in protocol
 
     cursor_paths_text = (SCRIPTS_DIR / "cursor_paths.py").read_text(encoding="utf-8")
     assert "emit_shell_exports" not in cursor_paths_text
@@ -157,7 +164,7 @@ def test_all_skills_parse_cursor_environment_as_data_without_cache_discovery():
 def test_skill_bootstrap_preserves_workspace_metacharacters_as_plain_data(tmp_path):
     import subprocess
 
-    skill_text = (PLUGIN_ROOT / "skills" / "canon-ledger-doctor" / "SKILL.md").read_text(
+    skill_text = (PLUGIN_ROOT / "references" / "canon-v3-skill-protocol.md").read_text(
         encoding="utf-8"
     )
     bootstrap = skill_text.split("```bash", 1)[1].split("```", 1)[0]

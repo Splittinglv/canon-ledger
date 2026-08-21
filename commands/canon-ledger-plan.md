@@ -1,6 +1,6 @@
 ---
 name: canon-ledger-plan
-description: 规划指定卷的卷纲、时间线和章纲
+description: 基于活动 Canon HEAD 规划卷纲、时间线和章纲
 ---
 
-遵循 `canon-ledger-plan` 技能。用户参数：卷号，例如 `1`。
+执行 `canon-ledger-plan` Skill。用户参数为卷号。规划默认是软方向；新增长期硬设定必须作为 author-axiom proposal 重新认证，不能直接进入写作事实。

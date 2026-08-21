@@ -1,112 +1,94 @@
-# 审查输出 Schema
+# Canon v3 Reviewer Output v2
 
-> **主服务 skill**: `canon-ledger-write`、`canon-ledger-review`
-> **内容层级**: 流程闸门 / schema 定义
-> **关键原则**: reviewer 输出 JSON 是审查唯一事实源；`review-pipeline` 解析并覆盖为标准 `review_result`，再生成报告与无评分 `review_audit`。主 skill 不得伪造结论或分数。
+reviewer 是只读事实扫描器，不是放行者。它读取 exact candidate draft 和 N-1 HEAD，只输出 `ReviewObservation` 与 `ScanAttestation`；不得输出旧 `issues/manual_checks/blocking_count`，不得写 queue/index 或调用事务 API。
 
-统一审查 Agent 只记录可验证的长期一致性问题。分类、维度与 `scripts/data_modules/review_schema.py` 的 `REVIEW_DIMENSIONS` / `VALID_CATEGORIES` 必须一致。
+## 顶层
 
-## 核心约束
+```json
+{
+  "schema_version": "canon-v3/reviewer-output/v2",
+  "chapter": 1,
+  "chapter_sha256": "...",
+  "parent_head": "...",
+  "author_axiom_digest": "...",
+  "entity_registry_digest": "...",
+  "candidate_digests": [],
+  "observations": [],
+  "scan_attestations": [],
+  "extraction_incomplete": []
+}
+```
 
-- **只查五维事实**：`setting`、`timeline`、`continuity`、`character`、`logic`；其中 logic 只含明确规则下的机械矛盾
-- **不评分**：不输出总分，不输出通过或失败总评
-- **不确定转人工**：需要解释语义、猜动机、补隐含转场或判断规则例外时写 `manual_checks`，不得输出确定 issue
-- **计划不冒充事实**：大纲节点、剧情禁区和一般写作偏离由 fulfillment 报告，默认不阻断事实提交
-- **非法分类整单拒绝**：`category` 必须是上述五维之一。其它值会触发 `ValueError`，整份审查作废，不会静默改写或落入缺省分类
-- **单 agent**：由 `reviewer` 输出；主流程不得口头总结代替 JSON
+所有版本字段必须与调用输入完全一致。reviewer 不得自行重算或替换 candidate。
 
-## 正文绑定
+## Observation
 
-reviewer 输出顶层必须包含调用方传入的 `chapter_binding`（`schema_version/chapter/path/sha256/bytes`），不得自行重算或修改。`review-pipeline` 在产生报告或审计副作用前，必须确认它与当前正文字节完全一致。正文修改后旧审查自动失效，不可直接用于 chapter-commit。
+允许类型：
 
-## 顶层字段
+- `confirmed_conflict`：本章与 exact prior 不能同时成立；必须携带 prior fact digest 和正文证据。
+- `ambiguity`：有长期事实锚点但解释、实体或状态转换不唯一。
+- `checkpoint`：关键永久事实、核心关系、硬规则、关键物品/秘密/时间、承诺/开放问题、retcon 或 author-axiom 认证。
+- `advisory|audit`：只读提示，不获得修改 Canon 的权限。
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| chapter | int | ✅ | 待审章节号 |
-| review_mode | standard / fast / minimal | ✅ | 审查范围 |
-| chapter_binding | object | ✅ | 正文绑定，原样回传 |
-| issues | array | ✅ | 问题清单；无问题则为 `[]` |
-| manual_checks | array | ✅ | 证据不足、容易误判、需要作者判断的检查项；永不自动阻断 |
-| dimension_results | array | ✅ | 已审维度结论；顺序与模式绑定 |
-| summary | string | ✅ | 中文摘要，不是评分 |
+文风、节奏、人物动机、一般因果、剧情选择、章纲履约以及无锚点低概率猜测不得输出 observation。
 
-`standard` 的 `dimension_results` 必须按顺序且只能覆盖 setting / timeline / continuity / character / logic。
+## ScanAttestation
 
-`fast` 必须按顺序且只能覆盖 setting / timeline / continuity / character；知识边界是默认长期一致性检查，不能跳过。
-`minimal` 不得携带 issue 或 `manual_checks`，`dimension_results` 必须为空。
+唯一 complete attestation 必须绑定：
 
-每条维度结论：
+```text
+chapter_sha256
+parent_head
+author_axiom_digest
+entity_registry_digest
+全部 exact candidate digests
+setting/timeline/continuity/character/logic 五维
+```
 
-| 字段 | 说明 |
-|------|------|
-| dimension | 上述合法维度名 |
-| conclusion | 证据充分且无问题写「未发现已证实的事实问题」；有问题写「发现N个已证实问题：简述」；有人工项或覆盖/可信度不足时必须明确说明，不得伪装成完整通过 |
+正文明示且会影响后文的事实缺少 candidate 时，把它加入 `extraction_incomplete`，不得返回 complete。
 
-## Issue Schema
+## 权威边界
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| severity | critical / high / medium / low | ✅ | 严重度 |
-| category | setting / timeline / continuity / character / logic | ✅ | 问题分类，与审查维度同一枚举 |
-| location | string | ✅ | 位置（如「第3段」） |
-| description | string | ✅ | 问题描述 |
-| evidence | string | ✅ | 原文引用或已接受事实对比 |
-| fix_hint | string | ✅ | 修复方向 |
-| blocking | bool | ❌ | 是否阻断；`critical` 默认 `true` |
+compiler 根据 observations、typed candidates、active slots 和 policy 生成 cases。人工决定通过 DecisionRequest v2 绑定 exact stage/transaction/target/material。reviewer 的任何字段都不能直接写入 Canon。
 
-分类含义：
+历史章节范围审查使用同一 reviewer 输出 schema，但只生成下面的 HEAD-bound audit bundle，不创建 STAGING 或人工队列。
 
-- `setting`：与设定集 / `setting_canon` / 世界规则矛盾
-- `timeline`：时间顺序、跨度、倒计时，以及有明确物理在场证据的地点矛盾；梦境、回忆、远程通信和提及不更新当前位置
-- `continuity`：已接受提交中的未闭合问题、伏笔、承诺、状态和物品持有；不含章纲履约
-- `character`：只查知识边界；不评价性格、动机、口吻或文笔
-- `logic`：只查明确次数、冷却、互斥状态、物理前提等可逐字段对照的硬规则；不评价一般因果、力量观感或决策动机
+## HistoricalAuditBundle v1
 
-文笔、钩子、场景过渡、情绪弧、对话是否书面都不是合法分类。
+历史审计的最小派生格式固定为：
 
-## Manual Check Schema
+```json
+{
+  "schema_version": "canon-v3/historical-audit/v1",
+  "mode": "historical_audit",
+  "workflow_digest": "...",
+  "audited_head": "...",
+  "generation": 0,
+  "range": {"start_chapter": 1, "end_chapter": 1},
+  "chapters": [
+    {
+      "chapter": 1,
+      "revision": 1,
+      "chapter_binding": {},
+      "parent_head": "...",
+      "candidate_digests": [],
+      "scan_attestation_digest": "...",
+      "observations": [],
+      "extraction_incomplete": []
+    }
+  ],
+  "disposition": "read_only"
+}
+```
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| category | 五维枚举 | ✅ | 疑点所属事实维度 |
-| location | string | ✅ | 正文位置 |
-| description | string | ✅ | 作者需要确认什么 |
-| evidence | string | ✅ | 当前已有证据；允许明确写“证据不足” |
-| reason | string | ✅ | 为什么插件无法可靠自动判断 |
-| options | string[] | ✅ | 供作者参考的有限判断方向，不是强制修复 |
+`audited_head/generation/workflow_digest` 固定审计开始时的活动版本；每章记录固定被审 revision、正文 binding 和该 revision 的 parent HEAD。范围内任一章缺少这些绑定或 complete scan attestation 时，bundle 仍可作为不完整诊断保存，但必须保留 `extraction_incomplete`，不得被称为完整审计。
 
-`manual_checks` 不计入 `issues_count`、`blocking_count`，也不会让 chapter commit rejected。
+默认派生文件只有：
 
-## 长期事实覆盖与可信度
+```text
+.canon-ledger/tmp/canon_v3_review.json
+.canon-ledger/tmp/canon_v3_historical_audit.json
+.canon-ledger/tmp/canon_v3_historical_audit.md
+```
 
-as-of v3 快照提供 `information`、`knowledge_by_entity`、`presence` / `presence_history`、`custody` / `custody_history`、`coverage` 和 `verification`。
-
-- `coverage` 是完整度：`complete|partial|none`。
-- `verification` 是可信度：`verified|supported|pending|unknown|legacy`。
-- 只有覆盖 `complete` 且可信度 `verified` 时，字段缺失才可作为否定证据。
-- `supported` 的正向记录可用于提醒一致性；只要判断需要语义解释，就转 `manual_checks`。
-- `pending|unknown|legacy` 禁止据缺失断言角色不知道、不在场或不持有物品。
-
-## 阻断规则
-
-- 存在任何 `blocking=true` 的 issue → 不得提交章节
-- 只有能与作者原始设定或 `verified` 事实逐字段对照、且两者不能同时成立的矛盾才可 blocking
-- `supported` 事实引出的语义疑点默认转人工，不自动阻断
-- 读不到上章摘要不是错误；第一章或无已接受上章时禁止因此 blocking
-
-## 落库
-
-统一审查 agent 的原始输出先写入 `review_results.json`。随后由 `review-pipeline` 覆盖为标准 `review_result`，并生成 `review_audit.json`，在 `--save-audit` 时写入 `index.db.review_audits`。
-
-审计记录只保存检查范围与计数，不保存质量分数：
-
-- `chapter` / `review_mode` / `review_status` / `review_degraded`
-- `reviewed_dimensions` / `skipped_dimensions` / `dimension_results`
-- `issues_count` / `blocking_count` / `manual_checks_count` / `severity_counts` / `categories`
-- `critical_issues` / `report_file` / `notes` / `timestamp`
-
-说明：
-
-- 闸门决策以 `blocking=true` 和 issue 明细为准，不以任何总分或维度分为准
-- `index.db.review_metrics` 是旧评分表，默认审查链不再写入
+reviewer 只返回 JSON，data-agent 的 `mode=historical_audit` 只向调用方返回组装后的 bundle；二者都不写审计文件。调用它们的 `canon-ledger-review` Skill 负责校验 schema 后写入上述固定 tmp 路径。后一轮审计可以覆盖这些派生缓存；需要长期保存时由作者显式导出报告。它们不是对象库、Gate、proposal、人工队列或 Canon source，compiler/prepare 不得读取。

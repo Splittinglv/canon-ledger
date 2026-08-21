@@ -138,15 +138,18 @@ def _valid_commit_payload(project_root: Path, projection_status: dict) -> dict:
     }
 
 
-def test_prewrite_gate_allows_contract_ready_project_with_warning(tmp_path):
+def test_prewrite_gate_does_not_treat_contract_ready_as_canon_ready(tmp_path):
     _make_init_ready(tmp_path)
     _make_current_contracts(tmp_path, chapter=1)
 
     report = run_write_gate(tmp_path, chapter=1, stage="prewrite")
 
-    assert report["ok"] is True
+    assert report["ok"] is False
     assert report["stage"] == "prewrite"
-    assert report["details"]["prewrite_validation"]["blocking"] is False
+    assert report["phase"] == "canon_v3:migration_required"
+    assert report["details"]["workflow_snapshot"]["primary_action"]["code"] == (
+        "initialize_v3"
+    )
 
 
 def test_prewrite_gate_blocks_when_persisted_chapter_goal_is_empty(tmp_path):
@@ -284,6 +287,189 @@ def test_prewrite_blocks_prior_pending_but_allows_reworking_same_chapter(tmp_pat
         if item["code"] == "human_review_pending"
     )
     assert "/canon-ledger-confirm 1" in blocker["repair"]
+
+
+def test_prewrite_allows_advisory_human_review_with_warning(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=2)
+    _queue_human_review_items(
+        tmp_path,
+        1,
+        [
+            {
+                **_fact_review_item("chapter-one-advisory"),
+                "disposition": "advisory",
+                "required": False,
+                "review_kind": "ambiguity",
+                "materiality": "low",
+                "evidence_quote": "第 1 章正文。",
+            }
+        ],
+    )
+
+    report = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+
+    assert not any(
+        item["code"].startswith("human_review_")
+        for item in report["errors"]
+    )
+    warning = next(
+        item for item in report["warnings"] if item["code"] == "human_review_advisory"
+    )
+    assert warning["details"]["summary"]["counts"]["advisory_pending"] == 1
+
+
+def test_prewrite_warns_for_advisory_confirm_not_replayed(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=2)
+    service, _binding, items = _queue_human_review_items(
+        tmp_path,
+        1,
+        [
+            {
+                **_fact_review_item("chapter-one-advisory-confirm"),
+                "disposition": "advisory",
+                "required": False,
+                "review_kind": "ambiguity",
+                "materiality": "low",
+                "evidence_quote": "第 1 章正文。",
+            }
+        ],
+    )
+    service.record(
+        {
+            "decisions": [
+                {"decision_id": items[0]["decision_id"], "action": "confirm"}
+            ]
+        }
+    )
+
+    report = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+
+    assert not any(
+        item["code"].startswith("human_review_")
+        for item in report["errors"]
+    )
+    warning = next(
+        item
+        for item in report["warnings"]
+        if item["code"] == "human_review_advisory"
+    )
+    summary = warning["details"]["summary"]
+    assert summary["counts"]["advisory_not_replayed"] == 1
+    assert summary["advisory_not_replayed"][0]["decision_action"] == "confirm"
+
+
+def test_prewrite_blocks_canon_changing_advisory_until_replayed(tmp_path):
+    for action in ("ignore",):
+        root = tmp_path / action
+        _make_init_ready(root)
+        _make_current_contracts(root, chapter=2)
+        event = {
+            "event_id": f"advisory-{action}-event",
+            "chapter": 1,
+            "sequence": 1,
+            "event_type": "presence_observed",
+            "subject": "hero",
+            "payload": {
+                "location_id": "north-city",
+                "presence_kind": "physical",
+                "evidence_quote": "第 1 章正文。",
+            },
+        }
+        service, _binding, items = _queue_human_review_items(
+            root,
+            1,
+            [
+                {
+                    **_fact_review_item(f"chapter-one-advisory-{action}"),
+                    "candidate_event_id": event["event_id"],
+                    "candidate_event": event,
+                    "disposition": "advisory",
+                    "required": False,
+                    "review_kind": "ambiguity",
+                    "materiality": "low",
+                    "evidence_quote": "第 1 章正文。",
+                }
+            ],
+        )
+        decision = {"decision_id": items[0]["decision_id"], "action": action}
+        service.record({"decisions": [decision]})
+
+        report = run_write_gate(root, chapter=2, stage="prewrite")
+
+        blocker = next(
+            item
+            for item in report["errors"]
+            if item["code"] == "human_review_decisions_not_replayed"
+        )
+        queued = blocker["details"]["items"][0]
+        assert queued["disposition"] == "advisory"
+        assert queued["decision_action"] == action
+
+
+def test_prewrite_blocks_advisory_rewrite(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=2)
+    service, _binding, items = _queue_human_review_items(
+        tmp_path,
+        1,
+        [
+            {
+                **_prose_rewrite_item("chapter-one-advisory-rewrite"),
+                "disposition": "advisory",
+                "required": False,
+                "review_kind": "ambiguity",
+                "materiality": "low",
+                "evidence_quote": "第 1 章正文。",
+            }
+        ],
+    )
+    service.record(
+        {
+            "decisions": [
+                {"decision_id": items[0]["decision_id"], "action": "rewrite"}
+            ]
+        }
+    )
+
+    report = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+
+    blocker = next(
+        item
+        for item in report["errors"]
+        if item["code"] == "human_review_rewrite_required"
+    )
+    assert blocker["details"]["items"][0]["disposition"] == "advisory"
+
+
+def test_prewrite_blocks_required_checkpoint(tmp_path):
+    _make_init_ready(tmp_path)
+    _make_current_contracts(tmp_path, chapter=2)
+    _queue_human_review_items(
+        tmp_path,
+        1,
+        [
+            {
+                **_fact_review_item("volume-end-checkpoint"),
+                "review_kind": "checkpoint",
+                "trigger_kind": "volume_end",
+                "materiality": "critical",
+                "disposition": "human_required",
+                "required": True,
+            }
+        ],
+    )
+
+    report = run_write_gate(tmp_path, chapter=2, stage="prewrite")
+
+    blocker = next(
+        item for item in report["errors"] if item["code"] == "human_review_pending"
+    )
+    queued = blocker["details"]["items"][0]
+    assert queued["review_kind"] == "checkpoint"
+    assert queued["trigger_kind"] == "volume_end"
+    assert queued["required"] is True
 
 
 def test_prewrite_routes_prior_rewrite_required_back_to_write(tmp_path):

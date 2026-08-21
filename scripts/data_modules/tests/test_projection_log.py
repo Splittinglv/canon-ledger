@@ -26,6 +26,7 @@ from data_modules.projection_log import (  # noqa: E402
     read_projection_runs,
 )
 from .review_test_helpers import (  # noqa: E402
+    inject_hard_evidence_quotes,
     standard_review,
     write_current_chapter_contract,
 )
@@ -35,14 +36,24 @@ def _build_bound_commit(service: ChapterCommitService, **kwargs):
     chapter = int(kwargs["chapter"])
     chapter_path = service.project_root / "正文" / f"第{chapter:04d}章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
-    if not chapter_path.exists():
-        chapter_path.write_text(f"第{chapter}章测试正文\n", encoding="utf-8")
-    binding = build_chapter_binding(service.project_root, chapter)
+    chapter_text = (
+        chapter_path.read_text(encoding="utf-8")
+        if chapter_path.exists()
+        else f"第{chapter}章测试正文\n"
+    )
+    extraction, chapter_text = inject_hard_evidence_quotes(
+        kwargs["extraction_result"],
+        chapter=chapter,
+        chapter_text=chapter_text,
+    )
+    kwargs["extraction_result"] = extraction
+    chapter_path.write_text(chapter_text, encoding="utf-8")
     write_current_chapter_contract(
         service.project_root,
         chapter,
         planned_nodes=list(kwargs["fulfillment_result"].get("planned_nodes") or []),
     )
+    binding = build_chapter_binding(service.project_root, chapter)
     if "blocking_count" in kwargs["review_result"]:
         kwargs["review_result"] = standard_review(
             binding,
@@ -127,12 +138,13 @@ def test_chapter_commit_service_writes_projection_log(tmp_path):
     payload = _build_bound_commit(
         service,
         chapter=7,
-        review_result={"blocking_count": 1},
+        review_result={"blocking_count": 0},
         fulfillment_result={
             "planned_nodes": ["进入坊市"],
-            "covered_nodes": ["进入坊市"],
-            "missed_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": ["进入坊市"],
             "extra_nodes": [],
+            "enforcement": "strict",
         },
         disambiguation_result={"pending": []},
         extraction_result={"state_deltas": [], "entity_deltas": [], "accepted_events": []},

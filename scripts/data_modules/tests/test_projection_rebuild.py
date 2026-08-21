@@ -19,6 +19,7 @@ _ensure_scripts_on_path()
 
 from data_modules.chapter_commit_service import ChapterCommitService  # noqa: E402
 from data_modules.chapter_content_binding import build_chapter_binding  # noqa: E402
+from data_modules.human_review import HumanReviewService  # noqa: E402
 from data_modules.projections import replay_projections  # noqa: E402
 from .review_test_helpers import inject_hard_evidence_quotes  # noqa: E402
 
@@ -83,7 +84,7 @@ def _accepted_commit(
         "chapter_binding": dict(binding),
     }
     service = ChapterCommitService(project_root)
-    return service.build_commit(
+    build_kwargs = dict(
         chapter=chapter,
         review_result=review,
         fulfillment_result={
@@ -96,6 +97,23 @@ def _accepted_commit(
         disambiguation_result={"pending": [], "chapter_binding": dict(binding)},
         extraction_result=bound_extraction,
     )
+    payload = service.build_commit(**build_kwargs)
+    checkpoints = [
+        item
+        for item in payload["disambiguation_result"]["pending"]
+        if item.get("source") == "runtime_checkpoint"
+    ]
+    if checkpoints:
+        HumanReviewService(project_root).record(
+            {
+                "decisions": [
+                    {"decision_id": item["decision_id"], "action": "confirm"}
+                    for item in checkpoints
+                ]
+            }
+        )
+        payload = service.build_commit(**build_kwargs)
+    return payload
 
 
 def _commit_and_project(project_root: Path, payload: dict) -> dict:
@@ -208,7 +226,14 @@ def test_same_chapter_revision_removes_old_facts_and_keeps_init_metadata(tmp_pat
     assert state["protagonist_state"]["location"]["current"] == "北城渡口"
 
     event_file = tmp_path / ".story-system" / "events" / "chapter_001.events.json"
-    assert json.loads(event_file.read_text(encoding="utf-8")) == []
+    revised_events = json.loads(event_file.read_text(encoding="utf-8"))
+    assert all(
+        event["event_type"] in {"character_state_changed", "entity_observed"}
+        for event in revised_events
+    )
+    assert "线索-染血账簿" not in {
+        event["event_id"] for event in revised_events
+    }
     scratch_path = tmp_path / ".canon-ledger" / "memory_scratchpad.json"
     if scratch_path.exists():
         assert "染血账簿" not in scratch_path.read_text(encoding="utf-8")
@@ -217,7 +242,13 @@ def test_same_chapter_revision_removes_old_facts_and_keeps_init_metadata(tmp_pat
     assert "旧库房" not in summary
 
     with sqlite3.connect(tmp_path / ".canon-ledger" / "index.db") as conn:
-        assert conn.execute("SELECT COUNT(*) FROM story_events").fetchone()[0] == 0
+        indexed_event_ids = {
+            row[0] for row in conn.execute("SELECT event_id FROM story_events")
+        }
+        assert indexed_event_ids == {
+            "fixture-state-1-1",
+            "fixture-entity-1-1",
+        }
         scenes = conn.execute("SELECT location, summary FROM scenes").fetchall()
         assert scenes == [("北城渡口", "沈砚确认船票去向。")]
         changes = conn.execute(
@@ -282,7 +313,15 @@ def test_replay_rebuilds_deleted_read_models_even_when_commit_says_done(tmp_path
     assert (tmp_path / ".story-system" / "events" / "chapter_001.events.json").is_file()
     with sqlite3.connect(tmp_path / ".canon-ledger" / "index.db") as conn:
         assert conn.execute("SELECT COUNT(*) FROM chapters").fetchone()[0] == 1
-        assert conn.execute("SELECT COUNT(*) FROM story_events").fetchone()[0] == 1
+        event_ids = {
+            row[0]
+            for row in conn.execute("SELECT event_id FROM story_events")
+        }
+        assert event_ids == {
+            "物品-铜钥匙",
+            "fixture-state-1-1",
+            "fixture-entity-1-1",
+        }
 
 
 def test_event_rewrite_replaces_same_chapter_sqlite_rows(tmp_path):

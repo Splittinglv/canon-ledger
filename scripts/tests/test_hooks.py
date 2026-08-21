@@ -582,9 +582,9 @@ def test_guard_rejects_external_dynamic_or_untrusted_interpreter_scripts(command
 
 
 def test_guard_allows_only_verbatim_bootstrap_block_from_skills():
-    """hint 路径执行 bootstrap_env.py 仅放行与随包 SKILL.md 逐字一致的引导块。"""
+    """hint 路径执行 bootstrap_env.py 仅放行共享协议中的逐字引导块。"""
     pattern = re.compile(r"^```(?:bash|sh)\s*$\n(.*?)^```\s*$", re.MULTILINE | re.DOTALL)
-    text = (PLUGIN_ROOT / "skills" / "canon-ledger-write" / "SKILL.md").read_text(encoding="utf-8")
+    text = (PLUGIN_ROOT / "references" / "canon-v3-skill-protocol.md").read_text(encoding="utf-8")
     block = next(
         match.group(1).strip()
         for match in pattern.finditer(text)
@@ -806,11 +806,15 @@ def test_session_start_can_be_disabled(monkeypatch):
     assert proc.stdout == ""
 
 
-def test_hook_bootstrap_uses_dependency_runtime(monkeypatch):
+def test_hook_bootstrap_uses_dependency_runtime(monkeypatch, tmp_path):
     system_python = shutil.which("python3")
     if not system_python:
         pytest.skip("系统没有 python3 启动器")
-    env = {**os.environ, "CURSOR_PLUGIN_ROOT": str(PLUGIN_ROOT)}
+    env = {
+        **os.environ,
+        "CURSOR_PLUGIN_ROOT": str(PLUGIN_ROOT),
+        "CURSOR_PROJECT_DIR": str(tmp_path),
+    }
     env.pop("CANON_LEDGER_DISABLE_SESSION_STATUS_HOOK", None)
     proc = subprocess.run(
         [system_python, str(RUN_HOOK), "session_start"],

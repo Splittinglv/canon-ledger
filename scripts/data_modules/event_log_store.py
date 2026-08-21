@@ -120,7 +120,15 @@ class EventLogStore:
         return {"ok": True, "sqlite_rows": sqlite_rows, "event_files": file_count}
 
     def normalize_events(self, chapter: int, events: Any) -> List[Dict[str, Any]]:
-        return normalize_accepted_events(chapter, events)
+        # This store is also the replay target for legacy commits. New chapter
+        # commits validate evidence before reaching the projection layer, while
+        # old event logs must remain readable instead of being rewritten with
+        # invented chapter quotes.
+        return normalize_accepted_events(
+            chapter,
+            events,
+            require_evidence=False,
+        )
 
     def _replace_sqlite_chapter(
         self,

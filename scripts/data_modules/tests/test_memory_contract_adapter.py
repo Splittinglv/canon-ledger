@@ -31,6 +31,10 @@ from data_modules.memory_contract import (
 from data_modules.memory_contract_adapter import MemoryContractAdapter
 from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.chapter_content_binding import build_chapter_binding
+from data_modules.canonical_history import load_canonical_history
+from data_modules.canon_v3.projection import rebuild_projection
+from data_modules.canon_v3.repository import CanonRepository
+from data_modules.human_review import HumanReviewService
 
 
 def _make_project(tmp_path: Path) -> DataModulesConfig:
@@ -91,7 +95,8 @@ def _accepted_commit(project_root: Path, chapter: int, extraction: dict) -> dict
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
     chapter_path.write_text(chapter_text, encoding="utf-8")
     binding = build_chapter_binding(project_root, chapter)
-    payload = ChapterCommitService(project_root).build_commit(
+    service = ChapterCommitService(project_root)
+    build_kwargs = dict(
         chapter=chapter,
         review_result=standard_review(binding),
         fulfillment_result={
@@ -110,7 +115,22 @@ def _accepted_commit(project_root: Path, chapter: int, extraction: dict) -> dict
             "chapter_binding": binding,
         },
     )
-    service = ChapterCommitService(project_root)
+    payload = service.build_commit(**build_kwargs)
+    checkpoints = [
+        item
+        for item in payload["disambiguation_result"]["pending"]
+        if item.get("source") == "runtime_checkpoint"
+    ]
+    if checkpoints:
+        HumanReviewService(project_root).record(
+            {
+                "decisions": [
+                    {"decision_id": item["decision_id"], "action": "confirm"}
+                    for item in checkpoints
+                ]
+            }
+        )
+        payload = service.build_commit(**build_kwargs)
     service.persist_commit(payload)
     return service.apply_projections(payload)
 
@@ -145,6 +165,70 @@ def _open_loop(event_id: str, content: str, urgency: object) -> dict:
             "urgency": urgency,
         },
     }
+
+
+def _v3_lifecycle_effect(fact_key: str, claim: dict, marker: str) -> dict:
+    return {
+        "effect_id": (marker.encode("utf-8").hex() + "0" * 64)[:64],
+        "candidate_digest": (marker.encode("utf-8").hex() + "c" * 64)[:64],
+        "fact_key": fact_key,
+        "claim": dict(claim),
+        "source_digests": ["s" * 64],
+        "support_map": {},
+    }
+
+
+def _write_v3_lifecycle_history(project_root: Path) -> None:
+    repo = CanonRepository(project_root)
+    genesis = repo._initialize_objects()
+    created = repo._seal_objects(
+        chapter=1,
+        transaction={"chapter": 1},
+        expected_head=genesis,
+        canon_effects=[
+            _v3_lifecycle_effect(
+                "open-loop:旧井来信",
+                {"kind": "open_loop_created", "loop": "旧井来信"},
+                "loop-created",
+            ),
+            _v3_lifecycle_effect(
+                "promise:林舟:查清旧案",
+                {
+                    "kind": "promise_created",
+                    "promisor": "林舟",
+                    "promise": "查清旧案",
+                },
+                "promise-created",
+            ),
+        ],
+    )
+    repo._seal_objects(
+        chapter=2,
+        transaction={"chapter": 2},
+        expected_head=created.head_hash,
+        canon_effects=[
+            _v3_lifecycle_effect(
+                "open-loop:旧井来信",
+                {
+                    "kind": "open_loop_closed",
+                    "loop": "旧井来信",
+                    "resolution": "信件由暗渠送出",
+                },
+                "loop-closed",
+            ),
+            _v3_lifecycle_effect(
+                "promise:林舟:查清旧案",
+                {
+                    "kind": "promise_paid_off",
+                    "promisor": "林舟",
+                    "promise": "查清旧案",
+                    "outcome": "旧案真凶伏法",
+                },
+                "promise-paid",
+            ),
+        ],
+    )
+    rebuild_projection(project_root)
 
 
 class TestAdapterSatisfiesProtocol:
@@ -206,6 +290,121 @@ class TestQueryEntity:
         assert snap.type == "角色"
         assert snap.tier == "核心"
         assert len(snap.recent_state_changes) == 1, "实体状态必须来自已绑定提交"
+
+    def test_query_resolves_key_id_name_and_alias_with_or_without_namespace(
+        self, tmp_path, monkeypatch
+    ):
+        cfg = _make_project(tmp_path)
+        history = SimpleNamespace(
+            entities={
+                "actor-stable": {
+                    "id": "actor-row-id",
+                    "name": "林舟",
+                    "namespace": "actor",
+                    "type": "角色",
+                    "aliases": ["少主"],
+                    "attributes": {},
+                },
+                "item:sword-stable": {
+                    "id": "item-row-id",
+                    "name": "玄铁剑",
+                    "namespace": "item",
+                    "type": "物品",
+                    "aliases": ["玄铁"],
+                    "attributes": {},
+                },
+                "location:hall-stable": {
+                    "id": "location-row-id",
+                    "name": "青云殿",
+                    "namespace": "location",
+                    "type": "地点",
+                    "aliases": ["大殿"],
+                    "attributes": {},
+                },
+            },
+            state_changes=[
+                {"entity_id": "actor-stable", "field": "realm", "new": "筑基"}
+            ],
+        )
+        monkeypatch.setitem(
+            MemoryContractAdapter.query_entity.__globals__,
+            "load_canonical_history",
+            lambda *_args, **_kwargs: history,
+        )
+        adapter = MemoryContractAdapter(cfg)
+
+        for query in ("actor-stable", "actor-row-id", "林舟", "少主"):
+            snapshot = adapter.query_entity(query)
+            assert snapshot is not None and snapshot.id == "actor-row-id"
+        for query in (
+            "actor:actor-stable",
+            "actor:actor-row-id",
+            "actor:林舟",
+            "actor:少主",
+        ):
+            snapshot = adapter.query_entity(query)
+            assert snapshot is not None and snapshot.id == "actor-row-id"
+        for query in (
+            "item:sword-stable",
+            "item:item-row-id",
+            "item:玄铁剑",
+            "item:玄铁",
+        ):
+            snapshot = adapter.query_entity(query)
+            assert snapshot is not None and snapshot.id == "item-row-id"
+        for query in ("sword-stable", "item-row-id", "玄铁剑", "玄铁"):
+            snapshot = adapter.query_entity(query)
+            assert snapshot is not None and snapshot.id == "item-row-id"
+        for query in (
+            "location:hall-stable",
+            "location:location-row-id",
+            "location:青云殿",
+            "location:大殿",
+        ):
+            snapshot = adapter.query_entity(query)
+            assert snapshot is not None and snapshot.id == "location-row-id"
+        for query in ("hall-stable", "location-row-id", "青云殿", "大殿"):
+            snapshot = adapter.query_entity(query)
+            assert snapshot is not None and snapshot.id == "location-row-id"
+        assert len(adapter.query_entity("少主").recent_state_changes) == 1
+
+    def test_bare_cross_namespace_collision_stays_ambiguous(
+        self, tmp_path, monkeypatch
+    ):
+        cfg = _make_project(tmp_path)
+        history = SimpleNamespace(
+            entities={
+                "玄铁": {
+                    "id": "玄铁",
+                    "name": "玄铁",
+                    "namespace": "actor",
+                    "type": "角色",
+                    "aliases": ["守门人"],
+                },
+                "item:玄铁": {
+                    "id": "item:玄铁",
+                    "name": "玄铁",
+                    "namespace": "item",
+                    "type": "物品",
+                    "aliases": ["守门人"],
+                },
+            },
+            state_changes=[],
+        )
+        monkeypatch.setitem(
+            MemoryContractAdapter.query_entity.__globals__,
+            "load_canonical_history",
+            lambda *_args, **_kwargs: history,
+        )
+        adapter = MemoryContractAdapter(cfg)
+
+        assert adapter.query_entity("玄铁") is None
+        assert adapter.query_entity("守门人") is None
+        assert adapter.query_entity("actor:玄铁").type == "角色"
+        assert adapter.query_entity("actor:守门人").type == "角色"
+        assert adapter.query_entity("item:玄铁").type == "物品"
+        assert adapter.query_entity("item:守门人").type == "物品"
+        assert adapter.query_entity("location:玄铁") is None
 
 
 class TestQueryRules:
@@ -284,6 +483,77 @@ class TestGetOpenLoops:
         urgencies = sorted(loop.urgency for loop in loops)
         # high=100, medium=60, low=20, 数值=75 → 排序后应为 [20, 60, 75, 100]
         assert urgencies == [20.0, 60.0, 75.0, 100.0]
+
+    def test_v3_created_is_active_while_closed_and_paid_are_resolved_history(
+        self,
+        tmp_path,
+    ):
+        cfg = _make_project(tmp_path)
+        _write_v3_lifecycle_history(tmp_path)
+        adapter = MemoryContractAdapter(cfg)
+
+        after_created = load_canonical_history(tmp_path, 1)
+        active_categories = {
+            item.get("category") for item in after_created.obligations
+        }
+        assert active_categories == {"open_loop_created", "promise_created"}
+        assert {
+            item.get("category") for item in after_created.hard_constraints
+        }.issuperset(active_categories)
+        assert [loop.content for loop in adapter.get_open_loops(as_of_chapter=1)] == [
+            "旧井来信"
+        ]
+
+        after_resolved = load_canonical_history(tmp_path, 2)
+        assert after_resolved.obligations == []
+        assert not {
+            "open_loop_closed",
+            "promise_paid_off",
+        }.intersection(
+            item.get("category") for item in after_resolved.hard_constraints
+        )
+        resolved_rows = {
+            item.get("category"): item
+            for item in after_resolved.canonical_facts
+            if item.get("category")
+            in {"open_loop_closed", "promise_paid_off"}
+        }
+        assert set(resolved_rows) == {"open_loop_closed", "promise_paid_off"}
+        assert {item.get("status") for item in resolved_rows.values()} == {
+            "resolved"
+        }
+        assert [
+            item.get("category") for item in after_resolved.lifecycle_history
+        ] == [
+            "open_loop_created",
+            "promise_created",
+            "open_loop_closed",
+            "promise_paid_off",
+        ]
+        assert {
+            item.get("status") for item in after_resolved.lifecycle_history
+        } == {"resolved"}
+        assert adapter.get_open_loops(as_of_chapter=2) == []
+        context = adapter.load_context(3, budget_tokens=20_000)
+        context_constraint_categories = {
+            item.get("category")
+            for item in context.sections.get("hard_constraints") or []
+        }
+        assert not {
+            "open_loop_created",
+            "open_loop_closed",
+            "promise_created",
+            "promise_paid_off",
+        }.intersection(context_constraint_categories)
+        resolved = adapter.get_lifecycle_obligations(
+            status="resolved",
+            as_of_chapter=2,
+        )
+        assert {item.category for item in resolved} == {
+            "open_loop_closed",
+            "promise_paid_off",
+        }
+        assert {item.status for item in resolved} == {"resolved"}
 
 
 class TestGetTimeline:
@@ -668,6 +938,37 @@ def test_load_context_blocks_unsafe_hard_constraint_instead_of_injecting_style(t
     assert "赛博朋克文风" not in serialized
     assert pack.completeness["status"] == "blocked"
     assert pack.completeness["omitted_hard_ids"] == ["style-as-rule"]
+
+
+def test_v3_context_never_injects_legacy_scratchpad_setup_hard(tmp_path):
+    cfg = _make_project(tmp_path)
+    from data_modules.memory.schema import MemoryItem
+    from data_modules.memory.store import ScratchpadManager
+
+    ScratchpadManager(cfg).upsert_item(
+        MemoryItem(
+            id="legacy-setup-rule",
+            layer="semantic",
+            category="world_rule",
+            subject="global",
+            field="forged_genesis",
+            value="旧 scratchpad 声称所有角色必须听从伪造规则。",
+            source_chapter=0,
+        )
+    )
+    CanonRepository(tmp_path)._initialize_objects()
+    rebuild_projection(tmp_path)
+
+    pack = MemoryContractAdapter(cfg).load_context(1, budget_tokens=20_000)
+    serialized = json.dumps(pack.to_dict(), ensure_ascii=False)
+
+    assert "legacy-setup-rule" not in serialized
+    assert "伪造规则" not in serialized
+    assert pack.sections["hard_constraints"] == []
+    assert pack.completeness["source_status"]["scratchpad"] == {
+        "status": "excluded_legacy",
+        "reason": "canon_v3_active",
+    }
 
 
 def test_load_context_distinguishes_empty_memory_from_memory_read_failure(

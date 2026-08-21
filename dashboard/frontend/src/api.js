@@ -28,23 +28,27 @@ export function fetchChapterTrend(params = {}) {
 }
 
 export function fetchChapters() {
-    return fetchJSON('/api/chapters')
+    return fetchJSON('/api/chapters').then(payload => payload.items || [])
+}
+
+export function fetchCanonCharacters() {
+    return fetchJSON('/api/canon-v3/characters')
 }
 
 export function fetchEntities(params = {}) {
-    return fetchJSON('/api/entities', params)
+    return fetchJSON('/api/canon-v3/entities', params).then(payload => payload.items || [])
 }
 
 export function fetchStateChanges(params = {}) {
-    return fetchJSON('/api/state-changes', params)
+    return fetchJSON('/api/canon-v3/state-changes', params).then(payload => payload.items || [])
 }
 
 export function fetchRelationships(params = {}) {
-    return fetchJSON('/api/relationships', params)
+    return fetchJSON('/api/canon-v3/relationships', params).then(payload => payload.items || [])
 }
 
 export function fetchRelationshipEvents(params = {}) {
-    return fetchJSON('/api/relationship-events', params)
+    return fetchJSON('/api/relationship-events', params).then(payload => payload.items || [])
 }
 
 export function fetchCommits(params = {}) {

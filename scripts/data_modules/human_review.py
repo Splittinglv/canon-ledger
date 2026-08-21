@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .chapter_content_binding import ChapterContentBinding, chapter_bindings_equal
+from .review_schema import route_manual_review_policy
 from .story_contracts import write_json
 
 
@@ -20,6 +21,24 @@ STATUS_PENDING = "pending"
 STATUS_RESOLVED = "resolved"
 STATUS_REWRITE_REQUIRED = "rewrite_required"
 REVIEW_MANUAL_CHECK_SOURCE = "review_manual_check"
+VALID_FACT_DIMENSIONS = {"knowledge", "presence", "custody"}
+VALID_REVIEW_KINDS = {"ambiguity", "checkpoint"}
+VALID_REVIEW_TRIGGER_KINDS = {
+    "ambiguous_fact",
+    "author_marked",
+    "retcon",
+    "core_character_permanent_state",
+    "core_secret_reveal",
+    "key_item_change",
+    "world_rule_change",
+    "power_permanent_change",
+    "major_relationship_change",
+    "major_time_change",
+    "core_obligation_change",
+    "volume_end",
+}
+VALID_REVIEW_MATERIALITIES = {"critical", "high", "normal", "low"}
+_MATERIALITY_ALIASES = {"medium": "normal"}
 _CATEGORY_DIMENSION = {
     "knowledge": "knowledge",
     "knowledge_identity": "knowledge",
@@ -27,15 +46,13 @@ _CATEGORY_DIMENSION = {
     "entity_identity": "knowledge",
     "presence": "presence",
     "presence_kind": "presence",
-    "timeline": "presence",
-    "continuity": "presence",
     "custody": "custody",
     "custody_transition": "custody",
 }
 _REVIEW_CHECK_SPECS = {
     "character": {
         "category": "knowledge_boundary",
-        "dimension": "knowledge",
+        "dimension": "",
         "id_prefix": "knowledge-boundary",
         "options": ["confirm", "rewrite", "replace"],
         "hint": (
@@ -47,7 +64,7 @@ _REVIEW_CHECK_SPECS = {
     },
     "timeline": {
         "category": "timeline",
-        "dimension": "presence",
+        "dimension": "",
         "id_prefix": "timeline-check",
         "options": ["confirm", "rewrite"],
         "hint": (
@@ -57,7 +74,7 @@ _REVIEW_CHECK_SPECS = {
     },
     "continuity": {
         "category": "continuity",
-        "dimension": "presence",
+        "dimension": "",
         "id_prefix": "continuity-check",
         "options": ["confirm", "rewrite"],
         "hint": (
@@ -136,10 +153,37 @@ def _event_content_sha(chapter: int, event: Any) -> str:
     return hashlib.sha256(_canonical_json(represented).encode("utf-8")).hexdigest()
 
 
+def verified_event_content_sha256(chapter: int, event: Any) -> str:
+    """Public verifier for the exact event bytes a v2 decision approved."""
+
+    return _event_content_sha(chapter, event)
+
+
 def _candidate_fingerprint(chapter: int, item: dict[str, Any]) -> str:
     stable = {
         "category": item.get("category"),
         "dimension": item.get("dimension"),
+        "candidate_event_id": item.get("candidate_event_id"),
+        "candidate_event": stable_event_repr(chapter, item.get("candidate_event")),
+        "evidence_quote": item.get("evidence_quote"),
+        "existing_fact": item.get("existing_fact"),
+        "reason": item.get("reason"),
+        "new_entity_id": item.get("new_entity_id"),
+        "matched_entity_id": item.get("matched_entity_id"),
+    }
+    return hashlib.sha256(_canonical_json(stable).encode("utf-8")).hexdigest()[:16]
+
+
+def _candidate_core_fingerprint(chapter: int, item: dict[str, Any]) -> str:
+    """Hash decision semantics without coverage-routing metadata.
+
+    Older queues guessed a scalar fact dimension from broad categories. A
+    recorded author verdict remains valid when only that routing metadata is
+    corrected, but never when the candidate, evidence, identity, or reason
+    changes.
+    """
+    stable = {
+        "category": item.get("category"),
         "candidate_event_id": item.get("candidate_event_id"),
         "candidate_event": stable_event_repr(chapter, item.get("candidate_event")),
         "evidence_quote": item.get("evidence_quote"),
@@ -185,10 +229,17 @@ def _decision_receipt(decision: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_json(stable).encode("utf-8")).hexdigest()
 
 
+def human_decision_receipt_sha256(decision: dict[str, Any]) -> str:
+    """Public verifier for receipts embedded in immutable chapter commits."""
+
+    return _decision_receipt(decision)
+
+
 def _is_review_knowledge_item(item: dict[str, Any]) -> bool:
     return bool(
         item.get("source") == REVIEW_MANUAL_CHECK_SOURCE
         and item.get("category") == "knowledge_boundary"
+        and _text(item.get("review_kind") or "ambiguity", 40) == "ambiguity"
     )
 
 
@@ -211,13 +262,51 @@ def _assert_review_knowledge_replacement(
         )
 
 
+def _fact_dimensions(
+    item: dict[str, Any],
+    *,
+    fallback: str = "",
+    explicit_only: bool = False,
+) -> list[str]:
+    """Return explicit dimensions, falling back only for legacy items."""
+    if "fact_dimensions" in item:
+        raw = item.get("fact_dimensions")
+        if raw is None:
+            raw = []
+        if not isinstance(raw, list):
+            raise ValueError("human_review_fact_dimensions_must_be_list")
+        dimensions = [_text(value, 40) for value in raw]
+    elif explicit_only:
+        dimensions = []
+    else:
+        legacy = _text(item.get("dimension") or fallback, 40)
+        dimensions = [legacy] if legacy else []
+    if any(value not in VALID_FACT_DIMENSIONS for value in dimensions):
+        invalid = next(
+            value for value in dimensions if value not in VALID_FACT_DIMENSIONS
+        )
+        raise ValueError(f"human_review_dimension_invalid:{invalid}")
+    return list(dict.fromkeys(dimensions))
+
+
+def _review_policy(item: dict[str, Any]) -> tuple[str, bool]:
+    return route_manual_review_policy(item)
+
+
+def _item_fact_dimensions(item: dict[str, Any]) -> list[str]:
+    return _fact_dimensions(
+        item,
+        fallback=_text(item.get("dimension"), 40),
+        explicit_only=item.get("source") == REVIEW_MANUAL_CHECK_SOURCE,
+    )
+
+
 def review_manual_check_items_from_review(review: Any) -> list[dict[str, Any]]:
     """Turn reviewer manual_checks into confirm-queue items.
 
-    Character checks stay on the knowledge-boundary path. Timeline and
-    continuity checks keep presence unverified until the author decides, so
-    “not present / not held” cannot auto-fire. Setting and logic checks are
-    queued without a coverage dimension.
+    Explicit fact dimensions always win over category guesses. Required and
+    advisory checks enter the queue; audit-only/ignored speculation remains in
+    the review artifact and never becomes a workflow blocker.
     """
     raw_checks: list[Any]
     if hasattr(review, "manual_checks"):
@@ -231,11 +320,36 @@ def review_manual_check_items_from_review(review: Any) -> list[dict[str, Any]]:
     for check in raw_checks:
         if hasattr(check, "model_dump"):
             check = check.model_dump()
+        elif hasattr(check, "to_dict"):
+            check = check.to_dict()
         if not isinstance(check, dict):
             continue
         spec = _REVIEW_CHECK_SPECS.get(str(check.get("category") or ""))
         if spec is None:
             continue
+        disposition, required = _review_policy(check)
+        if disposition in {"audit_only", "ignore"}:
+            continue
+        review_kind = _text(check.get("review_kind") or "ambiguity", 40)
+        if review_kind not in VALID_REVIEW_KINDS:
+            raise ValueError(f"human_review_review_kind_invalid:{review_kind}")
+        trigger_kind = _text(check.get("trigger_kind"), 80)
+        if trigger_kind and trigger_kind not in VALID_REVIEW_TRIGGER_KINDS:
+            raise ValueError(
+                f"human_review_trigger_kind_invalid:{trigger_kind}"
+            )
+        materiality = _MATERIALITY_ALIASES.get(
+            _text(check.get("materiality") or "normal", 40),
+            _text(check.get("materiality") or "normal", 40),
+        )
+        if materiality not in VALID_REVIEW_MATERIALITIES:
+            raise ValueError(
+                f"human_review_materiality_invalid:{materiality}"
+            )
+        dimensions = _fact_dimensions(
+            check,
+            explicit_only=True,
+        )
         prefix = str(spec["id_prefix"])
         counters[prefix] = counters.get(prefix, 0) + 1
         description = _text(check.get("description"), 600)
@@ -248,11 +362,22 @@ def review_manual_check_items_from_review(review: Any) -> list[dict[str, Any]]:
             "existing_fact": _text(check.get("location"), 600),
             "reason": f"{description} {reason} {spec['hint']}".strip(),
             "options": list(spec["options"]),
+            "fact_dimensions": dimensions,
+            "review_kind": review_kind,
+            "trigger_kind": trigger_kind,
+            "materiality": materiality,
+            "disposition": disposition,
+            "required": required,
+            "source_event_id": _text(check.get("source_event_id"), 180),
+            # Required manual review blocks the *next* chapter at prewrite.
+            # It must not reuse the confirmed-conflict flag that rejects the
+            # current chapter before its queue can be replayed.
             "blocking": False,
         }
-        dimension = str(spec.get("dimension") or "")
-        if dimension:
-            item["dimension"] = dimension
+        if dimensions:
+            # Keep the scalar field so v1 consumers can still read the first
+            # affected dimension; new code consumes fact_dimensions.
+            item["dimension"] = dimensions[0]
         items.append(item)
     return items
 
@@ -341,6 +466,13 @@ class HumanReviewService:
         self.queue_root = self.root / "queue"
         self.ledger_path = self.root / "decisions.json"
 
+    def _assert_v2_write_allowed(self) -> None:
+        from .workflow_authority import WorkflowAuthority
+
+        WorkflowAuthority(
+            self.project_root
+        ).assert_legacy_fact_mutation_disabled("human_review")
+
     def queue_path(self, chapter: int) -> Path:
         return self.queue_root / f"chapter_{int(chapter):04d}.json"
 
@@ -411,6 +543,11 @@ class HumanReviewService:
         seen_event_ids: set[str] = set()
         for raw in pending:
             item = dict(raw) if isinstance(raw, dict) else {"reason": _text(raw)}
+            disposition, required = _review_policy(item)
+            if disposition in {"audit_only", "ignore"}:
+                # These remain visible in the review artifact but are not
+                # actionable human-review queue entries.
+                continue
             candidate_event = item.get("candidate_event")
             if candidate_event is not None and not isinstance(candidate_event, dict):
                 raise ValueError("human_review_candidate_event_must_be_object")
@@ -429,17 +566,39 @@ class HumanReviewService:
                 seen_event_ids.add(candidate_event_id)
 
             category = _text(item.get("category") or "disambiguation", 80)
-            dimension = _text(
-                item.get("dimension")
-                or _CATEGORY_DIMENSION.get(category, "")
+            fallback_dimension = _text(
+                _CATEGORY_DIMENSION.get(category, "")
                 or _EVENT_DIMENSION.get(
-                    _text((candidate_event or {}).get("event_type"), 80),
-                    "",
+                    _text((candidate_event or {}).get("event_type"), 80), ""
                 ),
                 40,
             )
-            if dimension and dimension not in {"knowledge", "presence", "custody"}:
-                raise ValueError(f"human_review_dimension_invalid:{dimension}")
+            dimensions = _fact_dimensions(
+                item,
+                fallback=fallback_dimension,
+                explicit_only=(
+                    item.get("source") == REVIEW_MANUAL_CHECK_SOURCE
+                ),
+            )
+            dimension = dimensions[0] if dimensions else ""
+            review_kind = _text(item.get("review_kind") or "ambiguity", 40)
+            if review_kind not in VALID_REVIEW_KINDS:
+                raise ValueError(
+                    f"human_review_review_kind_invalid:{review_kind}"
+                )
+            trigger_kind = _text(item.get("trigger_kind"), 80)
+            if trigger_kind and trigger_kind not in VALID_REVIEW_TRIGGER_KINDS:
+                raise ValueError(
+                    f"human_review_trigger_kind_invalid:{trigger_kind}"
+                )
+            materiality = _MATERIALITY_ALIASES.get(
+                _text(item.get("materiality") or "normal", 40),
+                _text(item.get("materiality") or "normal", 40),
+            )
+            if materiality not in VALID_REVIEW_MATERIALITIES:
+                raise ValueError(
+                    f"human_review_materiality_invalid:{materiality}"
+                )
             raw_options = item.get("options")
             options = [
                 option
@@ -453,7 +612,22 @@ class HumanReviewService:
                 )
                 if option in VALID_ACTIONS
             ]
-            options = list(dict.fromkeys(options)) or ["confirm", "ignore", "replace"]
+            options = list(dict.fromkeys(options))
+            if review_kind == "checkpoint" or _text(
+                item.get("source"), 80
+            ) == "runtime_unanchored_issue":
+                options = ["confirm", "rewrite"]
+            elif item.get("source") == REVIEW_MANUAL_CHECK_SOURCE:
+                options = [
+                    "rewrite" if value == "ignore" else value
+                    for value in options
+                    if value in {"confirm", "ignore", "rewrite"}
+                ]
+                options = list(dict.fromkeys(options))
+                options = options or ["confirm", "rewrite"]
+            else:
+                options = [value for value in options if value in {"confirm", "ignore"}]
+                options = options or ["confirm", "ignore"]
             evidence_quote = _text(item.get("evidence_quote"), 600)
             if not evidence_quote and candidate_event:
                 event_payload = candidate_event.get("payload")
@@ -470,6 +644,14 @@ class HumanReviewService:
                 "source": _text(item.get("source") or "fact_extraction", 80),
                 "category": category,
                 "dimension": dimension,
+                "fact_dimensions": dimensions,
+                "review_kind": review_kind,
+                "trigger_kind": trigger_kind,
+                "materiality": materiality,
+                "disposition": disposition,
+                "required": required,
+                "policy_routed": True,
+                "source_event_id": _text(item.get("source_event_id"), 180),
                 "candidate_event_id": candidate_event_id,
                 "candidate_event": candidate_event,
                 "new_entity_id": _text(item.get("new_entity_id"), 180),
@@ -484,8 +666,9 @@ class HumanReviewService:
                     600,
                 ),
                 "options": options,
-                # Ambiguity is advisory by default. Callers may opt into a
-                # blocking decision for a genuinely unsafe missing fact.
+                # ``blocking`` is the legacy current-commit conflict flag;
+                # human_required is a separate next-chapter gate and must not
+                # implicitly set it.
                 "blocking": bool(item.get("blocking", False)),
             }
             # A decision recorded later is bound to this exact candidate
@@ -541,9 +724,9 @@ class HumanReviewService:
         if decision is None:
             return STATUS_PENDING
         action = _text(decision.get("action"), 40)
-        if (
+        if action == "rewrite" or (
             item.get("source") == REVIEW_MANUAL_CHECK_SOURCE
-            and action in {"ignore", "rewrite"}
+            and action == "ignore"
         ):
             # v7.2 recorded review "this is a bug" choices as ``ignore``.
             # Preserve that documented meaning while exposing an explicit
@@ -567,11 +750,21 @@ class HumanReviewService:
             cls._effective_action(item, _text(value, 40))
             for value in (item.get("options") or [])
         ]
-        allowed = (
-            {"confirm", "rewrite", "replace"}
-            if item.get("source") == REVIEW_MANUAL_CHECK_SOURCE
-            else {"confirm", "ignore", "replace"}
-        )
+        if item.get("source") == REVIEW_MANUAL_CHECK_SOURCE:
+            allowed = {"confirm", "rewrite"}
+        elif (
+            _text(item.get("review_kind"), 40) == "checkpoint"
+            or _text(item.get("source"), 80) == "runtime_unanchored_issue"
+        ):
+            # Emergency v2 safe mode: key facts cannot be silently discarded
+            # or identity-swapped.  The author either approves the exact
+            # candidate or returns to the manuscript.
+            allowed = {"confirm", "rewrite"}
+        else:
+            # Generic replace was the source of residual event identities.
+            # Ambiguities may still be omitted, but corrections go through a
+            # fresh v3 candidate revision instead of patching an old event.
+            allowed = {"confirm", "ignore"}
         return list(dict.fromkeys(value for value in actions if value in allowed))
 
     def persist_queue(
@@ -580,12 +773,31 @@ class HumanReviewService:
         binding: dict[str, Any],
         pending: list[Any],
     ) -> list[dict[str, Any]]:
+        self._assert_v2_write_allowed()
         parsed_binding = ChapterContentBinding.model_validate(binding).model_dump()
         items = self._normalize_items(chapter, parsed_binding, pending)
         queue_path = self.queue_path(chapter)
         if queue_path.is_file():
             previous, previous_binding = self._load_queue(queue_path)
             if chapter_bindings_equal(previous_binding, parsed_binding):
+                previous_by_id = {
+                    _text(raw.get("decision_id"), 180): raw
+                    for raw in previous.get("items") or []
+                    if isinstance(raw, dict)
+                    and _text(raw.get("decision_id"), 180)
+                }
+                for item in items:
+                    previous_item = previous_by_id.get(
+                        _text(item.get("decision_id"), 180)
+                    )
+                    if not isinstance(previous_item, dict):
+                        continue
+                    if _candidate_core_fingerprint(
+                        chapter, item
+                    ) == _candidate_core_fingerprint(chapter, previous_item):
+                        item["candidate_fingerprint"] = _text(
+                            previous_item.get("candidate_fingerprint"), 64
+                        )
                 current_ids = {
                     _text(item.get("decision_id"), 180) for item in items
                 }
@@ -673,6 +885,7 @@ class HumanReviewService:
         pending: list[Any],
         candidate_events: list[dict[str, Any]],
     ) -> dict[str, Any]:
+        self._assert_v2_write_allowed()
         chapter_sha256 = ChapterContentBinding.model_validate(binding).sha256
         decisions = self._decision_map(chapter, chapter_sha256)
         # Extraction is model evidence, not a human verdict.  Never trust a
@@ -726,7 +939,8 @@ class HumanReviewService:
         override_ids = {
             _text(item.get("candidate_event_id"), 180)
             for item in items
-            if _text(item.get("candidate_event_id"), 180)
+            if _review_policy(item)[1]
+            and _text(item.get("candidate_event_id"), 180)
             and isinstance(item.get("candidate_event"), dict)
         }
         if override_ids:
@@ -751,16 +965,17 @@ class HumanReviewService:
         affected_dimensions: set[str] = set()
         resolved_dimensions: set[str] = set()
         identity_actions: dict[str, str] = {}
+        discarded_event_ids: set[str] = set()
 
         for item in items:
             decision = self._matched_decision(item, decisions)
             event_index = event_indexes.get(item["candidate_event_id"])
             if decision is None:
                 unresolved.append(item)
-                if event_index is not None:
+                if event_index is not None and _review_policy(item)[1]:
                     dropped.add(event_index)
-                if item.get("dimension"):
-                    affected_dimensions.add(str(item["dimension"]))
+                if _review_policy(item)[1]:
+                    affected_dimensions.update(_item_fact_dimensions(item))
                 continue
 
             action = self._effective_action(
@@ -777,14 +992,17 @@ class HumanReviewService:
                 )
                 if event_index is not None:
                     dropped.add(event_index)
-                if item.get("dimension"):
-                    affected_dimensions.add(str(item["dimension"]))
+                if _review_policy(item)[1]:
+                    affected_dimensions.update(_item_fact_dimensions(item))
                 # A confirmed prose bug is intentionally not a resolved fact
                 # decision.  The caller must edit and re-review these bytes.
                 continue
             if action == "ignore":
                 if event_index is not None:
                     dropped.add(event_index)
+                candidate_id = _text(item.get("candidate_event_id"), 180)
+                if candidate_id:
+                    discarded_event_ids.add(candidate_id)
             elif action == "replace":
                 if item.get("new_entity_id") and not isinstance(
                     item.get("candidate_event"), dict
@@ -881,8 +1099,8 @@ class HumanReviewService:
                     "decision_sha256": _decision_receipt(decision),
                 }
             )
-            if item.get("dimension"):
-                resolved_dimensions.add(str(item["dimension"]))
+            if _review_policy(item)[1]:
+                resolved_dimensions.update(_item_fact_dimensions(item))
 
         effective_events = [
             replacements.get(index, event)
@@ -905,9 +1123,11 @@ class HumanReviewService:
             "affected_dimensions": sorted(affected_dimensions),
             "resolved_dimensions": sorted(resolved_dimensions),
             "identity_actions": identity_actions,
+            "discarded_event_ids": sorted(discarded_event_ids),
         }
 
     def record(self, payload: Any) -> dict[str, Any]:
+        self._assert_v2_write_allowed()
         raw_decisions = payload.get("decisions") if isinstance(payload, dict) else payload
         if not isinstance(raw_decisions, list) or not raw_decisions:
             raise ValueError("human_review_decisions_must_be_nonempty_list")
@@ -1127,15 +1347,27 @@ class HumanReviewService:
             # its own pipeline will validate that queue before committing.
             if 0 < queue_chapter < target:
                 prior.extend(self.list_items(queue_chapter))
-        pending = [item for item in prior if item.get("status") == STATUS_PENDING]
-        rewrite_required = [
+        all_pending = [
+            item for item in prior if item.get("status") == STATUS_PENDING
+        ]
+        all_rewrite_required = [
             item
             for item in prior
             if item.get("status") == STATUS_REWRITE_REQUIRED
         ]
+        pending = [item for item in all_pending if _review_policy(item)[1]]
+        advisory_pending = [
+            item for item in all_pending if not _review_policy(item)[1]
+        ]
+        # ``advisory`` describes the uncertainty before a person decides. Once
+        # the author explicitly says the prose must be rewritten, that verdict
+        # is authoritative and must block later chapters regardless of the
+        # item's original disposition.
+        rewrite_required = list(all_rewrite_required)
+        advisory_rewrite_required: list[dict[str, Any]] = []
 
         commits: dict[int, tuple[set[str], dict[str, str]]] = {}
-        not_replayed: list[dict[str, Any]] = []
+        all_not_replayed: list[dict[str, Any]] = []
         for item in prior:
             if item.get("status") != STATUS_RESOLVED:
                 continue
@@ -1183,31 +1415,81 @@ class HumanReviewService:
                 or not decision_sha256
                 or applied_receipts.get(decision_id) != decision_sha256
             ):
-                not_replayed.append(item)
+                all_not_replayed.append(item)
+
+        def changes_canon(item: dict[str, Any]) -> bool:
+            return _text(item.get("decision_action"), 40) in {
+                "ignore",
+                "replace",
+            }
+
+        # A pending advisory and an advisory ``confirm`` do not change the
+        # shape of canon, so they remain warnings. ``ignore`` and ``replace``
+        # do change it; after the author records either action, the old commit
+        # must not remain authoritative while a later chapter is written.
+        not_replayed = [
+            item
+            for item in all_not_replayed
+            if _review_policy(item)[1] or changes_canon(item)
+        ]
+        advisory_not_replayed = [
+            item
+            for item in all_not_replayed
+            if not _review_policy(item)[1] and not changes_canon(item)
+        ]
 
         def compact(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-            return [
-                {
-                    "chapter": int(row.get("chapter") or 0),
-                    "decision_id": _text(row.get("decision_id"), 180),
-                    "source": _text(row.get("source"), 80),
-                    "category": _text(row.get("category"), 80),
-                    "status": _text(row.get("status"), 40),
-                    "decision_sha256": _text(
-                        row.get("decision_sha256"), 64
-                    ),
-                }
-                for row in rows
-            ]
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                disposition, required = _review_policy(row)
+                result.append(
+                    {
+                        "chapter": int(row.get("chapter") or 0),
+                        "decision_id": _text(row.get("decision_id"), 180),
+                        "source": _text(row.get("source"), 80),
+                        "category": _text(row.get("category"), 80),
+                        "fact_dimensions": _item_fact_dimensions(row),
+                        "review_kind": _text(
+                            row.get("review_kind") or "ambiguity", 40
+                        ),
+                        "trigger_kind": _text(row.get("trigger_kind"), 80),
+                        "materiality": _text(
+                            row.get("materiality") or "normal", 40
+                        ),
+                        "disposition": disposition,
+                        "required": required,
+                        "source_event_id": _text(
+                            row.get("source_event_id"), 180
+                        ),
+                        "status": _text(row.get("status"), 40),
+                        "decision_action": _text(
+                            row.get("decision_action"), 40
+                        ),
+                        "decision_sha256": _text(
+                            row.get("decision_sha256"), 64
+                        ),
+                    }
+                )
+            return result
 
         return {
             "before_chapter": target,
             "pending": compact(pending),
             "rewrite_required": compact(rewrite_required),
             "not_replayed": compact(not_replayed),
+            "advisory_pending": compact(advisory_pending),
+            "advisory_rewrite_required": compact(
+                advisory_rewrite_required
+            ),
+            "advisory_not_replayed": compact(advisory_not_replayed),
             "counts": {
                 "pending": len(pending),
                 "rewrite_required": len(rewrite_required),
                 "not_replayed": len(not_replayed),
+                "advisory_pending": len(advisory_pending),
+                "advisory_rewrite_required": len(
+                    advisory_rewrite_required
+                ),
+                "advisory_not_replayed": len(advisory_not_replayed),
             },
         }

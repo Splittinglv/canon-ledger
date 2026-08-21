@@ -13,8 +13,8 @@ from typing import Any, Dict, List, Optional
 
 from .chapter_commit_service import ChapterCommitService
 from .canonical_history import (
+    CanonicalHistory,
     export_asof_snapshot,
-    latest_canonical_chapter,
     load_canonical_history,
 )
 from .commit_artifacts import extraction_list
@@ -30,11 +30,95 @@ from .memory_contract import (
 )
 from .memory.hard_constraints import normalize_hard_constraints
 from .consistency_context import sanitize_story_contracts
-from .rag_context import chapter_goal_from_contract, empty_rag_assist, load_rag_assist
+from .rag_context import empty_rag_assist
 from .story_runtime_sources import commit_status_view, load_runtime_sources
 from .urgency_utils import coerce_urgency
 
 logger = logging.getLogger(__name__)
+
+_ACTIVE_LIFECYCLE_CATEGORIES = frozenset(
+    {"open_loop", "reader_promise", "promise_created", "open_loop_created"}
+)
+_RESOLVED_LIFECYCLE_CATEGORIES = frozenset(
+    {"promise_paid", "promise_paid_off", "open_loop_closed"}
+)
+_OPEN_LOOP_ACTIVE_CATEGORIES = frozenset({"open_loop", "open_loop_created"})
+_OPEN_LOOP_RESOLVED_CATEGORIES = frozenset({"open_loop_closed"})
+_ENTITY_NAMESPACES = ("actor", "item", "location")
+
+
+def _entity_namespace(stable_key: str, row: Dict[str, Any]) -> str:
+    explicit = str(row.get("namespace") or "").strip().lower()
+    if explicit in _ENTITY_NAMESPACES:
+        return explicit
+    for value in (stable_key, str(row.get("id") or "")):
+        for namespace in _ENTITY_NAMESPACES:
+            if value.startswith(f"{namespace}:"):
+                return namespace
+    entity_type = str(row.get("type") or "").lower()
+    if any(marker in entity_type for marker in ("地点", "场所", "location")):
+        return "location"
+    if any(marker in entity_type for marker in ("物品", "法宝", "item")):
+        return "item"
+    return "actor"
+
+
+def _entity_identifiers(
+    stable_key: str,
+    row: Dict[str, Any],
+    namespace: str,
+) -> set[str]:
+    values = {
+        str(stable_key or "").strip(),
+        str(row.get("id") or "").strip(),
+        str(row.get("name") or "").strip(),
+        *(
+            str(alias or "").strip()
+            for alias in row.get("aliases") or []
+        ),
+    }
+    prefix = f"{namespace}:"
+    values.update(
+        value[len(prefix) :]
+        for value in tuple(values)
+        if value.startswith(prefix) and len(value) > len(prefix)
+    )
+    return {value for value in values if value}
+
+
+def _lifecycle_content(item: Dict[str, Any]) -> str:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    return str(
+        payload.get("loop")
+        or payload.get("promise")
+        or item.get("value")
+        or ""
+    )
+
+
+def _lifecycle_rows(history: Any, status: str) -> List[Dict[str, Any]]:
+    requested = str(status or "active").strip().lower()
+    active = [
+        item
+        for item in history.obligations
+        if isinstance(item, dict)
+        and str(item.get("category") or "") in _ACTIVE_LIFECYCLE_CATEGORIES
+        and str(item.get("status") or "active") == "active"
+    ]
+    resolved = [
+        item
+        for item in history.lifecycle_history
+        if isinstance(item, dict)
+        and str(item.get("category") or "") in _RESOLVED_LIFECYCLE_CATEGORIES
+        and str(item.get("status") or "") == "resolved"
+    ]
+    if requested == "active":
+        return active
+    if requested in {"resolved", "closed", "history"}:
+        return resolved
+    if requested in {"all", "any"}:
+        return [*active, *resolved]
+    return []
 
 
 def _estimate_tokens(value: Any) -> int:
@@ -145,10 +229,54 @@ class MemoryContractAdapter:
             chapter,
             history_as_of,
         )
-        canonical_history = load_canonical_history(
-            self.config.project_root,
-            history_as_of,
+        from .workflow_authority import WorkflowAuthority
+
+        # CURRENT is never a mode switch.  Until an exact, fresh HEAD exists,
+        # context remains fact-empty and visibly blocked instead of reading
+        # accepted v2 commits, scratchpad or legacy projections.
+        authority = WorkflowAuthority(self.config.project_root)
+        canon_v3_workflow: Dict[str, Any] = dict(
+            getattr(runtime_sources, "workflow_snapshot", None)
+            or authority.snapshot()
         )
+        canon_v3_active = True
+        active_author_axioms: List[Dict[str, Any]] = []
+        if (
+            canon_v3_workflow.get("head_hash")
+            and canon_v3_workflow.get("projection_fresh")
+        ):
+            canonical_history = load_canonical_history(
+                self.config.project_root,
+                history_as_of,
+            )
+            from .canon_v3.projection import read_projection
+
+            exact_projection = read_projection(
+                self.config.project_root, require_fresh=True
+            )
+            axiom_projection = exact_projection.get("author_axioms") or {}
+            if isinstance(axiom_projection, dict):
+                active_author_axioms = [
+                    dict(item)
+                    for item in axiom_projection.get("records") or []
+                    if isinstance(item, dict)
+                ]
+            post_read_workflow = authority.snapshot()
+            if post_read_workflow.get("workflow_digest") != canon_v3_workflow.get(
+                "workflow_digest"
+            ):
+                canonical_history = CanonicalHistory(as_of_chapter=history_as_of)
+                canonical_history.invalid_sources.append(
+                    "canon_v3_workflow_changed_during_context_read"
+                )
+                active_author_axioms = []
+                canon_v3_workflow = post_read_workflow
+        else:
+            canonical_history = CanonicalHistory(as_of_chapter=history_as_of)
+            canonical_history.invalid_sources.append(
+                "canon_v3_workflow:"
+                + str(canon_v3_workflow.get("state") or "invalid")
+            )
 
         mandatory["story_contracts"] = sanitize_story_contracts(
             dict(runtime_sources.contracts)
@@ -157,6 +285,9 @@ class MemoryContractAdapter:
             "chapter": int(getattr(runtime_sources, "chapter", chapter) or chapter),
             "fallback_sources": list(
                 getattr(runtime_sources, "fallback_sources", []) or []
+            ),
+            "advisory_sources": list(
+                getattr(runtime_sources, "advisory_sources", []) or []
             ),
             "primary_write_source": str(
                 getattr(runtime_sources, "primary_write_source", "chapter_commit")
@@ -170,20 +301,28 @@ class MemoryContractAdapter:
             "history_as_of_chapter": history_as_of,
             "canonical_chapters": list(canonical_history.valid_chapters),
         }
+        context_workflow = {
+            key: value
+            for key, value in canon_v3_workflow.items()
+            if key not in {"cases", "author_axiom_workflow"}
+        }
+        # Review material is available only through status/confirm.  It must
+        # never become ordinary writing context before publication.
+        context_workflow["cases"] = []
+        mandatory["runtime_status"]["workflow_snapshot"] = context_workflow
         mandatory["latest_commit"] = (
             commit_status_view(getattr(runtime_sources, "latest_commit", None)) or {}
         )
-        contract_failures = [
+        contract_advisories = [
             str(item)
-            for item in (getattr(runtime_sources, "fallback_sources", []) or [])
+            for item in (getattr(runtime_sources, "advisory_sources", []) or [])
             if str(item).startswith(("missing_", "invalid_", "stale_"))
         ]
-        if contract_failures:
+        if contract_advisories:
             source_status["story_contracts"] = {
-                "status": "error",
-                "reason": ",".join(contract_failures),
+                "status": "advisory",
+                "reason": ",".join(contract_advisories),
             }
-            missing_sources.extend(contract_failures)
         else:
             source_status["story_contracts"] = {"status": "ok"}
 
@@ -200,49 +339,82 @@ class MemoryContractAdapter:
             }
         omitted_hard_ids.extend(canonical_history.omitted_fact_ids)
 
-        # 1. MemoryOrchestrator 基础包
+        workflow_state = str(canon_v3_workflow.get("state") or "invalid")
+        allowed_chapters = {
+            int(item)
+            for item in canon_v3_workflow.get("allowed_write_chapters") or []
+        }
+        workflow_ok = (
+            workflow_state == "ready"
+            and bool(canon_v3_workflow.get("can_write_next"))
+            and int(chapter) in allowed_chapters
+        )
+        if workflow_ok:
+            source_status["canon_v3_workflow"] = {"status": "ok"}
+        else:
+            reason = (
+                f"state={workflow_state};chapter={chapter};"
+                f"allowed={sorted(allowed_chapters)}"
+            )
+            source_status["canon_v3_workflow"] = {
+                "status": "error",
+                "reason": reason,
+            }
+            missing_sources.append(f"canon_v3_workflow_blocked:{reason}")
+
+        # 1. Legacy MemoryOrchestrator 基础包。Canon v3 激活后，旧 scratchpad
+        # 不再是任何事实源（包括 source_chapter=0 的伪 setup）；初始化事实只能
+        # 来自 HEAD 可达的 genesis snapshot / approved author axiom。
         memory_pack: Dict[str, Any] = {}
-        try:
-            orch = self._memory_orchestrator()
-            memory_pack = orch.build_memory_pack(chapter, include_soft=False)
-            if not isinstance(memory_pack, dict):
-                raise TypeError("memory_pack_must_be_object")
-            source_status["scratchpad"] = {"status": "ok"}
-        except Exception as e:
-            logger.warning("load_context: orchestrator failed: %s", e)
-            memory_pack = {}
+        scratchpad_hard: List[Dict[str, Any]] = []
+        if canon_v3_active:
             source_status["scratchpad"] = {
-                "status": "error",
-                "reason": e.__class__.__name__,
+                "status": "excluded_legacy",
+                "reason": "canon_v3_active",
             }
-            missing_sources.append("scratchpad")
+        else:
+            try:
+                orch = self._memory_orchestrator()
+                memory_pack = orch.build_memory_pack(chapter, include_soft=False)
+                if not isinstance(memory_pack, dict):
+                    raise TypeError("memory_pack_must_be_object")
+                source_status["scratchpad"] = {"status": "ok"}
+            except Exception as e:
+                logger.warning("load_context: orchestrator failed: %s", e)
+                memory_pack = {}
+                source_status["scratchpad"] = {
+                    "status": "error",
+                    "reason": e.__class__.__name__,
+                }
+                missing_sources.append("scratchpad")
 
-        scratchpad_hard, hard_error = normalize_hard_constraints(memory_pack)
-        if hard_error:
-            source_status["scratchpad"] = {
-                "status": "error",
-                "reason": hard_error,
-            }
-            missing_sources.append("scratchpad")
-            scratchpad_hard = []
-        for warning in memory_pack.get("warnings") or []:
-            if not isinstance(warning, dict):
-                continue
-            if warning.get("type") == "unsafe_hard_constraint":
-                ids = [
-                    str(item)
-                    for item in (warning.get("ids") or [])
-                    if str(item)
-                ]
-                omitted_hard_ids.extend(ids)
-                if int(warning.get("count") or len(ids) or 0) > 0 and not ids:
-                    missing_sources.append("scratchpad")
-                    source_status["scratchpad"] = {
-                        "status": "error",
-                        "reason": "unsafe_hard_constraint_without_ids",
-                    }
+            scratchpad_hard, hard_error = normalize_hard_constraints(memory_pack)
+            if hard_error:
+                source_status["scratchpad"] = {
+                    "status": "error",
+                    "reason": hard_error,
+                }
+                missing_sources.append("scratchpad")
+                scratchpad_hard = []
+            for warning in memory_pack.get("warnings") or []:
+                if not isinstance(warning, dict):
+                    continue
+                if warning.get("type") == "unsafe_hard_constraint":
+                    ids = [
+                        str(item)
+                        for item in (warning.get("ids") or [])
+                        if str(item)
+                    ]
+                    omitted_hard_ids.extend(ids)
+                    if int(warning.get("count") or len(ids) or 0) > 0 and not ids:
+                        missing_sources.append("scratchpad")
+                        source_status["scratchpad"] = {
+                            "status": "error",
+                            "reason": "unsafe_hard_constraint_without_ids",
+                        }
 
-        # 章节提交是章节事实源；暂存区只补充初始化事实。
+        # 仅 v1/v2 兼容读取允许暂存区补充初始化事实；v3 分支上方已将
+        # scratchpad_hard 固定为空，不能绕过 genesis/author-axiom 审批链。
         setup_hard = [
             row
             for row in scratchpad_hard
@@ -267,6 +439,7 @@ class MemoryContractAdapter:
             hard_constraints.append(row)
 
         mandatory["hard_constraints"] = hard_constraints
+        mandatory["author_axioms"] = active_author_axioms
         mandatory["canonical_facts"] = list(canonical_history.canonical_facts)
         mandatory["knowledge"] = {
             "information": dict(canonical_history.information),
@@ -314,35 +487,17 @@ class MemoryContractAdapter:
                 "reason": e.__class__.__name__,
             }
 
-        # 2.5. RAG is a default, best-effort fact lookup.  It never becomes a
-        # creative instruction: callers receive only prior-story evidence and
-        # can continue safely when the index is empty or unavailable.
-        try:
-            # Build retrieval input from the already-sanitized contract view;
-            # raw chapter contracts may contain prose/style instructions.
-            chapter_goal = chapter_goal_from_contract(
-                mandatory["story_contracts"].get("chapter")
-                or mandatory["story_contracts"].get("chapter_brief")
-            )
-            optional["rag_assist"] = load_rag_assist(
-                self.config.project_root,
-                chapter=chapter,
-                outline=str(optional.get("outline") or ""),
-                chapter_goal=chapter_goal,
-                config=self.config,
-            )
-            source_status["rag"] = {"status": "ok"}
-        except Exception as e:
-            logger.warning("load_context: rag assist failed: %s", e)
-            optional["rag_assist"] = empty_rag_assist(
-                enabled=bool(getattr(self.config, "context_rag_assist_enabled", True)),
-                reason=f"rag_error:{e.__class__.__name__}",
-            )
-            optional["rag_assist"]["degraded"] = True
-            source_status["rag"] = {
-                "status": "degraded",
-                "reason": e.__class__.__name__,
-            }
+        # The existing RAG/index stores are legacy-derived and are not bound to
+        # an exact Canon HEAD.  Keep the channel explicit and empty until a v3
+        # projection writer can produce a binding receipt.
+        optional["rag_assist"] = empty_rag_assist(
+            enabled=False,
+            reason="canon_v3_head_only",
+        )
+        source_status["rag"] = {
+            "status": "excluded_legacy",
+            "reason": "not_head_bound",
+        }
 
         # Free-form summaries are intentionally not injected. Accepted events,
         # state deltas, hard constraints and fact-only RAG are the trusted
@@ -354,6 +509,25 @@ class MemoryContractAdapter:
             canonical_history.initial_canon.get("protagonist") or {}
         )
         protagonist_name = str(protagonist_setup.get("name") or "")
+        # The genesis setup is immutable provenance, while this compatibility
+        # view must expose the current slot value. Overlay approved active
+        # character-state facts so context never presents both the old setup
+        # preference and its v3 replacement as simultaneously true.
+        for row in canonical_history.canonical_facts:
+            if not isinstance(row, dict):
+                continue
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            category = str(row.get("category") or payload.get("kind") or "")
+            subject = str(row.get("subject") or payload.get("subject") or "")
+            if (
+                category not in {"character_state", "character_state_changed"}
+                or subject not in {"protagonist", protagonist_name}
+            ):
+                continue
+            field_name = str(row.get("field") or payload.get("attribute") or "")
+            value = payload.get("after", row.get("value"))
+            if field_name and value not in (None, ""):
+                protagonist_setup[field_name] = value
         matched_entity = next(
             (
                 entity
@@ -489,7 +663,32 @@ class MemoryContractAdapter:
     def _query_as_of(self, as_of_chapter: int | None) -> int:
         if as_of_chapter is not None:
             return max(0, int(as_of_chapter))
-        return latest_canonical_chapter(self.config.project_root)
+        from .workflow_authority import WorkflowAuthority
+
+        workflow = WorkflowAuthority(self.config.project_root).snapshot()
+        return max(0, int(workflow.get("latest_chapter") or 0))
+
+    def _head_bound_history(self, as_of_chapter: int) -> CanonicalHistory:
+        from .workflow_authority import CanonReadModelUnavailable, WorkflowAuthority
+
+        authority = WorkflowAuthority(self.config.project_root)
+        try:
+            workflow, _projection = authority.require_fresh_projection()
+        except CanonReadModelUnavailable:
+            blocked = CanonicalHistory(as_of_chapter=max(0, int(as_of_chapter)))
+            blocked.invalid_sources.append("canon_v3_head_projection_unavailable")
+            return blocked
+        history = load_canonical_history(
+            self.config.project_root,
+            max(0, int(as_of_chapter)),
+        )
+        if authority.snapshot().get("workflow_digest") != workflow.get(
+            "workflow_digest"
+        ):
+            blocked = CanonicalHistory(as_of_chapter=max(0, int(as_of_chapter)))
+            blocked.invalid_sources.append("canon_v3_workflow_changed_during_query")
+            return blocked
+        return history
 
     def query_entity(
         self,
@@ -497,18 +696,66 @@ class MemoryContractAdapter:
         as_of_chapter: int | None = None,
     ) -> Optional[EntitySnapshot]:
         as_of = self._query_as_of(as_of_chapter)
-        history = load_canonical_history(self.config.project_root, as_of)
-        entity = history.entities.get(str(entity_id or "").strip())
+        history = self._head_bound_history(as_of)
+        query = str(entity_id or "").strip()
+        if not query:
+            return None
+
+        explicit_namespace: str | None = None
+        lookup_token = query
+        for namespace in _ENTITY_NAMESPACES:
+            prefix = f"{namespace}:"
+            if query.startswith(prefix):
+                explicit_namespace = namespace
+                lookup_token = query[len(prefix) :].strip()
+                break
+        if explicit_namespace is not None and not lookup_token:
+            return None
+
+        matches: dict[tuple[str, str], tuple[str, Dict[str, Any]]] = {}
+        for stable_key, raw_row in history.entities.items():
+            if not isinstance(raw_row, dict):
+                continue
+            row = raw_row
+            namespace = _entity_namespace(str(stable_key), row)
+            if explicit_namespace is not None and namespace != explicit_namespace:
+                continue
+            identifiers = _entity_identifiers(str(stable_key), row, namespace)
+            requested = (
+                {query, lookup_token}
+                if explicit_namespace is not None
+                else {query}
+            )
+            if not (requested & identifiers):
+                continue
+            stable_identity = str(row.get("id") or stable_key).strip()
+            matches[(namespace, stable_identity)] = (str(stable_key), row)
+
+        # A name/alias/stable token resolving to multiple entities remains
+        # ambiguous even when those rows share a namespace. Cross-namespace
+        # callers can disambiguate with actor:/item:/location:.
+        if len(matches) != 1:
+            return None
+        stable_key, entity = next(iter(matches.values()))
         if entity:
+            namespace = _entity_namespace(stable_key, entity)
+            identity_values = _entity_identifiers(stable_key, entity, namespace)
             changes = [
                 row
                 for row in history.state_changes
-                if row.get("entity_id") == entity.get("id")
+                if str(row.get("entity_id") or "").strip() in identity_values
             ]
             return EntitySnapshot(
-                id=str(entity.get("id") or entity_id),
-                name=str(entity.get("name") or entity_id),
-                type=str(entity.get("type") or "角色"),
+                id=str(entity.get("id") or stable_key or entity_id),
+                name=str(entity.get("name") or stable_key or entity_id),
+                type=str(
+                    entity.get("type")
+                    or {
+                        "actor": "角色",
+                        "item": "物品",
+                        "location": "地点",
+                    }[namespace]
+                ),
                 tier=str(entity.get("tier") or "核心"),
                 aliases=list(entity.get("aliases") or []),
                 attributes=dict(entity.get("attributes") or {}),
@@ -524,7 +771,7 @@ class MemoryContractAdapter:
         as_of_chapter: int | None = None,
     ) -> List[Rule]:
         as_of = self._query_as_of(as_of_chapter)
-        history = load_canonical_history(self.config.project_root, as_of)
+        history = self._head_bound_history(as_of)
         canonical_rules: List[Rule] = []
         for item in history.rules:
             if domain and item.get("subject") != domain and domain not in str(item.get("value") or ""):
@@ -542,15 +789,11 @@ class MemoryContractAdapter:
         return canonical_rules
 
     def read_summary(self, chapter: int) -> str:
-        padded = f"{chapter:04d}"
-        summary_file = self.config.canon_ledger_dir / "summaries" / f"ch{padded}.md"
-        try:
-            if summary_file.exists():
-                return summary_file.read_text(encoding="utf-8")
-            return ""
-        except Exception as e:
-            logger.warning("read_summary(%d) failed: %s", chapter, e)
-            return ""
+        # Legacy free-form summaries have no HEAD binding and can contain
+        # model-authored assertions.  Until v3 gains a bound summary
+        # projection, the fact query API returns no summary rather than a
+        # potentially stale alternate canon.
+        return ""
 
     def get_open_loops(
         self,
@@ -558,19 +801,31 @@ class MemoryContractAdapter:
         as_of_chapter: int | None = None,
     ) -> List[OpenLoop]:
         as_of = self._query_as_of(as_of_chapter)
-        history = load_canonical_history(self.config.project_root, as_of)
+        history = self._head_bound_history(as_of)
+        requested = str(status or "active").strip().lower()
+        if requested == "active":
+            allowed_categories = _OPEN_LOOP_ACTIVE_CATEGORIES
+        elif requested in {"resolved", "closed", "history"}:
+            allowed_categories = _OPEN_LOOP_RESOLVED_CATEGORIES
+        elif requested in {"all", "any"}:
+            allowed_categories = (
+                _OPEN_LOOP_ACTIVE_CATEGORIES | _OPEN_LOOP_RESOLVED_CATEGORIES
+            )
+        else:
+            return []
         canonical = [
             OpenLoop(
                 id=str(item.get("id") or ""),
-                content=str(item.get("value") or ""),
-                status="active",
+                content=_lifecycle_content(item),
+                status=str(item.get("status") or "active"),
                 planted_chapter=int(item.get("source_chapter") or 0),
                 expected_payoff=str((item.get("payload") or {}).get("expected_payoff") or ""),
                 urgency=coerce_urgency((item.get("payload") or {}).get("urgency")),
             )
-            for item in history.obligations
-            if item.get("category") == "open_loop" and status == "active"
+            for item in _lifecycle_rows(history, requested)
+            if item.get("category") in allowed_categories
         ]
+        canonical.sort(key=lambda item: (item.planted_chapter, item.id))
         return canonical
 
     def get_lifecycle_obligations(
@@ -579,19 +834,18 @@ class MemoryContractAdapter:
         as_of_chapter: int | None = None,
     ) -> List[LifecycleObligation]:
         as_of = self._query_as_of(as_of_chapter)
-        history = load_canonical_history(self.config.project_root, as_of)
+        history = self._head_bound_history(as_of)
         canonical = [
             LifecycleObligation(
                 id=str(item.get("id") or ""),
                 category=str(item.get("category") or ""),
-                content=str(item.get("value") or ""),
-                status="active",
+                content=_lifecycle_content(item),
+                status=str(item.get("status") or "active"),
                 source_chapter=int(item.get("source_chapter") or 0),
                 expected_payoff=str((item.get("payload") or {}).get("expected_payoff") or ""),
                 urgency=coerce_urgency((item.get("payload") or {}).get("urgency")),
             )
-            for item in history.obligations
-            if status == "active"
+            for item in _lifecycle_rows(history, status)
         ]
         canonical.sort(key=lambda item: (item.category, item.source_chapter, item.id))
         return canonical
@@ -603,7 +857,7 @@ class MemoryContractAdapter:
         as_of_chapter: int | None = None,
     ) -> List[TimelineEvent]:
         as_of = self._query_as_of(as_of_chapter)
-        history = load_canonical_history(self.config.project_root, as_of)
+        history = self._head_bound_history(as_of)
         canonical = [
             TimelineEvent(
                 event=str(item.get("value") or ""),
@@ -622,8 +876,17 @@ class MemoryContractAdapter:
         as_of_chapter: int | None = None,
     ) -> Dict[str, Any]:
         """Export an immutable as-of snapshot for reviewer / data-agent."""
-        return export_asof_snapshot(
+        from .workflow_authority import WorkflowAuthority
+
+        workflow, projection = WorkflowAuthority(
+            self.config.project_root
+        ).require_fresh_projection()
+        payload = export_asof_snapshot(
             self.config.project_root,
             chapter=chapter,
             as_of_chapter=as_of_chapter,
         )
+        payload["source"] = "canon_v3_head"
+        payload["canon_binding"] = dict(projection.get("binding") or {})
+        payload["workflow_digest"] = workflow.get("workflow_digest")
+        return payload

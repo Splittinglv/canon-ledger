@@ -12,6 +12,7 @@ import pytest
 from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.chapter_content_binding import build_chapter_binding
 from data_modules.config import DataModulesConfig
+from data_modules.human_review import HumanReviewService
 from data_modules.memory_contract_adapter import MemoryContractAdapter
 from data_modules.story_contracts import synchronize_setting_canon
 from init_project import init_project
@@ -126,7 +127,8 @@ def _accepted_commit(
         "has_blocking": False,
         "chapter_binding": dict(binding),
     }
-    payload = ChapterCommitService(project_root).build_commit(
+    service = ChapterCommitService(project_root)
+    build_kwargs = dict(
         chapter=chapter,
         review_result=review,
         fulfillment_result={
@@ -145,7 +147,22 @@ def _accepted_commit(
             "chapter_binding": dict(binding),
         },
     )
-    service = ChapterCommitService(project_root)
+    payload = service.build_commit(**build_kwargs)
+    checkpoints = [
+        item
+        for item in payload["disambiguation_result"]["pending"]
+        if item.get("source") == "runtime_checkpoint"
+    ]
+    if checkpoints:
+        HumanReviewService(project_root).record(
+            {
+                "decisions": [
+                    {"decision_id": item["decision_id"], "action": "confirm"}
+                    for item in checkpoints
+                ]
+            }
+        )
+        payload = service.build_commit(**build_kwargs)
     service.persist_commit(payload)
     return service.apply_projections(payload) if project else payload
 

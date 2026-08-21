@@ -8,8 +8,8 @@ purpose: XML 标签格式参考
 
 **当前约定**：
 - 章节写作时**不再要求**添加 XML 标签
-- Data Agent 会自动从纯正文中提取实体，写入 index.db
-- 标签仅用于**手动标注**场景（如明确标记重要实体、补充提取遗漏）
+- Data Agent 从纯正文提取 typed candidates；实体只有经 compiler、必要的人工消歧和 finalize 后才进入 Canon
+- 标签仅是**手动候选提示**，不能直接写 registry、projection 或正史
 - 如果你选择使用标签，请遵循以下规范
 </context>
 
@@ -39,8 +39,8 @@ purpose: XML 标签格式参考
 
 ### id / ref（实体引用）
 - **id（推荐）**: 稳定唯一标识（便于后续更新/加别名）
-- **ref**: 用已出现过的名称/别名引用（通过 index.db aliases 表自动解析）
-- **type（可选）**: 当 ref 有歧义时用于消歧（如同名不同人）；若仍歧义必须改用 `id`
+- **ref**: 用已出现过的名称/别名提出引用，由 namespace-aware Canon entity registry 解析
+- **type（可选）**: 只作 namespace 提示；同 namespace 仍歧义时必须提供 canonical ID/identity link 并由 compiler 校验
 
 ### `<entity-update>` 子操作
 - **set**: `<set key="k" value="v" reason="可选"/>`
@@ -49,7 +49,7 @@ purpose: XML 标签格式参考
 - **remove**: `<remove key="k" value="v" reason="可选"/>`（数组移除）
 - **inc**: `<inc key="k" delta="1" reason="可选"/>`（数值递增，默认 +1）
 
-**顶层字段白名单**（可直接更新实体顶层而非 current）：`tier`, `desc`, `canonical_name`, `importance`, `status`, `parent`
+标签字段只是候选内容，不能绕过证据、identity resolution、slot transition 或人工 checkpoint 直接更新实体。
 
 > **建议**: `<entity>` 强烈建议补充 `desc` 和 `tier`，否则后续检索和一致性检查会变差。
 

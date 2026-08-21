@@ -24,8 +24,10 @@ class RuntimeSourceSnapshot:
     latest_commit: dict[str, Any] | None
     latest_accepted_commit: dict[str, Any] | None
     fallback_sources: list[str] = field(default_factory=list)
+    advisory_sources: list[str] = field(default_factory=list)
     source_errors: dict[str, str] = field(default_factory=dict)
     primary_write_source: str = "chapter_commit"
+    workflow_snapshot: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -34,8 +36,10 @@ class RuntimeSourceSnapshot:
             "latest_commit": self.latest_commit,
             "latest_accepted_commit": self.latest_accepted_commit,
             "fallback_sources": list(self.fallback_sources),
+            "advisory_sources": list(self.advisory_sources),
             "source_errors": dict(self.source_errors),
             "primary_write_source": self.primary_write_source,
+            "workflow_snapshot": dict(self.workflow_snapshot or {}),
         }
 
 
@@ -55,10 +59,16 @@ def commit_status_view(payload: dict[str, Any] | None) -> dict[str, Any] | None:
     if type(chapter) is int and chapter > 0:
         meta["chapter"] = chapter
     schema_version = str(raw_meta.get("schema_version") or "")
-    if schema_version == "story-system/v1":
+    if schema_version in {"story-system/v1", "story-system/v2", "story-system/v3"}:
         meta["schema_version"] = schema_version
     status = str(raw_meta.get("status") or "").strip().lower()
     meta["status"] = status if status in {"accepted", "rejected"} else "unknown"
+    head_hash = str(raw_meta.get("head_hash") or "")
+    if len(head_hash) == 64 and all(char in "0123456789abcdef" for char in head_hash):
+        meta["head_hash"] = head_hash
+    generation = raw_meta.get("generation")
+    if type(generation) is int and generation >= 0:
+        meta["generation"] = generation
 
     raw_projection = (
         payload.get("projection_status")
@@ -72,11 +82,16 @@ def commit_status_view(payload: dict[str, Any] | None) -> dict[str, Any] | None:
             projection_status[key] = "failed"
         elif value in {"pending", "done", "skipped"}:
             projection_status[key] = value
+    canon_projection = str(raw_projection.get("canon") or "").strip().lower()
+    if canon_projection in {"done", "pending", "failed"}:
+        projection_status["canon"] = canon_projection
 
     result: dict[str, Any] = {
         "meta": meta,
         "projection_status": projection_status,
     }
+    if payload.get("source") == "canon_v3_head":
+        result["source"] = "canon_v3_head"
     raw_trust = payload.get("trust") if isinstance(payload.get("trust"), dict) else {}
     if raw_trust:
         trust: dict[str, Any] = {}
@@ -182,6 +197,116 @@ def load_runtime_sources(
         except (OSError, ValueError) as exc:
             contracts[key] = {}
             source_errors[key] = exc.__class__.__name__
+    from .workflow_authority import WorkflowAuthority
+
+    authority = WorkflowAuthority(project_root)
+    workflow = authority.snapshot()
+    # MASTER_SETTING remains useful for routing/author preferences, but its
+    # factual snapshots are not HEAD-bound and therefore never enter runtime
+    # context through this compatibility contract.
+    master_contract = contracts.get("master")
+    if isinstance(master_contract, dict):
+        contracts["master"] = {
+            key: value
+            for key, value in master_contract.items()
+            if key not in {"initial_canon", "setting_canon"}
+        }
+
+    if not workflow.get("head_hash"):
+        advisory_sources = []
+        for key, payload in contracts.items():
+            if not payload:
+                prefix = "invalid" if key in source_errors else "missing"
+                advisory_sources.append(f"{prefix}_{key}_contract")
+        fallback_sources = [
+            f"canon_v3_workflow_{workflow.get('state') or 'invalid'}"
+        ]
+        return RuntimeSourceSnapshot(
+            chapter=chapter,
+            contracts=contracts,
+            latest_commit=None,
+            latest_accepted_commit=None,
+            fallback_sources=fallback_sources,
+            advisory_sources=advisory_sources,
+            source_errors=source_errors,
+            primary_write_source="canon_v3_head",
+            workflow_snapshot=workflow,
+        )
+
+    if workflow.get("head_hash"):
+        from .canon_v3.projection import projection_is_fresh
+        from .canon_v3.repository import CanonV3Repository
+
+        repository = CanonV3Repository(project_root)
+        fresh = projection_is_fresh(project_root)
+        all_v3_commits = [
+            commit
+            for _commit_hash, commit in repository.current_commits()
+        ]
+        current_commits = [
+            commit
+            for commit in all_v3_commits
+            if int(commit.get("chapter") or 0) <= int(chapter)
+        ]
+        accepted_as_of = (
+            int(chapter)
+            if history_as_of_chapter is None
+            else max(0, int(history_as_of_chapter))
+        )
+        accepted_commits = [
+            commit
+            for commit in all_v3_commits
+            if int(commit.get("chapter") or 0) <= accepted_as_of
+        ]
+
+        def _status(commit: dict[str, Any] | None) -> dict[str, Any] | None:
+            if commit is None:
+                return None
+            return {
+                "meta": {
+                    "schema_version": "story-system/v3",
+                    "chapter": int(commit.get("chapter") or 0),
+                    "revision": int(commit.get("revision") or 0),
+                    "status": "accepted",
+                    "head_hash": repository.current_head(validate=False),
+                    "generation": int(workflow.get("generation") or 0),
+                },
+                "projection_status": {"canon": "done" if fresh else "pending"},
+                "source": "canon_v3_head",
+            }
+        status_commit = _status(current_commits[-1] if current_commits else None)
+        status_accepted = _status(
+            accepted_commits[-1] if accepted_commits else None
+        )
+        advisory_sources = []
+        for key, payload in contracts.items():
+            if not payload:
+                prefix = "invalid" if key in source_errors else "missing"
+                advisory_sources.append(f"{prefix}_{key}_contract")
+        fallback_sources = []
+        if not workflow.get("can_write_next"):
+            fallback_sources.append(
+                f"canon_v3_workflow_{workflow.get('state') or 'invalid'}"
+            )
+        post_read_workflow = authority.snapshot()
+        if post_read_workflow.get("workflow_digest") != workflow.get(
+            "workflow_digest"
+        ):
+            workflow = post_read_workflow
+            status_commit = None
+            status_accepted = None
+            fallback_sources.append("canon_v3_workflow_changed_during_runtime_read")
+        return RuntimeSourceSnapshot(
+            chapter=chapter,
+            contracts=contracts,
+            latest_commit=status_commit,
+            latest_accepted_commit=status_accepted,
+            fallback_sources=fallback_sources,
+            advisory_sources=advisory_sources,
+            source_errors=source_errors,
+            primary_write_source="canon_v3_head",
+            workflow_snapshot=workflow,
+        )
     latest_commit = _load_latest_commit(project_root, paths, chapter)
     accepted_as_of = (
         int(chapter)

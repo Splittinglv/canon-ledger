@@ -18,6 +18,12 @@ from pydantic import (
 
 from .story_event_schema import StoryEvent
 from .chapter_content_binding import ChapterContentBinding, chapter_bindings_equal
+from .canon_evidence import (
+    CANON_MUTATING_EVENT_TYPES,
+    CHAPTER_COMMIT_SCHEMA_V1,
+    CHAPTER_COMMIT_SCHEMA_V2,
+    classify_evidence_contract,
+)
 from .fact_text import (
     normalize_event_evidence_quote,
     normalize_world_rule_payload,
@@ -54,6 +60,8 @@ EVENT_TYPE_ALIASES = {
     "power_up": "power_breakthrough",
     "artifact": "artifact_obtained",
     "item_obtained": "artifact_obtained",
+    "entity_seen": "entity_observed",
+    "timeline_anchor": "timeline_observed",
     "knowledge_changed": "knowledge_state_changed",
     "information_learned": "knowledge_state_changed",
     "information_shared": "knowledge_state_changed",
@@ -151,14 +159,29 @@ class ReviewIssueSchema(BaseModel):
     severity: Literal["critical", "high", "medium", "low"]
     category: Literal["setting", "timeline", "continuity", "character", "logic"]
     location: str = ""
-    description: str = ""
-    evidence: str = ""
+    description: str = Field(min_length=1)
+    evidence: str = Field(min_length=1)
+    # New reviewers provide both sides of a contradiction. These remain
+    # optional while old artifacts migrate; runtime treats an unanchored issue
+    # as a human-review candidate, never as permission to edit prose.
+    evidence_quote: str = ""
+    canonical_fact_id: str = ""
+    canonical_evidence: str = ""
+    conflict_kind: Literal[
+        "state",
+        "timeline",
+        "knowledge",
+        "presence",
+        "custody",
+        "world_rule",
+        "mechanical",
+    ] | None = None
     fix_hint: str = ""
     blocking: bool = Field(strict=True)
 
 
 class ManualReviewCheckSchema(BaseModel):
-    """A possible issue that requires author judgment and never auto-blocks."""
+    """A possible issue routed by runtime policy, not a prose-quality score."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -168,6 +191,31 @@ class ManualReviewCheckSchema(BaseModel):
     evidence: str = ""
     reason: str = Field(min_length=1)
     options: list[str] = Field(default_factory=list)
+    fact_dimensions: list[Literal["knowledge", "presence", "custody"]] = Field(
+        default_factory=list
+    )
+    review_kind: Literal["ambiguity", "checkpoint"] = "ambiguity"
+    trigger_kind: Literal[
+        "",
+        "ambiguous_fact",
+        "author_marked",
+        "retcon",
+        "core_character_permanent_state",
+        "core_secret_reveal",
+        "key_item_change",
+        "world_rule_change",
+        "power_permanent_change",
+        "major_relationship_change",
+        "major_time_change",
+        "core_obligation_change",
+        "volume_end",
+    ] = ""
+    materiality: Literal["critical", "high", "normal", "low"] = "normal"
+    disposition: Literal[
+        "", "human_required", "advisory", "audit_only", "ignore"
+    ] = ""
+    required: bool | None = None
+    source_event_id: str = ""
 
 
 class ReviewResult(CommitArtifactModel):
@@ -385,7 +433,10 @@ class ExtractionResult(CommitArtifactModel):
 class ChapterCommitMeta(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    schema_version: str
+    schema_version: Literal[
+        CHAPTER_COMMIT_SCHEMA_V1,
+        CHAPTER_COMMIT_SCHEMA_V2,
+    ]
     chapter: int = Field(ge=1)
     status: str
 
@@ -426,6 +477,17 @@ class ChapterCommitSchema(BaseModel):
         if not chapter_bindings_equal(canonical, provenance_binding):
             raise ValueError(
                 "provenance.chapter_binding does not match commit chapter_binding"
+            )
+        evidence_classification = classify_evidence_contract(
+            {
+                "meta": self.meta.model_dump(),
+                "provenance": self.provenance,
+                "extraction_result": self.extraction_result.model_dump(),
+            }
+        )
+        if evidence_classification == "invalid":
+            raise ValueError(
+                "chapter commit evidence envelope is invalid or downgraded"
             )
         return self
 
@@ -496,7 +558,12 @@ class AcceptedEventsInput(BaseModel):
             raise ValueError("accepted_events must be a list")
         return value
 
-    def normalize(self, chapter: int) -> list[dict[str, Any]]:
+    def normalize(
+        self,
+        chapter: int,
+        *,
+        require_evidence: bool = True,
+    ) -> list[dict[str, Any]]:
         normalized: list[dict[str, Any]] = []
         seen_consistency_sequences: set[int] = set()
         for index, event in enumerate(self.accepted_events):
@@ -507,6 +574,17 @@ class AcceptedEventsInput(BaseModel):
                 context={"chapter": chapter, "index": index},
             ).model_dump()
             normalized_event = StoryEvent.model_validate(payload).model_dump()
+            event_type = str(normalized_event.get("event_type") or "")
+            if require_evidence and event_type in CANON_MUTATING_EVENT_TYPES:
+                event_payload = dict(normalized_event.get("payload") or {})
+                # All StoryEvent variants can mutate canon or a canon-bound
+                # obligation. Requiring provenance only for a hand-maintained
+                # subset left state, closure and timeline facts open to model
+                # hallucination.
+                event_payload["evidence_quote"] = _event_evidence(
+                    event_payload, index
+                )
+                normalized_event["payload"] = event_payload
             if normalized_event.get("event_type") == "world_rule_revealed":
                 normalized_rule = normalize_world_rule_payload(
                     normalized_event.get("payload"),
@@ -534,12 +612,22 @@ class AcceptedEventsInput(BaseModel):
         return normalized
 
 
-def normalize_accepted_events(chapter: int, events: Any) -> list[dict[str, Any]]:
+def normalize_accepted_events(
+    chapter: int,
+    events: Any,
+    *,
+    require_evidence: bool = True,
+) -> list[dict[str, Any]]:
     accepted_events = AcceptedEventsInput.model_validate({"accepted_events": events})
-    return accepted_events.normalize(chapter)
+    return accepted_events.normalize(chapter, require_evidence=require_evidence)
 
 
-def normalize_timeline_events(chapter: int, events: Any) -> list[dict[str, Any]]:
+def normalize_timeline_events(
+    chapter: int,
+    events: Any,
+    *,
+    require_source_binding: bool = False,
+) -> list[dict[str, Any]]:
     """Normalize timeline rows kept in the chapter commit extraction snapshot.
 
     A timeline row gets a deterministic ID when the extractor does not
@@ -605,6 +693,22 @@ def normalize_timeline_events(chapter: int, events: Any) -> list[dict[str, Any]]
         item["event"] = event
         item["time_hint"] = str(item.get("time_hint") or item.get("time_label") or "").strip()
         item["event_type"] = str(item.get("event_type") or "").strip()
+        if require_source_binding:
+            source_event_id = str(item.get("source_event_id") or "").strip()
+            evidence_fragment = normalize_event_evidence_quote(
+                item.get("evidence_fragment")
+            )
+            if not source_event_id:
+                raise ValueError(
+                    f"timeline_events[{index}].source_event_id must be non-empty"
+                )
+            if not evidence_fragment:
+                raise ValueError(
+                    f"timeline_events[{index}].evidence_fragment must be a "
+                    "non-empty chapter quote of at most 600 characters"
+                )
+            item["source_event_id"] = source_event_id
+            item["evidence_fragment"] = evidence_fragment
         normalized.append(item)
     return normalized
 

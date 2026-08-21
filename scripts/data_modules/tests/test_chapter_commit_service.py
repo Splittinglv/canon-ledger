@@ -14,7 +14,7 @@ from data_modules.chapter_content_binding import (
 )
 from data_modules.config import DataModulesConfig
 from data_modules.index_manager import IndexManager
-from .review_test_helpers import standard_review
+from .review_test_helpers import inject_hard_evidence_quotes, standard_review
 
 
 _ARTIFACT_KEYS = (
@@ -175,7 +175,7 @@ def test_commit_service_accepts_ordinary_pending_but_excludes_candidate_fact(
 
     assert first["meta"]["status"] == "accepted"
     assert first["extraction_result"]["accepted_events"] == []
-    assert first["extraction_result"]["fact_coverage"]["presence"] == "partial"
+    assert first["extraction_result"]["fact_coverage"]["presence"] == "complete"
     assert first["extraction_result"]["fact_verification"]["presence"] == "pending"
     assert first["provenance"]["human_review"]["unresolved_count"] == 1
 
@@ -211,7 +211,7 @@ def test_commit_service_accepts_ordinary_pending_but_excludes_candidate_fact(
     ]
 
 
-def test_commit_service_rejects_only_explicit_blocking_pending(tmp_path):
+def test_commit_service_does_not_trust_model_blocking_pending(tmp_path):
     payload = _build_commit(
         ChapterCommitService(tmp_path),
         tmp_path,
@@ -240,7 +240,230 @@ def test_commit_service_rejects_only_explicit_blocking_pending(tmp_path):
         },
     )
 
+    assert payload["meta"]["status"] == "accepted"
+    assert payload["provenance"]["human_review"]["unresolved_count"] == 1
+
+
+def _review_issue_commit(
+    service,
+    project_root,
+    *,
+    chapter,
+    body,
+    issue,
+):
+    binding = _chapter_binding(project_root, chapter, body)
+    _ensure_contract(project_root, chapter)
+    review = standard_review(binding)
+    review["issues"] = [issue]
+    review["issues_count"] = 1
+    review["blocking_count"] = int(bool(issue.get("blocking")))
+    review["has_blocking"] = bool(issue.get("blocking"))
+    return service.build_commit(
+        chapter=chapter,
+        review_result=review,
+        fulfillment_result={
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        disambiguation_result={"pending": [], "chapter_binding": binding},
+        extraction_result={
+            "accepted_events": [],
+            "state_deltas": [],
+            "entity_deltas": [],
+            "chapter_binding": binding,
+        },
+    )
+
+
+def _persist_presence_anchor(service, project_root):
+    quote = "爱丽丝抵达北城。"
+    return _persist_chapter(
+        service,
+        project_root,
+        1,
+        {
+            "accepted_events": [
+                {
+                    "event_id": "alice-north",
+                    "chapter": 1,
+                    "sequence": 1,
+                    "event_type": "presence_observed",
+                    "subject": "alice",
+                    "payload": {
+                        "location_id": "north-city",
+                        "presence_kind": "physical",
+                        "evidence_quote": quote,
+                    },
+                }
+            ]
+        },
+        quote,
+    )
+
+
+def test_runtime_rejects_anchored_issue_even_when_model_marks_nonblocking(tmp_path):
+    service = ChapterCommitService(tmp_path)
+    _persist_presence_anchor(service, tmp_path)
+    current_quote = "爱丽丝此刻仍身在南港。"
+    payload = _review_issue_commit(
+        service,
+        tmp_path,
+        chapter=2,
+        body=current_quote,
+        issue={
+            "severity": "high",
+            "category": "continuity",
+            "location": "第1段",
+            "description": "人物位置与已记录事实直接冲突",
+            "evidence": current_quote,
+            "evidence_quote": current_quote,
+            "canonical_fact_id": "alice-north",
+            "canonical_evidence": "第1章逐字证据：爱丽丝抵达北城。",
+            "conflict_kind": "presence",
+            "fix_hint": "补转场或修改地点",
+            "blocking": False,
+        },
+    )
+
     assert payload["meta"]["status"] == "rejected"
+    assert payload["review_result"]["runtime_confirmed_count"] == 1
+
+
+def test_runtime_does_not_reject_issue_with_forged_canon_evidence(tmp_path):
+    service = ChapterCommitService(tmp_path)
+    _persist_presence_anchor(service, tmp_path)
+    current_quote = "爱丽丝此刻仍身在南港。"
+    payload = _review_issue_commit(
+        service,
+        tmp_path,
+        chapter=2,
+        body=current_quote,
+        issue={
+            "severity": "critical",
+            "category": "continuity",
+            "location": "第1段",
+            "description": "候选冲突的正史引文无法追溯",
+            "evidence": current_quote,
+            "evidence_quote": current_quote,
+            "canonical_fact_id": "alice-north",
+            "canonical_evidence": "这句话从未出现在正史证据中。",
+            "conflict_kind": "presence",
+            "fix_hint": "交给作者复核",
+            "blocking": True,
+        },
+    )
+
+    assert payload["meta"]["status"] == "accepted"
+    assert payload["review_result"]["runtime_confirmed_count"] == 0
+    assert any(
+        item.get("source") == "runtime_unanchored_issue"
+        for item in payload["disambiguation_result"]["pending"]
+    )
+
+
+def test_runtime_keeps_unanchored_low_probability_issue_as_audit_only(tmp_path):
+    service = ChapterCommitService(tmp_path)
+    payload = _review_issue_commit(
+        service,
+        tmp_path,
+        chapter=1,
+        body="林舟推开了门。",
+        issue={
+            "severity": "low",
+            "category": "logic",
+            "location": "第1段",
+            "description": "极低概率的机械细节疑点",
+            "evidence": "没有可定位的逐字证据",
+            "fix_hint": "仅留存审计",
+            "blocking": False,
+        },
+    )
+
+    assert payload["meta"]["status"] == "accepted"
+    assert payload["disambiguation_result"]["pending"] == []
+    assert payload["review_result"]["runtime_audit_only_count"] == 1
+
+
+def test_reviewer_checkpoint_with_source_event_holds_fact_until_confirmed(tmp_path):
+    quote = "林舟听完消息后，心境由犹疑转为坚定。"
+    binding = _chapter_binding(tmp_path, 1, quote)
+    _ensure_contract(tmp_path, 1)
+    review = standard_review(binding)
+    review["manual_checks"] = [
+        {
+            "category": "character",
+            "location": "第1段",
+            "description": "关键心境变化需作者确认",
+            "evidence": quote,
+            "reason": "该状态会影响后续人物抉择",
+            "review_kind": "checkpoint",
+            "trigger_kind": "author_marked",
+            "materiality": "high",
+            "disposition": "human_required",
+            "required": True,
+            "source_event_id": "prior-mindset-anchor",
+        }
+    ]
+    event = {
+        "event_id": "hero-resolved",
+        "chapter": 1,
+        "event_type": "character_state_changed",
+        "subject": "hero",
+        "payload": {
+            "field": "mindset",
+            "old": "犹疑",
+            "new": "坚定",
+            "evidence_quote": quote,
+        },
+    }
+    artifacts = {
+        "chapter": 1,
+        "review_result": review,
+        "fulfillment_result": {
+            "planned_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": [],
+            "extra_nodes": [],
+            "chapter_binding": binding,
+        },
+        "disambiguation_result": {"pending": [], "chapter_binding": binding},
+        "extraction_result": {
+            "accepted_events": [event],
+            "state_deltas": [],
+            "entity_deltas": [],
+            "chapter_binding": binding,
+        },
+    }
+    service = ChapterCommitService(tmp_path)
+    first = service.build_commit(**artifacts)
+
+    assert first["extraction_result"]["accepted_events"] == []
+    checkpoint = first["disambiguation_result"]["pending"][0]
+    assert checkpoint["source_event_id"] == "prior-mindset-anchor"
+    assert checkpoint["candidate_event"]["event_id"] == "hero-resolved"
+
+    from data_modules.human_review import HumanReviewService
+
+    HumanReviewService(tmp_path).record(
+        {
+            "decisions": [
+                {"decision_id": checkpoint["decision_id"], "action": "confirm"}
+            ]
+        }
+    )
+    resolved = service.build_commit(**artifacts)
+
+    assert resolved["disambiguation_result"]["pending"] == []
+    assert resolved["extraction_result"]["accepted_events"][0]["event_id"] == (
+        "hero-resolved"
+    )
+    assert resolved["extraction_result"]["accepted_events"][0]["verification"] == (
+        "verified"
+    )
 
 
 def test_commit_service_accepts_when_all_checks_pass(tmp_path):
@@ -978,12 +1201,13 @@ def test_apply_projections_updates_state_for_rejected_commit(tmp_path):
     service = ChapterCommitService(tmp_path)
     payload = _build_commit(service, tmp_path,
         chapter=7,
-        review_result={"blocking_count": 1},
+        review_result={"blocking_count": 0},
         fulfillment_result={
             "planned_nodes": ["进入坊市"],
-            "covered_nodes": ["进入坊市"],
-            "missed_nodes": [],
+            "covered_nodes": [],
+            "missed_nodes": ["进入坊市"],
             "extra_nodes": [],
+            "enforcement": "strict",
         },
         disambiguation_result={"pending": []},
         extraction_result={"state_deltas": [], "entity_deltas": [], "accepted_events": []},
@@ -1074,7 +1298,7 @@ def test_apply_projections_writes_events_and_amend_proposals(tmp_path):
         "金手指每日一次的规则被短时失控突破。",
         encoding="utf-8",
     )
-    payload = _build_commit(service, tmp_path,
+    commit_kwargs = dict(
         chapter=3,
         review_result={"blocking_count": 0},
         fulfillment_result={
@@ -1103,6 +1327,28 @@ def test_apply_projections_writes_events_and_amend_proposals(tmp_path):
                 }
             ],
         },
+    )
+    first = _build_commit(service, tmp_path, **commit_kwargs)
+    pending = first["disambiguation_result"]["pending"]
+    checkpoint = next(
+        item for item in pending if item.get("source") == "runtime_checkpoint"
+    )
+
+    from data_modules.human_review import HumanReviewService
+
+    HumanReviewService(tmp_path).record(
+        {
+            "decisions": [
+                {
+                    "decision_id": checkpoint["decision_id"],
+                    "action": "confirm",
+                }
+            ]
+        }
+    )
+    payload = _build_commit(service, tmp_path, **commit_kwargs)
+    assert payload["extraction_result"]["accepted_events"][0]["verification"] == (
+        "verified"
     )
 
     service.apply_projections(payload)
@@ -1237,7 +1483,10 @@ def test_legacy_commit_without_binding_cannot_be_projected_as_trusted(
         lambda: writer_calls.append(True) or {},
     )
 
-    projected = service.apply_projection_writers(legacy)
+    projected = service.apply_projection_writers(
+        legacy,
+        allow_legacy_replay=True,
+    )
 
     assert writer_calls == []
     for writer in ("state", "index", "vector"):
@@ -1248,6 +1497,10 @@ def test_legacy_commit_without_binding_cannot_be_projected_as_trusted(
 
 def test_projection_chain_rechecks_binding_between_writers(tmp_path, monkeypatch):
     service = ChapterCommitService(tmp_path)
+    quote = "主角的realm从未记录变为foundation。"
+    chapter_path = tmp_path / "正文" / "第0006章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text(quote, encoding="utf-8")
     payload = _build_commit(
         service,
         tmp_path,
@@ -1262,13 +1515,29 @@ def test_projection_chain_rechecks_binding_between_writers(tmp_path, monkeypatch
         disambiguation_result={"pending": []},
         extraction_result={
             "state_deltas": [
-                {"entity_id": "hero", "field": "realm", "new": "foundation"}
+                {
+                    "entity_id": "hero",
+                    "field": "realm",
+                    "new": "foundation",
+                    "source_event_id": "fixture-state-6-1",
+                }
             ],
             "entity_deltas": [],
-            "accepted_events": [],
+            "accepted_events": [
+                {
+                    "event_id": "fixture-state-6-1",
+                    "chapter": 6,
+                    "event_type": "character_state_changed",
+                    "subject": "hero",
+                    "payload": {
+                        "field": "realm",
+                        "new": "foundation",
+                        "evidence_quote": quote,
+                    },
+                }
+            ],
         },
     )
-    chapter_path = tmp_path / "正文" / "第0006章.md"
     calls = []
 
     class MutatingWriter:
@@ -1577,6 +1846,7 @@ def test_from_last_commit_replays_confirmed_decision_and_reprojects(
     accepted = payload["extraction_result"]["accepted_events"]
     assert [event["event_id"] for event in accepted] == ["alice-location"]
     assert accepted[0]["verification"] == "verified"
+    assert payload["extraction_result"]["fact_coverage"]["presence"] == "complete"
     assert payload["extraction_result"]["fact_verification"]["presence"] == "supported"
     assert payload["provenance"]["human_review"]["verified_event_ids"] == [
         "alice-location"
@@ -1594,6 +1864,163 @@ def test_from_last_commit_replays_confirmed_decision_and_reprojects(
         tmp_path / ".story-system" / "events" / "chapter_003.events.json"
     ).is_file()
     assert payload["projection_status"]["state"] == "done"
+
+
+def test_from_last_commit_restores_checkpoint_event_and_linked_state_delta(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    quote = "斗气轰然贯通，林舟由炼气踏入筑基。"
+    chapter_path = tmp_path / "正文" / "第0001章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text(quote, encoding="utf-8")
+    _ensure_contract(tmp_path, 1)
+    service = ChapterCommitService(tmp_path)
+    first = _build_commit(
+        service,
+        tmp_path,
+        **_minimal_commit_kwargs(
+            1,
+            {
+                "accepted_events": [
+                    {
+                        "event_id": "hero-foundation",
+                        "chapter": 1,
+                        "event_type": "power_breakthrough",
+                        "subject": "hero",
+                        "payload": {
+                            "field": "realm",
+                            "old": "炼气",
+                            "new": "筑基",
+                            "evidence_quote": quote,
+                        },
+                    }
+                ],
+                "state_deltas": [
+                    {
+                        "entity_id": "hero",
+                        "field": "realm",
+                        "old": "炼气",
+                        "new": "筑基",
+                        "source_event_id": "hero-foundation",
+                    }
+                ],
+            },
+        ),
+    )
+    assert first["extraction_result"]["accepted_events"] == []
+    assert first["extraction_result"]["state_deltas"] == []
+    assert first["extraction_result"]["withheld_canon_records"]["state_deltas"]
+    checkpoint = next(
+        item
+        for item in first["disambiguation_result"]["pending"]
+        if item.get("source") == "runtime_checkpoint"
+    )
+    service.persist_commit(first)
+
+    from data_modules.human_review import HumanReviewService
+
+    HumanReviewService(tmp_path).record(
+        {
+            "decisions": [
+                {"decision_id": checkpoint["decision_id"], "action": "confirm"}
+            ]
+        }
+    )
+    resolved = _run_chapter_commit_cli(
+        monkeypatch,
+        capsys,
+        "--project-root",
+        str(tmp_path),
+        "--chapter",
+        "1",
+        "--from-last-commit",
+    )
+
+    assert [
+        event["event_id"]
+        for event in resolved["extraction_result"]["accepted_events"]
+    ] == ["hero-foundation"]
+    assert resolved["extraction_result"]["accepted_events"][0]["verification"] == (
+        "verified"
+    )
+    assert resolved["extraction_result"]["state_deltas"] == [
+        {
+            "entity_id": "hero",
+            "field": "realm",
+            "old": "炼气",
+            "new": "筑基",
+            "source_event_id": "hero-foundation",
+        }
+    ]
+    assert resolved["extraction_result"]["withheld_canon_records"]["state_deltas"] == []
+
+
+def test_checkpoint_ignore_is_rejected_before_any_replay(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    quote = "斗气轰然贯通，林舟由炼气踏入筑基。"
+    chapter_path = tmp_path / "正文" / "第0001章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text(quote, encoding="utf-8")
+    _ensure_contract(tmp_path, 1)
+    service = ChapterCommitService(tmp_path)
+    first = _build_commit(
+        service,
+        tmp_path,
+        **_minimal_commit_kwargs(
+            1,
+            {
+                "accepted_events": [
+                    {
+                        "event_id": "ignored-breakthrough",
+                        "chapter": 1,
+                        "event_type": "power_breakthrough",
+                        "subject": "hero",
+                        "payload": {
+                            "field": "realm",
+                            "old": "炼气",
+                            "new": "筑基",
+                            "evidence_quote": quote,
+                        },
+                    }
+                ],
+                "state_deltas": [
+                    {
+                        "entity_id": "hero",
+                        "field": "realm",
+                        "old": "炼气",
+                        "new": "筑基",
+                        "source_event_id": "ignored-breakthrough",
+                    }
+                ],
+            },
+        ),
+    )
+    checkpoint = next(
+        item
+        for item in first["disambiguation_result"]["pending"]
+        if item.get("source") == "runtime_checkpoint"
+    )
+    service.persist_commit(first)
+
+    from data_modules.human_review import HumanReviewService
+
+    human_review = HumanReviewService(tmp_path)
+    with pytest.raises(ValueError, match="human_review_action_not_offered"):
+        human_review.record(
+            {
+                "decisions": [
+                    {"decision_id": checkpoint["decision_id"], "action": "ignore"}
+                ]
+            }
+        )
+    listed = human_review.list_items(1)
+    assert listed[0]["status"] == "pending"
+    assert listed[0]["options"] == ["confirm", "rewrite"]
 
 
 def test_from_last_commit_fails_closed_when_chapter_edited(
@@ -1757,6 +2184,11 @@ def _ensure_contract(project_root, chapter):
 
 
 def _persist_chapter(service, project_root, chapter, extraction, body):
+    extraction, body = inject_hard_evidence_quotes(
+        extraction,
+        chapter=chapter,
+        chapter_text=body,
+    )
     chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
     chapter_path.parent.mkdir(parents=True, exist_ok=True)
     chapter_path.write_text(body, encoding="utf-8")
@@ -1769,6 +2201,29 @@ def _persist_chapter(service, project_root, chapter, extraction, body):
     return payload
 
 
+def _build_chapter_with_evidence(
+    service,
+    project_root,
+    chapter,
+    extraction,
+    body,
+):
+    extraction, body = inject_hard_evidence_quotes(
+        extraction,
+        chapter=chapter,
+        chapter_text=body,
+    )
+    chapter_path = project_root / "正文" / f"第{chapter:04d}章.md"
+    chapter_path.parent.mkdir(parents=True, exist_ok=True)
+    chapter_path.write_text(body, encoding="utf-8")
+    _ensure_contract(project_root, chapter)
+    return _build_commit(
+        service,
+        project_root,
+        **_minimal_commit_kwargs(chapter, extraction),
+    )
+
+
 def test_state_delta_on_recorded_field_requires_matching_old_value(tmp_path):
     service = ChapterCommitService(tmp_path)
     _persist_chapter(
@@ -1779,57 +2234,52 @@ def test_state_delta_on_recorded_field_requires_matching_old_value(tmp_path):
         "主角突破至筑基。",
     )
 
-    (tmp_path / "正文" / "第0004章.md").write_text("主角再进一步。", encoding="utf-8")
-    _ensure_contract(tmp_path, 4)
     with pytest.raises(ValueError, match="state_delta_missing_old:hero:realm"):
-        _build_commit(
+        _build_chapter_with_evidence(
             service,
             tmp_path,
-            **_minimal_commit_kwargs(
-                4,
-                {
-                    "state_deltas": [
-                        {"entity_id": "hero", "field": "realm", "new": "金丹"}
-                    ]
-                },
-            ),
+            4,
+            {
+                "state_deltas": [
+                    {"entity_id": "hero", "field": "realm", "new": "金丹"}
+                ]
+            },
+            "主角再进一步。",
         )
 
     with pytest.raises(ValueError, match="state_delta_conflict:hero:realm"):
-        _build_commit(
+        _build_chapter_with_evidence(
             service,
             tmp_path,
-            **_minimal_commit_kwargs(
-                4,
-                {
-                    "state_deltas": [
-                        {
-                            "entity_id": "hero",
-                            "field": "realm",
-                            "old": "炼气",
-                            "new": "金丹",
-                        }
-                    ]
-                },
-            ),
-        )
-
-    payload = _build_commit(
-        service,
-        tmp_path,
-        **_minimal_commit_kwargs(
             4,
             {
                 "state_deltas": [
                     {
                         "entity_id": "hero",
                         "field": "realm",
-                        "old": "筑基",
+                        "old": "炼气",
                         "new": "金丹",
                     }
                 ]
             },
-        ),
+            "主角再进一步。",
+        )
+
+    payload = _build_chapter_with_evidence(
+        service,
+        tmp_path,
+        4,
+        {
+            "state_deltas": [
+                {
+                    "entity_id": "hero",
+                    "field": "realm",
+                    "old": "筑基",
+                    "new": "金丹",
+                }
+            ]
+        },
+        "主角再进一步。",
     )
     assert payload["meta"]["status"] == "accepted"
 
@@ -1852,24 +2302,21 @@ def test_entity_delta_cannot_silently_retype_recorded_entity(tmp_path):
         "血月珠在匣中发出微光。",
     )
 
-    (tmp_path / "正文" / "第0004章.md").write_text("血月珠再次现身。", encoding="utf-8")
-    _ensure_contract(tmp_path, 4)
     with pytest.raises(ValueError, match="entity_type_conflict:血月珠"):
-        _build_commit(
+        _build_chapter_with_evidence(
             service,
             tmp_path,
-            **_minimal_commit_kwargs(
-                4,
-                {
-                    "entity_deltas": [
-                        {
-                            "entity_id": "血月珠",
-                            "canonical_name": "血月珠",
-                            "entity_type": "角色",
-                        }
-                    ]
-                },
-            ),
+            4,
+            {
+                "entity_deltas": [
+                    {
+                        "entity_id": "血月珠",
+                        "canonical_name": "血月珠",
+                        "entity_type": "角色",
+                    }
+                ]
+            },
+            "血月珠再次现身。",
         )
 
 
@@ -1993,7 +2440,20 @@ def test_persist_commit_refuses_rejected_overwrite_of_accepted(tmp_path):
     accepted = _build_commit(
         service,
         tmp_path,
-        **_minimal_commit_kwargs(3, {"state_deltas": [], "entity_deltas": []}),
+        chapter=3,
+        review_result={"blocking_count": 0},
+        fulfillment_result={
+            "planned_nodes": ["本章必须完成"],
+            "covered_nodes": ["本章必须完成"],
+            "missed_nodes": [],
+            "extra_nodes": [],
+        },
+        disambiguation_result={"pending": []},
+        extraction_result={
+            "state_deltas": [],
+            "entity_deltas": [],
+            "accepted_events": [],
+        },
     )
     assert accepted["meta"]["status"] == "accepted"
     service.persist_commit(accepted)
@@ -2002,12 +2462,13 @@ def test_persist_commit_refuses_rejected_overwrite_of_accepted(tmp_path):
         service,
         tmp_path,
         chapter=3,
-        review_result={"blocking_count": 1},
+        review_result={"blocking_count": 0},
         fulfillment_result={
-            "planned_nodes": [],
+            "planned_nodes": ["本章必须完成"],
             "covered_nodes": [],
-            "missed_nodes": [],
+            "missed_nodes": ["本章必须完成"],
             "extra_nodes": [],
+            "enforcement": "strict",
         },
         disambiguation_result={"pending": []},
         extraction_result={"state_deltas": [], "entity_deltas": [], "accepted_events": []},
@@ -2127,23 +2588,20 @@ def test_same_display_name_new_entity_id_goes_to_human_queue(tmp_path):
         },
         "爱丽丝登场。",
     )
-    (tmp_path / "正文" / "第0004章.md").write_text("爱丽丝再次出现。", encoding="utf-8")
-    _ensure_contract(tmp_path, 4)
-    payload = _build_commit(
+    payload = _build_chapter_with_evidence(
         service,
         tmp_path,
-        **_minimal_commit_kwargs(
-            4,
-            {
-                "entity_deltas": [
-                    {
-                        "entity_id": "alice-2",
-                        "name": "爱丽丝",
-                        "entity_type": "角色",
-                    }
-                ]
-            },
-        ),
+        4,
+        {
+            "entity_deltas": [
+                {
+                    "entity_id": "alice-2",
+                    "name": "爱丽丝",
+                    "entity_type": "角色",
+                }
+            ]
+        },
+        "爱丽丝再次出现。",
     )
     pending = payload["disambiguation_result"]["pending"]
     assert any(item.get("category") == "entity_identity" for item in pending)
@@ -2255,6 +2713,7 @@ def test_knowledge_boundary_manual_check_enters_confirm_queue(tmp_path):
     review["manual_checks"] = [
         {
             "category": "character",
+            "fact_dimensions": ["knowledge"],
             "location": "第1段",
             "description": "林舟是否已知密门位置",
             "evidence": quote,
@@ -2304,6 +2763,7 @@ def test_timeline_manual_check_enters_confirm_queue_and_holds_presence(tmp_path)
     review["manual_checks"] = [
         {
             "category": "timeline",
+            "fact_dimensions": ["presence"],
             "location": "第1段",
             "description": "北城到南港的转场耗时可能不足",
             "evidence": quote,

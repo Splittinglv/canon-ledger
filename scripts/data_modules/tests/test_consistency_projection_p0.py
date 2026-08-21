@@ -13,6 +13,7 @@ import pytest
 from data_modules.chapter_commit_service import ChapterCommitService
 from data_modules.chapter_content_binding import build_chapter_binding
 from data_modules.config import DataModulesConfig
+from data_modules.human_review import HumanReviewService
 from data_modules.index_manager import IndexManager
 from data_modules.index_projection_writer import IndexProjectionWriter
 from data_modules.memory.store import ScratchpadManager
@@ -63,7 +64,7 @@ def _build_commit(project_root, chapter: int, extraction: dict):
         encoding="utf-8",
     )
     service = ChapterCommitService(project_root)
-    return service.build_commit(
+    build_kwargs = dict(
         chapter=chapter,
         review_result=standard_review(binding),
         fulfillment_result={
@@ -82,6 +83,23 @@ def _build_commit(project_root, chapter: int, extraction: dict):
             **extraction,
         },
     )
+    payload = service.build_commit(**build_kwargs)
+    checkpoints = [
+        item
+        for item in payload["disambiguation_result"]["pending"]
+        if item.get("source") == "runtime_checkpoint"
+    ]
+    if checkpoints:
+        HumanReviewService(project_root).record(
+            {
+                "decisions": [
+                    {"decision_id": item["decision_id"], "action": "confirm"}
+                    for item in checkpoints
+                ]
+            }
+        )
+        payload = service.build_commit(**build_kwargs)
+    return payload
 
 
 def _commit(project_root, chapter: int, extraction: dict):
@@ -593,6 +611,9 @@ def test_relationship_event_projects_to_memory_and_old_retry_cannot_roll_back(tm
             "payload": {},
             "status": "active",
             "source_chapter": 8,
+            "source_event_id": "evt-relationship-new",
+            "evidence_quote": "正式拜师",
+            "verification": "supported",
         }
     ]
 

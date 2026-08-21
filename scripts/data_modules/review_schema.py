@@ -17,6 +17,103 @@ REVIEW_DIMENSIONS = ("setting", "timeline", "continuity", "character", "logic")
 FAST_REVIEW_DIMENSIONS = ("setting", "timeline", "continuity", "character")
 VALID_SEVERITIES = {"critical", "high", "medium", "low"}
 VALID_CATEGORIES = set(REVIEW_DIMENSIONS)
+VALID_CONFLICT_KINDS = {
+    "state",
+    "timeline",
+    "knowledge",
+    "presence",
+    "custody",
+    "world_rule",
+    "mechanical",
+}
+VALID_FACT_DIMENSIONS = {"knowledge", "presence", "custody"}
+VALID_REVIEW_KINDS = {"ambiguity", "checkpoint"}
+VALID_REVIEW_TRIGGER_KINDS = {
+    "ambiguous_fact",
+    "author_marked",
+    "retcon",
+    "core_character_permanent_state",
+    "core_secret_reveal",
+    "key_item_change",
+    "world_rule_change",
+    "power_permanent_change",
+    "major_relationship_change",
+    "major_time_change",
+    "core_obligation_change",
+    "volume_end",
+}
+VALID_REVIEW_MATERIALITIES = {"critical", "high", "normal", "low"}
+VALID_REVIEW_DISPOSITIONS = {
+    "human_required",
+    "advisory",
+    "audit_only",
+    "ignore",
+}
+
+_MATERIALITY_ALIASES = {"medium": "normal"}
+_DISPOSITION_ALIASES = {
+    "required": "human_required",
+    "audit": "audit_only",
+}
+
+
+def route_manual_review_policy(item: Dict[str, Any]) -> tuple[str, bool]:
+    """Turn reviewer policy hints into a fail-safe runtime decision.
+
+    A model may request stricter review, but it cannot downgrade an anchored,
+    material ambiguity or any checkpoint. Old payloads had no routing fields
+    and retain their historical human-required behavior.
+    """
+    hint = _DISPOSITION_ALIASES.get(
+        str(item.get("disposition") or "").strip(),
+        str(item.get("disposition") or "").strip(),
+    )
+    required_hint = item.get("required")
+    policy_fields = {
+        "fact_dimensions",
+        "review_kind",
+        "trigger_kind",
+        "materiality",
+        "disposition",
+        "required",
+        "source_event_id",
+    }
+    if not any(key in item for key in policy_fields):
+        return "human_required", True
+
+    review_kind = str(item.get("review_kind") or "ambiguity").strip()
+    trigger_kind = str(item.get("trigger_kind") or "").strip()
+    materiality = _MATERIALITY_ALIASES.get(
+        str(item.get("materiality") or "normal").strip(),
+        str(item.get("materiality") or "normal").strip(),
+    )
+    anchored = bool(
+        str(item.get("evidence") or item.get("evidence_quote") or "").strip()
+        or str(item.get("source_event_id") or "").strip()
+    )
+
+    if review_kind == "checkpoint" or trigger_kind in (
+        VALID_REVIEW_TRIGGER_KINDS - {"ambiguous_fact"}
+    ):
+        baseline = "human_required"
+    elif not anchored:
+        baseline = "audit_only"
+    elif materiality == "low":
+        baseline = "advisory"
+    else:
+        baseline = "human_required"
+
+    # Unknown or contradictory hints fail safe. A valid human_required hint
+    # can only tighten the baseline; other hints never weaken it.
+    if hint and hint not in VALID_REVIEW_DISPOSITIONS:
+        return "human_required", True
+    if required_hint is not None and not isinstance(required_hint, bool):
+        return "human_required", True
+    if hint == "human_required" or required_hint is True:
+        return "human_required", True
+    if baseline == "audit_only" and hint == "ignore":
+        return "ignore", False
+    return baseline, baseline == "human_required"
 
 
 def expected_dimensions_for_mode(review_mode: str) -> tuple[str, ...]:
@@ -51,6 +148,10 @@ class ReviewIssue:
     location: str = ""
     description: str = ""
     evidence: str = ""
+    evidence_quote: str = ""
+    canonical_fact_id: str = ""
+    canonical_evidence: str = ""
+    conflict_kind: str = ""
     fix_hint: str = ""
     blocking: Optional[bool] = None
 
@@ -59,6 +160,14 @@ class ReviewIssue:
             raise ValueError(f"未知问题级别：{self.severity}")
         if self.category not in VALID_CATEGORIES:
             raise ValueError(f"未知事实审查分类：{self.category}")
+        if not self.description.strip() or not self.evidence.strip():
+            raise ValueError("已确认事实问题必须包含 description 和 evidence")
+        self.evidence_quote = str(self.evidence_quote or "").strip()
+        self.canonical_fact_id = str(self.canonical_fact_id or "").strip()
+        self.canonical_evidence = str(self.canonical_evidence or "").strip()
+        self.conflict_kind = str(self.conflict_kind or "").strip()
+        if self.conflict_kind and self.conflict_kind not in VALID_CONFLICT_KINDS:
+            raise ValueError(f"未知事实冲突类型：{self.conflict_kind}")
         if self.blocking is None:
             self.blocking = self.severity == "critical"
 
@@ -76,6 +185,13 @@ class ManualReviewCheck:
     location: str = ""
     evidence: str = ""
     options: List[str] = field(default_factory=list)
+    fact_dimensions: Optional[List[str]] = None
+    review_kind: str = "ambiguity"
+    trigger_kind: str = ""
+    materiality: str = "normal"
+    disposition: str = ""
+    required: Optional[bool] = None
+    source_event_id: str = ""
 
     def __post_init__(self) -> None:
         if self.category not in VALID_CATEGORIES:
@@ -84,6 +200,68 @@ class ManualReviewCheck:
             raise ValueError("人工检查项必须包含 description 和 reason")
         if any(not str(option).strip() for option in self.options):
             raise ValueError("人工检查项 options 不能包含空字符串")
+        raw_dimensions = self.fact_dimensions
+        if raw_dimensions is None:
+            # A broad review category cannot identify a long-term fact
+            # dimension safely (continuity may be presence *or* custody).
+            raw_dimensions = []
+        dimensions = [str(value).strip() for value in raw_dimensions]
+        if any(value not in VALID_FACT_DIMENSIONS for value in dimensions):
+            raise ValueError(
+                "人工检查项 fact_dimensions 只能包含 knowledge、presence、custody"
+            )
+        if len(dimensions) != len(set(dimensions)):
+            raise ValueError("人工检查项 fact_dimensions 不能包含重复值")
+        object.__setattr__(self, "fact_dimensions", dimensions)
+
+        review_kind = str(self.review_kind or "").strip()
+        if review_kind not in VALID_REVIEW_KINDS:
+            raise ValueError("人工检查项 review_kind 必须是 ambiguity 或 checkpoint")
+        object.__setattr__(self, "review_kind", review_kind)
+
+        trigger_kind = str(self.trigger_kind or "").strip()
+        if trigger_kind and trigger_kind not in VALID_REVIEW_TRIGGER_KINDS:
+            raise ValueError("人工检查项 trigger_kind 不是受支持的审核触发类型")
+        object.__setattr__(self, "trigger_kind", trigger_kind)
+
+        materiality = _MATERIALITY_ALIASES.get(
+            str(self.materiality or "").strip(),
+            str(self.materiality or "").strip(),
+        )
+        if materiality not in VALID_REVIEW_MATERIALITIES:
+            raise ValueError(
+                "人工检查项 materiality 必须是 critical、high、normal 或 low"
+            )
+        object.__setattr__(self, "materiality", materiality)
+
+        source_event_id = str(self.source_event_id or "").strip()
+        disposition_hint = _DISPOSITION_ALIASES.get(
+            str(self.disposition or "").strip(),
+            str(self.disposition or "").strip(),
+        )
+        if disposition_hint or self.required is not None:
+            disposition, required = route_manual_review_policy(
+                {
+                    "review_kind": review_kind,
+                    "trigger_kind": trigger_kind,
+                    "materiality": materiality,
+                    "disposition": disposition_hint,
+                    "required": self.required,
+                    "evidence": self.evidence,
+                    "source_event_id": source_event_id,
+                }
+            )
+        elif review_kind == "ambiguity" and materiality == "low" and not (
+            self.evidence.strip() or source_event_id
+        ):
+            # Direct construction without policy fields is the compatibility
+            # path. Only an explicitly low, unanchored concern is audit-only.
+            disposition, required = "audit_only", False
+        else:
+            disposition, required = "human_required", True
+        object.__setattr__(self, "disposition", disposition)
+        object.__setattr__(self, "required", required)
+        object.__setattr__(self, "source_event_id", source_event_id)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -257,6 +435,22 @@ def _parse_manual_checks(raw: Any) -> List[ManualReviewCheck]:
             raise ValueError(
                 f"review_result.manual_checks[{index}].options 必须是数组"
             )
+        raw_dimensions = item.get("fact_dimensions")
+        if raw_dimensions is None:
+            # ``dimension`` on old manual checks was inferred from the broad
+            # review category. It is not reliable enough to alter fact
+            # coverage; only the new explicit list has that authority.
+            raw_dimensions = []
+        if not isinstance(raw_dimensions, list):
+            raise ValueError(
+                f"review_result.manual_checks[{index}].fact_dimensions 必须是数组"
+            )
+        raw_required = item.get("required")
+        if raw_required is not None and not isinstance(raw_required, bool):
+            raise ValueError(
+                f"review_result.manual_checks[{index}].required 必须是布尔值"
+            )
+        routed_disposition, routed_required = route_manual_review_policy(item)
         checks.append(
             ManualReviewCheck(
                 category=str(item.get("category") or "").strip(),
@@ -265,6 +459,13 @@ def _parse_manual_checks(raw: Any) -> List[ManualReviewCheck]:
                 evidence=str(item.get("evidence") or ""),
                 reason=str(item.get("reason") or "").strip(),
                 options=[str(option).strip() for option in raw_options],
+                fact_dimensions=[str(value).strip() for value in raw_dimensions],
+                review_kind=str(item.get("review_kind") or "ambiguity").strip(),
+                trigger_kind=str(item.get("trigger_kind") or "").strip(),
+                materiality=str(item.get("materiality") or "normal").strip(),
+                disposition=routed_disposition,
+                required=routed_required,
+                source_event_id=str(item.get("source_event_id") or "").strip(),
             )
         )
     return checks
@@ -312,6 +513,10 @@ def parse_review_output(
                 location=str(item.get("location") or ""),
                 description=str(item.get("description") or ""),
                 evidence=str(item.get("evidence") or ""),
+                evidence_quote=str(item.get("evidence_quote") or ""),
+                canonical_fact_id=str(item.get("canonical_fact_id") or ""),
+                canonical_evidence=str(item.get("canonical_evidence") or ""),
+                conflict_kind=str(item.get("conflict_kind") or ""),
                 fix_hint=str(item.get("fix_hint") or ""),
                 blocking=item.get("blocking"),
             )

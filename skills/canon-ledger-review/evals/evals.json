@@ -3,19 +3,27 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "使用 /canon-ledger-review 审查第4章（agents/evals/files/test-project/正文/第0004章-迦南学院的考验.md）。项目在 agents/evals/files/test-project/。",
-      "expected_output": "生成审查报告，识别时间线等事实一致性问题，并将无评分审计记录写入 index.db",
-      "files": [
-        "agents/evals/files/test-project/正文/第0004章-迦南学院的考验.md",
-        "agents/evals/files/test-project/.canon-ledger/state.json",
-        "agents/evals/files/test-project/.canon-ledger/summaries/ch0003.md"
-      ],
+      "prompt": "使用 /canon-ledger-review 审查 workflow 允许的第4章草稿。",
+      "expected_output": "按 data-agent extract → reviewer → assemble → v3 prepare 审查草稿；需要人工时进入当前 STAGING。",
+      "files": [],
       "expectations": [
-        "审查报告被生成",
-        "报告中识别了时间跳跃问题（上章黄昏→本章晨光）",
-        "事实审查覆盖范围被写入（review_audits）",
-        "报告中的每个 issue 都有 evidence",
-        "除 JSON 字段、固定枚举、路径和正文原样引用外，报告中的自然语言审查内容全部使用中文"
+        "reviewer 收到 exact candidate draft、N-1 HEAD、chapter binding、axiom 和 registry digest",
+        "输出 observations 与 complete scan attestations，不输出 issues/manual_checks/blocking_count",
+        "不调用 review-pipeline、update-state 或 index.db",
+        "prepare 已有 STAGING 时回显 expected_stage_digest",
+        "awaiting_human 的唯一下一步是 /canon-ledger-confirm 当前章"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "使用 /canon-ledger-review 审查已经发布的第1-3章。",
+      "expected_output": "以活动 HEAD 中的历史 revision 做只读 audit，不创建或替换 STAGING。",
+      "files": [],
+      "expectations": [
+        "报告绑定 audited_head、revision binding、candidate 和 attestation digest",
+        "不修改 CURRENT、STAGING、projection、state 或 index",
+        "不声称审计通过后可以继续写下一章",
+        "如需修订，必须由作者显式选择 revise 后进入完整 v3 重编译"
       ]
     }
   ]

@@ -17,6 +17,18 @@ from .chapter_commit_schema import (
     ReviewResult,
     normalize_timeline_events,
 )
+from .canon_evidence import (
+    CHAPTER_COMMIT_SCHEMA_V2,
+    EVIDENCE_CONTRACT_VERSION,
+    LINKED_CANON_FIELDS,
+    EvidenceContractClassification,
+    classify_evidence_contract,
+    merge_withheld_records,
+    partition_linked_records,
+    strict_commit_linked_records,
+    validate_event_evidence,
+    validate_mutation_source_bindings,
+)
 from .chapter_content_binding import (
     ChapterBindingError,
     build_chapter_binding,
@@ -114,15 +126,6 @@ def _information_conflict_items(
     return items
 
 
-_HARD_EVIDENCE_EVENT_TYPES = {
-    "knowledge_state_changed",
-    "presence_observed",
-    "custody_changed",
-    "open_loop_created",
-    "promise_created",
-    "relationship_changed",
-    "world_rule_broken",
-}
 _IDENTITY_KEYS = (
     "entity_id",
     "id",
@@ -340,7 +343,11 @@ def _state_deltas_from_events(events: list[Any]) -> list[dict[str, Any]]:
         ).strip()
         if event_type == "power_breakthrough" and not field_name:
             field_name = "realm"
-        delta: dict[str, Any] = {"entity_id": entity, "field": field_name}
+        delta: dict[str, Any] = {
+            "entity_id": entity,
+            "field": field_name,
+            "source_event_id": str(event.get("event_id") or "").strip(),
+        }
         for key in ("new", "new_value", "to", "new_state"):
             if key in payload:
                 delta[key] = payload[key]
@@ -365,9 +372,440 @@ def _is_inferred_knowledge(event: dict[str, Any], probe: dict[str, Any] | None) 
     return str(payload.get("source_kind") or "").strip().lower() == "inferred"
 
 
+_ISSUE_FACT_DIMENSIONS = {
+    "knowledge": ["knowledge"],
+    "presence": ["presence"],
+    "custody": ["custody"],
+}
+_CHECKPOINT_TRIGGER_KINDS = {
+    "author_marked",
+    "retcon",
+    "core_character_permanent_state",
+    "core_secret_reveal",
+    "key_item_change",
+    "world_rule_change",
+    "power_permanent_change",
+    "major_relationship_change",
+    "major_time_change",
+    "core_obligation_change",
+    "volume_end",
+}
+
+
+def _history_fact_index(history: Any) -> dict[str, list[dict[str, Any]]]:
+    """Index traceable N-1 fact rows by every stable identifier they expose."""
+    result: dict[str, list[dict[str, Any]]] = {}
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            identifiers: set[str] = set()
+            for key in (
+                "id",
+                "event_id",
+                "source_event_id",
+                "information_id",
+                "timeline_id",
+                "rule_id",
+                "loop_id",
+                "promise_id",
+            ):
+                text = str(value.get(key) or "").strip()
+                if text:
+                    identifiers.add(text)
+            for identifier in identifiers:
+                rows = result.setdefault(identifier, [])
+                if value not in rows:
+                    rows.append(value)
+            for nested in value.values():
+                visit(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                visit(nested)
+
+    for attribute in (
+        "canonical_facts",
+        "state_changes",
+        "rules",
+        "obligations",
+        "timeline",
+        "information",
+        "knowledge_by_entity",
+        "presence",
+        "presence_history",
+        "custody",
+        "custody_history",
+        "relationships",
+    ):
+        visit(getattr(history, attribute, None))
+    return result
+
+
+def _row_conflict_kinds(row: dict[str, Any]) -> set[str]:
+    category = str(row.get("category") or "").strip()
+    kinds: set[str] = set()
+    if category == "character_state" or (
+        "entity_id" in row and "field" in row and "new" in row
+    ):
+        kinds.add("state")
+    if category == "timeline" or str(row.get("timeline_id") or "").strip():
+        kinds.add("timeline")
+    if str(row.get("information_id") or "").strip():
+        kinds.add("knowledge")
+    if (
+        str(row.get("entity_id") or "").strip()
+        and str(row.get("location_id") or "").strip()
+        and str(row.get("presence_kind") or "").strip()
+    ):
+        kinds.add("presence")
+    if str(row.get("artifact_id") or "").strip() and (
+        "holder_id" in row or "from_holder" in row or "to_holder" in row
+    ):
+        kinds.add("custody")
+    if category == "world_rule":
+        kinds.add("world_rule")
+    if category in {
+        "relationship",
+        "story_fact",
+        "open_loop",
+        "reader_promise",
+    }:
+        kinds.add("mechanical")
+    return kinds
+
+
+def _canonical_anchor_is_traceable(
+    rows: list[dict[str, Any]],
+    canonical_evidence: str,
+    conflict_kind: str,
+) -> bool:
+    """Require the claimed canon quote to resolve to the claimed fact kind.
+
+    Reviewer prose may prefix a quote with a chapter label, so containment is
+    accepted in that direction. A short model fragment is not enough to turn a
+    candidate into an automatic rejection.
+    """
+    claimed = canonical_evidence.strip()
+    if not claimed:
+        return False
+    for row in rows:
+        if conflict_kind not in _row_conflict_kinds(row):
+            continue
+        source_quote = str(row.get("evidence_quote") or "").strip()
+        if source_quote and source_quote in claimed:
+            return True
+    return False
+
+
+def _runtime_review_verdicts(
+    review: Any,
+    chapter_text: str,
+    history: Any,
+) -> dict[str, list[dict[str, Any]]]:
+    """Recompute issue authority without trusting reviewer ``blocking``.
+
+    A directly actionable issue needs both a verbatim current-chapter anchor
+    and a stable N-1 canon anchor. Missing anchors become human review (or a
+    low-value audit entry) instead of causing automatic prose edits.
+    """
+    fact_index = _history_fact_index(history)
+    confirmed: list[dict[str, Any]] = []
+    human_required: list[dict[str, Any]] = []
+    audit_only: list[dict[str, Any]] = []
+    for index, raw in enumerate(list(getattr(review, "issues", None) or [])):
+        issue = raw.model_dump() if hasattr(raw, "model_dump") else dict(raw)
+        quote = str(issue.get("evidence_quote") or "").strip()
+        fact_id = str(issue.get("canonical_fact_id") or "").strip()
+        conflict_kind = str(issue.get("conflict_kind") or "").strip()
+        canonical_evidence = str(issue.get("canonical_evidence") or "").strip()
+        canon_rows = fact_index.get(fact_id, [])
+        anchored = bool(
+            quote
+            and quote in chapter_text
+            and fact_id
+            and canon_rows
+            and conflict_kind
+            and canonical_evidence
+            and _canonical_anchor_is_traceable(
+                canon_rows,
+                canonical_evidence,
+                conflict_kind,
+            )
+        )
+        verdict = {
+            **issue,
+            "runtime_index": index,
+            "runtime_confirmed": anchored,
+            "model_blocking_hint": bool(issue.get("blocking", False)),
+        }
+        if anchored:
+            confirmed.append(verdict)
+            continue
+
+        severity = str(issue.get("severity") or "low")
+        materiality = "normal" if severity == "medium" else severity
+        item = {
+            "source": "runtime_unanchored_issue",
+            "category": str(issue.get("category") or "logic"),
+            "decision_id": f"runtime-issue-{index + 1}",
+            "description": str(issue.get("description") or "事实疑点需要复核"),
+            "evidence_quote": quote,
+            "existing_fact": canonical_evidence,
+            "reason": (
+                "reviewer 报告了事实冲突，但 runtime 无法同时验证本章逐字证据"
+                "与 N-1 正史事实 ID；禁止自动改文，交由作者判断。"
+            ),
+            "options": ["confirm", "ignore", "rewrite"],
+            "fact_dimensions": list(_ISSUE_FACT_DIMENSIONS.get(conflict_kind, [])),
+            "review_kind": "ambiguity",
+            "trigger_kind": "ambiguous_fact",
+            "materiality": materiality if materiality in {"critical", "high", "normal", "low"} else "normal",
+            "disposition": "advisory" if severity == "low" and quote else (
+                "audit_only" if severity == "low" else "human_required"
+            ),
+            "required": False if severity == "low" else True,
+            "source_event_id": "",
+            "blocking": False,
+            "runtime_issue": verdict,
+        }
+        if severity == "low" and not quote:
+            audit_only.append(item)
+        else:
+            human_required.append(item)
+    return {
+        "confirmed": confirmed,
+        "human_required": human_required,
+        "audit_only": audit_only,
+    }
+
+
+def _event_checkpoint_trigger(event: dict[str, Any]) -> str:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    event_type = str(event.get("event_type") or "")
+    requested = str(payload.get("trigger_kind") or "").strip()
+    if bool(payload.get("checkpoint_required")):
+        return requested if requested in _CHECKPOINT_TRIGGER_KINDS else "author_marked"
+    if event_type == "world_rule_broken":
+        return "retcon"
+    if event_type == "world_rule_revealed":
+        return "world_rule_change"
+    if event_type == "power_breakthrough":
+        return "power_permanent_change"
+
+    materiality = str(payload.get("materiality") or "normal").strip().lower()
+    important = materiality in {"critical", "high"}
+    if event_type == "character_state_changed" and (
+        important or bool(payload.get("permanent"))
+    ):
+        return "core_character_permanent_state"
+    if event_type == "knowledge_state_changed" and (
+        important or bool(payload.get("first_reveal")) or bool(payload.get("core_secret"))
+    ):
+        return "core_secret_reveal"
+    if event_type in {"custody_changed", "artifact_obtained"} and (
+        important or bool(payload.get("key_item"))
+    ):
+        return "key_item_change"
+    if event_type == "relationship_changed" and important:
+        return "major_relationship_change"
+    if event_type in {
+        "open_loop_closed",
+        "promise_created",
+        "promise_paid_off",
+    } and (important or bool(payload.get("core_obligation"))):
+        return "core_obligation_change"
+    return ""
+
+
+def _checkpoint_fact_dimensions(event_type: str) -> list[str]:
+    if event_type == "knowledge_state_changed":
+        return ["knowledge"]
+    if event_type == "presence_observed":
+        return ["presence"]
+    if event_type in {"custody_changed", "artifact_obtained"}:
+        return ["custody"]
+    return []
+
+
+def _author_checkpoint_marker(project_root: Path, chapter: int) -> dict[str, Any] | None:
+    path = project_root / ".story-system" / "chapters" / f"chapter_{chapter:03d}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return None
+    directive = payload.get("chapter_directive") if isinstance(payload, dict) else None
+    marker = directive.get("human_review") if isinstance(directive, dict) else None
+    if marker is True:
+        return {"required": True, "reason": "作者将本章标记为关键审核节点。"}
+    if not isinstance(marker, dict) or marker.get("required") is not True:
+        return None
+    return marker
+
+
+def _checkpoint_review_items(
+    project_root: Path,
+    chapter: int,
+    events: list[dict[str, Any]],
+    timeline_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    by_id = {
+        str(event.get("event_id") or ""): event
+        for event in events
+        if str(event.get("event_id") or "")
+    }
+    triggers: dict[str, str] = {}
+    for event_id, event in by_id.items():
+        trigger = _event_checkpoint_trigger(event)
+        if trigger:
+            triggers[event_id] = trigger
+    for row in timeline_events:
+        if not isinstance(row, dict):
+            continue
+        materiality = str(row.get("materiality") or "normal").strip().lower()
+        if materiality in {"critical", "high"} or bool(row.get("major_time_change")):
+            source_id = str(row.get("source_event_id") or "").strip()
+            if source_id in by_id:
+                triggers[source_id] = "major_time_change"
+
+    for event_id, trigger in triggers.items():
+        event = by_id[event_id]
+        event_type = str(event.get("event_type") or "")
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        items.append(
+            {
+                "source": "runtime_checkpoint",
+                "category": (
+                    "setting"
+                    if trigger in {"retcon", "world_rule_change"}
+                    else "timeline"
+                    if trigger == "major_time_change"
+                    else "character"
+                    if trigger in {"core_character_permanent_state", "core_secret_reveal"}
+                    else "continuity"
+                ),
+                "decision_id": f"checkpoint-{event_id}",
+                "candidate_event_id": event_id,
+                "candidate_event": event,
+                "evidence_quote": str(payload.get("evidence_quote") or ""),
+                "reason": (
+                    f"{event_type} 会改变后续长期正史，属于 {trigger} 关键节点；"
+                    "正文证据成立，但写入前默认由作者确认。"
+                ),
+                "options": ["confirm", "ignore", "rewrite"],
+                "fact_dimensions": _checkpoint_fact_dimensions(event_type),
+                "review_kind": "checkpoint",
+                "trigger_kind": trigger,
+                "materiality": "high",
+                "disposition": "human_required",
+                "required": True,
+                "source_event_id": event_id,
+                "blocking": False,
+            }
+        )
+
+    marker = _author_checkpoint_marker(project_root, chapter)
+    if marker is not None:
+        trigger = str(marker.get("trigger_kind") or "author_marked").strip()
+        if trigger not in _CHECKPOINT_TRIGGER_KINDS:
+            trigger = "author_marked"
+        items.append(
+            {
+                "source": "author_checkpoint",
+                "category": "continuity",
+                "decision_id": f"author-checkpoint-{chapter}",
+                "reason": str(marker.get("reason") or "作者要求本章提交后人工复核。"),
+                "options": ["confirm", "ignore", "rewrite"],
+                "fact_dimensions": [],
+                "review_kind": "checkpoint",
+                "trigger_kind": trigger,
+                "materiality": str(marker.get("materiality") or "high"),
+                "disposition": "human_required",
+                "required": True,
+                "source_event_id": "",
+                "blocking": False,
+            }
+        )
+    return items
+
+
+def _bind_reviewer_checkpoints(
+    items: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Bind reviewer checkpoints to extracted events without fact leakage."""
+    def quote_matches(item_quote: str, event: dict[str, Any]) -> bool:
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        event_quote = str(payload.get("evidence_quote") or "").strip()
+        return bool(
+            item_quote
+            and event_quote
+            and (
+                item_quote == event_quote
+                or item_quote in event_quote
+                or event_quote in item_quote
+            )
+        )
+
+    bound: list[dict[str, Any]] = []
+    for raw in items:
+        item = dict(raw)
+        if str(item.get("review_kind") or "") != "checkpoint":
+            bound.append(item)
+            continue
+        check_quote = str(item.get("evidence_quote") or "").strip()
+        matches = [
+            event for event in events if quote_matches(check_quote, event)
+        ]
+        if len(matches) != 1:
+            # A chapter-level checkpoint can exist without a new canon event.
+            # If one quote maps to multiple facts, guessing would promote all
+            # of them with one author verdict. Keep the checkpoint required but
+            # unbound; source_event_id remains an optional N-1 canon anchor.
+            bound.append(item)
+            continue
+        event = matches[0]
+        event_id = str(event.get("event_id") or "").strip()
+        item["candidate_event_id"] = event_id
+        item["candidate_event"] = event
+        bound.append(item)
+    return bound
+
+
 class ChapterCommitService:
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root)
+
+    def _assert_v2_write_allowed(self) -> None:
+        # This service is retained only to inspect historical envelopes during
+        # cutover.  Production mutations are retired globally; CURRENT (and
+        # even project scaffolding) must never act as an enable/disable switch.
+        from .workflow_authority import WorkflowAuthority
+
+        WorkflowAuthority(
+            self.project_root
+        ).assert_legacy_fact_mutation_disabled("chapter_commit")
+
+    def validate_legacy_commit_for_migration(
+        self,
+        payload: Dict[str, Any],
+    ) -> EvidenceContractClassification:
+        """Read-only validation exception for cutover inventory code.
+
+        It deliberately has no persist/projection side effect and is the only
+        service-level legacy escape hatch.  Migration code may inspect old
+        bytes; it cannot reuse this service to write them back.
+        """
+
+        classification = self._require_supported_evidence_envelope(
+            payload,
+            allow_legacy_replay=True,
+        )
+        self._validate_strict_evidence_commit(
+            payload,
+            allow_legacy_replay=True,
+            classification=classification,
+        )
+        return classification
 
     def _validate_custody_transitions(
         self,
@@ -520,6 +958,7 @@ class ChapterCommitService:
         disambiguation_result: Dict[str, Any],
         extraction_result: Dict[str, Any],
     ) -> Dict[str, Any]:
+        self._assert_v2_write_allowed()
         review = ReviewResult.model_validate(review_result)
         fulfillment = FulfillmentResult.model_validate(fulfillment_result)
         disambiguation = DisambiguationResult.model_validate(disambiguation_result)
@@ -594,6 +1033,83 @@ class ChapterCommitService:
                 # conflict can drop exactly this event from the commit.
                 raw_candidates[index]["event_id"] = str(probe.get("event_id") or "")
             probes.append(probe)
+
+        # The chapter hash has already been re-read above. Validate every
+        # candidate and every canon-writing derivative before any model hint
+        # can route it around the normal accepted-event path.
+        evidence_envelope = {
+            "meta": {"chapter": chapter},
+            "chapter_binding": chapter_binding,
+        }
+        bound_chapter_text = bound_chapter_text_for_commit(
+            self.project_root,
+            evidence_envelope,
+        )
+        if bound_chapter_text is None:
+            raise ChapterBindingError(
+                "chapter_content_hash_mismatch",
+                "bound chapter text could not be re-read for canon evidence",
+            )
+        if any(probe is None for probe in probes):
+            invalid_index = next(
+                index for index, probe in enumerate(probes) if probe is None
+            )
+            # Re-run the strict normalizer outside the probe's best-effort
+            # wrapper so callers receive the precise schema/evidence error.
+            from .chapter_commit_schema import normalize_accepted_events
+
+            normalize_accepted_events(chapter, [raw_candidates[invalid_index]])
+            raise ValueError(f"accepted_events[{invalid_index}] is invalid")
+        normalized_candidates = [dict(probe) for probe in probes if probe is not None]
+        # A previous accepted-with-pending commit deliberately withheld its
+        # candidate from accepted_events. Keep that chapter-bound candidate as
+        # an evidence source so --from-last-commit can restore linked records
+        # after the author confirms it.
+        source_candidates = list(normalized_candidates)
+        source_candidate_ids = {
+            str(event.get("event_id") or "") for event in source_candidates
+        }
+        for raw_pending in list(disambiguation.pending or []):
+            if not isinstance(raw_pending, dict) or not isinstance(
+                raw_pending.get("candidate_event"), dict
+            ):
+                continue
+            pending_probe = self._normalized_probe(
+                chapter,
+                dict(raw_pending["candidate_event"]),
+            )
+            if pending_probe is None:
+                raise ValueError("pending candidate_event is not evidence-bound")
+            event_id = str(pending_probe.get("event_id") or "")
+            if event_id and event_id not in source_candidate_ids:
+                source_candidates.append(pending_probe)
+                source_candidate_ids.add(event_id)
+        candidate_event_index = validate_event_evidence(
+            source_candidates,
+            bound_chapter_text,
+        )
+        extraction_payload = extraction.model_dump()
+        linked_records = merge_withheld_records(extraction_payload)
+        linked_records["timeline_events"] = normalize_timeline_events(
+            chapter,
+            linked_records["timeline_events"],
+            require_source_binding=True,
+        )
+        linked_records = validate_mutation_source_bindings(
+            linked_records,
+            candidate_event_index,
+        )
+        runtime_review = _runtime_review_verdicts(
+            review,
+            bound_chapter_text,
+            history,
+        )
+        checkpoint_items = _checkpoint_review_items(
+            self.project_root,
+            chapter,
+            normalized_candidates,
+            linked_records["timeline_events"],
+        )
         inferred_kept: list[dict[str, Any]] = []
         inferred_probes: list[dict[str, Any] | None] = []
         inferred_items: list[dict[str, Any]] = []
@@ -631,7 +1147,10 @@ class ChapterCommitService:
         probes = inferred_probes
         conflict_items = _information_conflict_items(chapter, probes, history)
         collision_items = _entity_name_collision_items(extraction, history)
-        review_items = review_manual_check_items_from_review(review)
+        review_items = _bind_reviewer_checkpoints(
+            review_manual_check_items_from_review(review),
+            normalized_candidates,
+        )
         pending_input = [
             dict(item) if isinstance(item, dict) else item
             for item in disambiguation.pending
@@ -641,11 +1160,21 @@ class ChapterCommitService:
             for item in pending_input
             if isinstance(item, dict)
         }
-        merged_pending = pending_input + [
-            item
-            for item in conflict_items + inferred_items + collision_items + review_items
-            if item.get("candidate_event_id") not in queued_event_ids
-        ]
+        merged_pending = list(pending_input)
+        for item in (
+            conflict_items
+            + inferred_items
+            + collision_items
+            + review_items
+            + runtime_review["human_required"]
+            + checkpoint_items
+        ):
+            candidate_id = str(item.get("candidate_event_id") or "").strip()
+            if candidate_id and candidate_id in queued_event_ids:
+                continue
+            merged_pending.append(item)
+            if candidate_id:
+                queued_event_ids.add(candidate_id)
 
         human_review = HumanReviewService(self.project_root).apply_decisions(
             chapter,
@@ -666,18 +1195,13 @@ class ChapterCommitService:
                 + f";edit chapter {chapter} and run /canon-ledger-write {chapter}"
             )
         unresolved = list(human_review["unresolved"])
-        blocking_pending = [
-            item for item in unresolved if bool(item.get("blocking", False))
-        ]
         outline_strict = fulfillment.enforcement == "strict"
         rejected = (
-            bool(review.blocking_count)
-            or bool(blocking_pending)
+            bool(runtime_review["confirmed"])
             or (outline_strict and bool(fulfillment.missed_nodes))
         )
         status = "rejected" if rejected else "accepted"
         volume = volume_num_for_chapter_from_state(self.project_root, chapter) or 1
-        extraction_payload = extraction.model_dump()
         accepted_events = _apply_identity_actions(
             extraction_payload,
             list(human_review["events"]),
@@ -687,32 +1211,40 @@ class ChapterCommitService:
         accepted_events = EventLogStore(self.project_root).normalize_events(
             chapter, accepted_events
         )
-        evidence_envelope = {
-            "meta": {"chapter": chapter},
-            "chapter_binding": chapter_binding,
+        accepted_event_index = validate_event_evidence(
+            accepted_events,
+            bound_chapter_text,
+        )
+        discarded_event_ids = {
+            str(value).strip()
+            for value in human_review.get("discarded_event_ids") or []
+            if str(value).strip()
         }
+        if discarded_event_ids:
+            linked_records = {
+                field: [
+                    row
+                    for row in linked_records.get(field, [])
+                    if str(row.get("source_event_id") or "").strip()
+                    not in discarded_event_ids
+                ]
+                for field in LINKED_CANON_FIELDS
+            }
+        active_records, withheld_records = partition_linked_records(
+            linked_records,
+            set(accepted_event_index),
+        )
+        # Revalidate against effective (possibly human-replaced) events. This
+        # also proves a pending event cannot leak its linked mutation into canon.
+        active_records = validate_mutation_source_bindings(
+            active_records,
+            accepted_event_index,
+        )
+        for field in LINKED_CANON_FIELDS:
+            extraction_payload[field] = active_records[field]
+        extraction_payload["withheld_canon_records"] = withheld_records
+        extraction_payload["evidence_contract"] = EVIDENCE_CONTRACT_VERSION
         if status == "accepted":
-            bound_chapter_text = bound_chapter_text_for_commit(
-                self.project_root,
-                evidence_envelope,
-            )
-            for index, event in enumerate(accepted_events):
-                event_payload = (
-                    event.get("payload") if isinstance(event.get("payload"), dict) else {}
-                )
-                quote = str(event_payload.get("evidence_quote") or "").strip()
-                event_type = str(event.get("event_type") or "")
-                requires_quote = event_type in _HARD_EVIDENCE_EVENT_TYPES
-                # Hard-constraint and consistency events must bind to the
-                # prose; any other event that claims a quote must also
-                # actually quote this chapter.
-                if (requires_quote or quote) and not event_evidence_in_chapter(
-                    event, bound_chapter_text
-                ):
-                    raise ValueError(
-                        f"accepted_events[{index}].payload.evidence_quote "
-                        "is not present in the bound chapter"
-                    )
             self._validate_custody_transitions(chapter, accepted_events, history)
             self._validate_state_delta_chain(
                 list(extraction_payload.get("state_deltas") or [])
@@ -747,8 +1279,6 @@ class ChapterCommitService:
             if verification.get(dimension) == "pending":
                 verification[dimension] = "supported"
         for dimension in human_review["affected_dimensions"]:
-            if dimension in coverage:
-                coverage[dimension] = "partial"
             if verification and dimension in {
                 "knowledge",
                 "presence",
@@ -757,9 +1287,6 @@ class ChapterCommitService:
                 verification[dimension] = "pending"
         extraction_payload["fact_coverage"] = coverage
         extraction_payload["fact_verification"] = verification
-        extraction_payload["timeline_events"] = normalize_timeline_events(
-            chapter, extraction.timeline_events
-        )
         from .commit_lineage import (
             VALIDATION_VALID,
             predecessor_context_hash_for_chapter,
@@ -767,7 +1294,7 @@ class ChapterCommitService:
 
         commit_payload = {
             "meta": {
-                "schema_version": "story-system/v1",
+                "schema_version": CHAPTER_COMMIT_SCHEMA_V2,
                 "chapter": chapter,
                 "status": status,
                 "predecessor_context_hash": predecessor_context_hash_for_chapter(
@@ -786,7 +1313,14 @@ class ChapterCommitService:
             "provenance": {
                 "write_fact_role": "chapter_commit",
                 "projection_role": "derived_read_models",
+                "evidence_contract": EVIDENCE_CONTRACT_VERSION,
                 "chapter_binding": chapter_binding,
+                "runtime_review": {
+                    "confirmed_issues": runtime_review["confirmed"],
+                    "human_required_issues": runtime_review["human_required"],
+                    "audit_only_issues": runtime_review["audit_only"],
+                    "confirmed_count": len(runtime_review["confirmed"]),
+                },
                 "human_review": {
                     "resolved_decision_ids": human_review[
                         "resolved_decision_ids"
@@ -803,7 +1337,14 @@ class ChapterCommitService:
                 "missed_nodes": fulfillment.missed_nodes,
                 "extra_nodes": fulfillment.extra_nodes,
             },
-            "review_result": review.model_dump(),
+            "review_result": {
+                **review.model_dump(),
+                "runtime_confirmed_count": len(runtime_review["confirmed"]),
+                "runtime_human_required_count": len(
+                    runtime_review["human_required"]
+                ),
+                "runtime_audit_only_count": len(runtime_review["audit_only"]),
+            },
             "fulfillment_result": fulfillment.model_dump(),
             "disambiguation_result": {
                 **disambiguation.model_dump(),
@@ -828,7 +1369,94 @@ class ChapterCommitService:
                 raise ValueError(f"invalid_consistency_fact:{lifecycle_errors[0]}")
         return ChapterCommitSchema.model_validate(commit_payload).model_dump()
 
+    def _require_supported_evidence_envelope(
+        self,
+        payload: Dict[str, Any],
+        *,
+        allow_legacy_replay: bool = False,
+    ) -> EvidenceContractClassification:
+        classification = classify_evidence_contract(payload)
+        if classification == "invalid":
+            raise ValueError("invalid_or_downgraded_evidence_contract_envelope")
+        if classification == "legacy" and not allow_legacy_replay:
+            raise ValueError("legacy_commit_requires_explicit_replay")
+        return classification
+
+    def _validate_strict_evidence_commit(
+        self,
+        payload: Dict[str, Any],
+        *,
+        allow_legacy_replay: bool = False,
+        classification: EvidenceContractClassification | None = None,
+    ) -> None:
+        """Revalidate a current evidence-contract commit at a write boundary.
+
+        ``build_commit`` returns an ordinary mutable dictionary, so callers can
+        accidentally or manually change it before persistence or projection.
+        Current strict commits take the fail-closed path. Historical v1
+        markerless commits are accepted only by an explicit replay caller.
+        """
+        evidence_classification = classification or (
+            self._require_supported_evidence_envelope(
+                payload,
+                allow_legacy_replay=allow_legacy_replay,
+            )
+        )
+        extraction = (
+            payload.get("extraction_result")
+            if isinstance(payload.get("extraction_result"), dict)
+            else {}
+        )
+        # This validates the complete envelope and every shared artifact
+        # binding, then re-hashes the current manuscript bytes.
+        binding_error = self._verify_commit_content_binding(payload)
+        if binding_error:
+            raise ChapterBindingError(
+                binding_error,
+                f"chapter commit validation failed: {binding_error}",
+            )
+        if evidence_classification == "legacy":
+            return
+
+        chapter = int((payload.get("meta") or {}).get("chapter") or 0)
+        events = extraction.get("accepted_events")
+        events = events if isinstance(events, list) else []
+        from .chapter_commit_schema import normalize_accepted_events
+
+        normalized_events = normalize_accepted_events(chapter, events)
+        if normalized_events != events:
+            raise ValueError(
+                "strict_evidence_commit accepted_events must use canonical schema"
+            )
+
+        chapter_text = bound_chapter_text_for_commit(self.project_root, payload)
+        if chapter_text is None:
+            # Defensive: the envelope check above should already have returned
+            # a stable binding error before this point.
+            raise ChapterBindingError(
+                "chapter_content_hash_mismatch",
+                "strict evidence commit cannot read its bound chapter",
+            )
+        strict_commit_linked_records(payload, chapter_text)
+
     def persist_commit(
+        self,
+        payload: Dict[str, Any],
+        *,
+        allow_void_accepted: bool = False,
+        allow_legacy_replay: bool = False,
+    ) -> Path:
+        self._assert_v2_write_allowed()
+        self._validate_strict_evidence_commit(
+            payload,
+            allow_legacy_replay=allow_legacy_replay,
+        )
+        return self._persist_validated_commit(
+            payload,
+            allow_void_accepted=allow_void_accepted,
+        )
+
+    def _persist_validated_commit(
         self,
         payload: Dict[str, Any],
         *,
@@ -902,8 +1530,21 @@ class ChapterCommitService:
         self,
         payload: Dict[str, Any],
         writer_results: dict[str, dict[str, Any]],
+        *,
+        persist_payload: bool = True,
+        allow_legacy_replay: bool = False,
     ) -> None:
-        commit_path = self.persist_commit(payload)
+        # A changed manuscript remains unpersisted, while its projection log
+        # can still record why no writer completed. All other payloads pass the
+        # strict persist boundary, including mutations by arbitrary writers.
+        commit_path = (
+            self.persist_commit(
+                payload,
+                allow_legacy_replay=allow_legacy_replay,
+            )
+            if persist_payload
+            else None
+        )
         try:
             from .projection_log import append_projection_run
 
@@ -916,7 +1557,12 @@ class ChapterCommitService:
         except Exception:
             pass
 
-    def _block_invalid_lifecycle(self, payload: Dict[str, Any]) -> bool:
+    def _block_invalid_lifecycle(
+        self,
+        payload: Dict[str, Any],
+        *,
+        allow_legacy_replay: bool = False,
+    ) -> bool:
         """Fail before event-log/derived writes when a closure has no target."""
         if str((payload.get("meta") or {}).get("status") or "") != "accepted":
             return False
@@ -949,7 +1595,11 @@ class ChapterCommitService:
                     "status": str(payload["projection_status"].get(name) or "pending"),
                     "reason": "blocked_by_lifecycle_validation",
                 }
-        self._persist_projection_run(payload, writer_results)
+        self._persist_projection_run(
+            payload,
+            writer_results,
+            allow_legacy_replay=allow_legacy_replay,
+        )
         return True
 
     def _verify_commit_content_binding(self, payload: Dict[str, Any]) -> str:
@@ -990,7 +1640,11 @@ class ChapterCommitService:
                 "error": error_code,
                 "reason": "chapter_content_changed",
             }
-        self._persist_projection_run(payload, writer_results)
+        self._persist_projection_run(
+            payload,
+            writer_results,
+            persist_payload=False,
+        )
         return True
 
     def apply_projection_writers(
@@ -1000,7 +1654,9 @@ class ChapterCommitService:
         only_writers: set[str] | None = None,
         persist_run: bool = True,
         writer_results_out: dict[str, dict[str, Any]] | None = None,
+        allow_legacy_replay: bool = False,
     ) -> Dict[str, Any]:
+        self._assert_v2_write_allowed()
         status = str((payload.get("meta") or {}).get("status") or "")
         if status not in {"accepted", "rejected"}:
             return payload
@@ -1009,9 +1665,21 @@ class ChapterCommitService:
         if not isinstance(payload["projection_status"], dict):
             payload["projection_status"] = {}
 
+        evidence_classification = self._require_supported_evidence_envelope(
+            payload,
+            allow_legacy_replay=allow_legacy_replay,
+        )
         if self._block_changed_chapter_content(payload):
             return payload
-        if self._block_invalid_lifecycle(payload):
+        self._validate_strict_evidence_commit(
+            payload,
+            allow_legacy_replay=allow_legacy_replay,
+            classification=evidence_classification,
+        )
+        if self._block_invalid_lifecycle(
+            payload,
+            allow_legacy_replay=allow_legacy_replay,
+        ):
             return payload
 
         writers = self._projection_writers()
@@ -1049,7 +1717,12 @@ class ChapterCommitService:
                     writer_results_out.clear()
                     writer_results_out.update(writer_results)
                 if persist_run:
-                    self._persist_projection_run(payload, writer_results)
+                    self._persist_projection_run(
+                        payload,
+                        writer_results,
+                        persist_payload=False,
+                        allow_legacy_replay=allow_legacy_replay,
+                    )
                 return payload
             try:
                 result = writer.apply(payload)
@@ -1065,14 +1738,28 @@ class ChapterCommitService:
             writer_results_out.clear()
             writer_results_out.update(writer_results)
         if persist_run:
-            self._persist_projection_run(payload, writer_results)
+            self._persist_projection_run(
+                payload,
+                writer_results,
+                allow_legacy_replay=allow_legacy_replay,
+            )
         return payload
 
-    def apply_projections(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def apply_projections(
+        self,
+        payload: Dict[str, Any],
+        *,
+        allow_legacy_replay: bool = False,
+    ) -> Dict[str, Any]:
+        self._assert_v2_write_allowed()
         status = str((payload.get("meta") or {}).get("status") or "")
         if status not in {"accepted", "rejected"}:
             return payload
 
+        evidence_classification = self._require_supported_evidence_envelope(
+            payload,
+            allow_legacy_replay=allow_legacy_replay,
+        )
         if self._block_changed_chapter_content(payload):
             return payload
 
@@ -1080,7 +1767,14 @@ class ChapterCommitService:
         # fast-path and a corpus rebuild.  The rebuild runs in an isolated
         # project root and only installs a read model that was produced from
         # this exact ordered commit set.
-        self.persist_commit(payload)
+        self._validate_strict_evidence_commit(
+            payload,
+            allow_legacy_replay=allow_legacy_replay,
+            classification=evidence_classification,
+        )
+        self._persist_validated_commit(
+            payload,
+        )
         from .commit_lineage import is_needs_revalidation
         from .projection_rebuild import (
             projection_snapshot_requires_rebuild,
@@ -1111,7 +1805,11 @@ class ChapterCommitService:
                     "reason": "projection_rebuild_failed",
                     "error": str(report.get("detail") or error),
                 }
-            self._persist_projection_run(payload, writer_results)
+            self._persist_projection_run(
+                payload,
+                writer_results,
+                allow_legacy_replay=allow_legacy_replay,
+            )
             return payload
 
         if is_needs_revalidation(payload):
@@ -1132,7 +1830,10 @@ class ChapterCommitService:
             # immediately before lifecycle handling and the first event write.
             if self._block_changed_chapter_content(payload):
                 return payload
-            if self._block_invalid_lifecycle(payload):
+            if self._block_invalid_lifecycle(
+                payload,
+                allow_legacy_replay=allow_legacy_replay,
+            ):
                 return payload
             event_store.write_events(chapter, extraction["accepted_events"])
 
@@ -1144,7 +1845,10 @@ class ChapterCommitService:
                     persist_amend_proposals(conn, chapter, proposals)
                     conn.commit()
 
-        projected = self.apply_projection_writers(payload)
+        projected = self.apply_projection_writers(
+            payload,
+            allow_legacy_replay=allow_legacy_replay,
+        )
         projection_status = projected.get("projection_status") or {}
         if not any(str(value).startswith("failed") for value in projection_status.values()):
             record_projection_snapshot(self.project_root, projected)

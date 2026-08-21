@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "本地 Cursor 插件市场：叙典 CanonLedger 长篇小说一致性引擎",
-    "version": "7.2.0"
+    "version": "8.0.0"
   },
   "plugins": [
     {
       "name": "canon-ledger",
       "source": ".",
-      "description": "叙典 CanonLedger：默认守住设定、时间线、人物状态、伏笔与章纲，文风由作者和模型自定义。",
-      "version": "7.2.0",
+      "description": "叙典 CanonLedger：只守长期事实一致性，文风、文笔与章纲履约不做强制检查。",
+      "version": "8.0.0",
       "author": {
         "name": "Splittinglv"
       },

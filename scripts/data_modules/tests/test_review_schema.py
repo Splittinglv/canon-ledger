@@ -41,6 +41,7 @@ def test_严重问题默认阻断():
         category="continuity",
         location="第三段",
         description="主角在上章已经失去灵力，本章却直接施展了御剑术。",
+        evidence="本章写明主角施展御剑术。",
     )
     assert issue.blocking is True
 
@@ -55,6 +56,7 @@ def test_标准模式完整保存五维结论():
                 severity="critical",
                 category="timeline",
                 description="倒计时从三天无故回到了五天。",
+                evidence="本章倒计时写成五天。",
             )
         ],
         summary="本章发现一处时间线问题。",
@@ -200,6 +202,126 @@ def test_解析人工检查项并保持非阻断():
     assert result.blocking_count == 0
     assert result.issues_count == 0
     assert result.manual_checks[0].description == "机关是否允许从内部开启"
+    assert result.manual_checks[0].review_kind == "ambiguity"
+    assert result.manual_checks[0].materiality == "normal"
+    assert result.manual_checks[0].disposition == "human_required"
+    assert result.manual_checks[0].required is True
+
+
+def test_解析关键节点人工审核策略与多事实维度():
+    raw = {
+        "chapter": 5,
+        "chapter_binding": _binding(5),
+        "review_mode": "standard",
+        "dimension_results": _raw_dimensions(),
+        "issues": [],
+        "manual_checks": [
+            {
+                "category": "continuity",
+                "location": "末段",
+                "description": "核心秘密首次揭示",
+                "evidence": "她终于说出了王印的来历。",
+                "reason": "此事实会永久改变角色知识边界与王印归属线索",
+                "fact_dimensions": ["knowledge", "custody"],
+                "review_kind": "checkpoint",
+                "trigger_kind": "core_secret_reveal",
+                "materiality": "high",
+                "disposition": "human_required",
+                "required": True,
+                "source_event_id": "event-secret-reveal",
+            }
+        ],
+    }
+
+    result = parse_review_output(chapter=5, raw=raw, expected_binding=_binding(5))
+    check = result.manual_checks[0]
+
+    assert check.fact_dimensions == ["knowledge", "custody"]
+    assert check.review_kind == "checkpoint"
+    assert check.trigger_kind == "core_secret_reveal"
+    assert check.materiality == "high"
+    assert check.disposition == "human_required"
+    assert check.required is True
+    assert check.source_event_id == "event-secret-reveal"
+
+
+def test_旧人工检查的单数_dimension_不再污染事实覆盖():
+    raw = {
+        "chapter": 5,
+        "chapter_binding": _binding(5),
+        "review_mode": "standard",
+        "dimension_results": _raw_dimensions(),
+        "issues": [],
+        "manual_checks": [
+            {
+                "category": "continuity",
+                "description": "旧格式连续性疑点",
+                "reason": "旧版本按分类推断了 presence",
+                "dimension": "presence",
+            }
+        ],
+    }
+
+    result = parse_review_output(chapter=5, raw=raw, expected_binding=_binding(5))
+
+    assert result.manual_checks[0].fact_dimensions == []
+    assert result.manual_checks[0].disposition == "human_required"
+
+
+def test_低价值且无锚点的歧义默认只留审计():
+    check = ManualReviewCheck(
+        category="continuity",
+        description="远景中的人影也许是旧角色",
+        reason="没有名字、动作或正文事实锚点",
+        materiality="low",
+    )
+
+    assert check.disposition == "audit_only"
+    assert check.required is False
+
+
+def test_矛盾的策略提示按人工必审收紧():
+    check = ManualReviewCheck(
+        category="continuity",
+        description="关键物品归属需要确认",
+        reason="正文与既有持有记录存在解释空间",
+        disposition="advisory",
+        required=True,
+    )
+
+    assert check.disposition == "human_required"
+    assert check.required is True
+
+
+def test_模型不能用_advisory_降级有锚点的重要歧义():
+    check = ManualReviewCheck(
+        category="continuity",
+        description="王印持有人与前文冲突",
+        reason="需要核对上一章交接事实",
+        evidence="白芷从袖中取出王印。",
+        materiality="normal",
+        disposition="advisory",
+        required=False,
+    )
+
+    assert check.disposition == "human_required"
+    assert check.required is True
+
+
+def test_关键触发器即使被标成普通歧义也必须人工审核():
+    check = ManualReviewCheck(
+        category="continuity",
+        description="作者标记的关键节点",
+        reason="必须在继续写作前确认",
+        review_kind="ambiguity",
+        trigger_kind="author_marked",
+        materiality="low",
+        disposition="ignore",
+        required=False,
+    )
+
+    assert check.disposition == "human_required"
+    assert check.required is True
 
 
 def test_解析结果缺少模式时拒绝():
@@ -241,6 +363,7 @@ def test_审计记录不包含评分字段():
                 severity="high",
                 category="setting",
                 description="禁地被写成任何弟子都能随意进入。",
+                evidence="本章弟子未经许可进入禁地。",
             )
         ],
         summary="本章发现一处设定问题。",

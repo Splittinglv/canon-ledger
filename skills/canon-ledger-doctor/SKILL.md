@@ -1,78 +1,56 @@
 ---
 name: canon-ledger-doctor
-description: 只读体检当前书项目的目录、数据库、RAG、依赖和 Dashboard 产物。用户说项目体检、诊断或 /canon-ledger-doctor 时使用。
+description: 只读诊断 Canon v3 workflow、cutover 认证、事务对象、正文绑定、HEAD 投影和插件运行环境，并给出唯一恢复动作。
 ---
 
-# CanonLedger Doctor
+# Canon v3 体检
 
-## 目标
+开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)。本 Skill 只读：不修复、不安装依赖、不启动 Dashboard、不修改项目。
 
-只读诊断当前书项目：确认所处阶段应有的目录、文件、JSON、SQLite、RAG 配置、Python 依赖与 Dashboard 构建产物是否完整。
+## 检查顺序
 
-## 原则
-
-1. 只读诊断：不写项目文件、不自动修复、不安装依赖、不启动 Dashboard。
-2. 先 `project-status` 取短状态，再 `doctor` 做阶段感知检查。
-3. 统一用 `"${CANON_LEDGER_PYTHON}" -X utf8`，避免中文路径编码问题。
-4. 缺失项按 runtime 推导的阶段解释影响与修复建议，不把 init 刚结束的项目按已写多章项目检查。
-
-## 执行
-
-准备路径：
+1. 解析项目根；不存在书项目时只报告 init 所需条件。
+2. 读取 exact `canon-v3 status` 和 `workflow_digest`。
+3. 运行标准 doctor；用户要求 `--deep` 时再执行深度对象/引用校验。
+4. 按 workflow state 解释问题，不让旧 state/index/RAG 健康覆盖 Canon blocker。
 
 ```bash
-# 这段引导仅适用于 POSIX shell（sh/bash/zsh）；Windows 请使用 Git Bash 或 WSL。
-# 缓存安装必须使用 Cursor 注入的插件根；不扫描缓存目录寻找可执行脚本。
-# bootstrap_env.py 输出固定六行数据协议：逐行 read 赋值，禁止 eval/source 执行输出。
-_PLUGIN_ROOT_HINT="${CANON_LEDGER_PLUGIN_ROOT:-${CURSOR_PLUGIN_ROOT:-}}"
-if [ -z "$_PLUGIN_ROOT_HINT" ]; then
-  _PLUGIN_ROOT_HINT="${HOME}/.cursor/plugins/local/canon-ledger"
-fi
-_ENV_LINES="$(python3 -X utf8 "${_PLUGIN_ROOT_HINT}/scripts/bootstrap_env.py")" || {
-  echo "ERROR: 插件根不可信或安装不完整。请使用 Cursor 注入的插件根，或安装到 ~/.cursor/plugins/local/canon-ledger" >&2
-  exit 1
-}
-_ENV_PARSE_OK=1
-{
-  IFS= read -r CANON_LEDGER_PLUGIN_ROOT || _ENV_PARSE_OK=0
-  IFS= read -r CURSOR_PLUGIN_ROOT || _ENV_PARSE_OK=0
-  IFS= read -r SCRIPTS_DIR || _ENV_PARSE_OK=0
-  IFS= read -r WORKSPACE_ROOT || _ENV_PARSE_OK=0
-  IFS= read -r CURSOR_PROJECT_DIR || _ENV_PARSE_OK=0
-  IFS= read -r CANON_LEDGER_PYTHON || _ENV_PARSE_OK=0
-} <<EOF
-$_ENV_LINES
-EOF
-if [ "$_ENV_PARSE_OK" -ne 1 ]; then
-  echo "ERROR: 无法解析插件环境协议" >&2
-  exit 1
-fi
-export CANON_LEDGER_PLUGIN_ROOT CURSOR_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR CANON_LEDGER_PYTHON
-unset _PLUGIN_ROOT_HINT _ENV_LINES _ENV_PARSE_OK
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 status
+
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" doctor --format text
 ```
 
-```bash
-: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
-export SKILL_ROOT="${CANON_LEDGER_PLUGIN_ROOT}/skills/canon-ledger-doctor"
-```
-短状态：
+深度模式额外检查：
 
-```bash
-: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${WORKSPACE_ROOT}" project-status --format summary
-```
+- CURRENT、manifest、commit、transaction、decision 的内容寻址与引用；
+- STAGING schema、stage digest、decision heads 和 finalize token；
+- active chapter bindings 与 author-axiom digest；
+- legacy prefix/genesis 是否需要 recertification；
+- admission、target transition、entity namespace/alias 和 custody invariants；
+- canon projection 的 HEAD/generation freshness；
+- Dashboard 打包、Python 依赖和可选 RAG 状态。
 
-标准体检：
+## 状态对应建议
 
-```bash
-: "${CANON_LEDGER_PYTHON:?环境未就绪：请先在同一个 shell 会话中执行 SKILL.md 开头的环境引导代码块，再重试本块}"
-"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${WORKSPACE_ROOT}" doctor --format text
-```
+- new project migration_required：initialize。
+- legacy cutover：migrate/audit-cutover。
+- recertification：`repair-cutover --dry-run` 固定 plan/cases，再由
+  `/canon-ledger-confirm` 逐项确认；只在全部确认后执行 exact `--apply --input-file`。
+- awaiting_human：`/canon-ledger-confirm N`。
+- rewrite/recompile：恢复当前章，不建议下一章。
+- projection stale：rebuild-projection。
+- invalid：保持只读，报告首个稳定 reason code 和受影响对象。
 
-指定章节加 `--chapter {chapter_num}`，深度体检加 `--deep`。
+## 输出
 
-## 输出方式
+先给总状态，再列：
 
-汇报包含：当前 `phase` 与 `target_chapter`、是否有 blocker、缺失或异常文件路径、RAG / Python / Dashboard 配置是否缺失、每个问题的影响和建议修复动作。
+- exact workflow/head/stage；
+- 已验证正常项；
+- blocker 及其影响；
+- 唯一恢复动作；
+- 可选环境问题。
 
-不执行真实修复，不展示或要求粘贴 API key。
+不把保守阻断、额外人工或缺少非必需 RAG 误报成正史损坏。

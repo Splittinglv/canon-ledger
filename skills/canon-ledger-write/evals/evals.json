@@ -3,57 +3,45 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "使用 /canon-ledger-write 写第4章。项目在 agents/evals/files/test-project/。",
-      "expected_output": "完成 Step 1 到 Step 6 的完整流程，由 context-agent 先生成写作任务书，再起草第4章正文，最终生成审查结果、摘要文件和状态更新",
+      "prompt": "使用 /canon-ledger-write 写第4章。项目 workflow 已 ready，项目在 agents/evals/files/test-project/。",
+      "expected_output": "只从活动 HEAD 整理上下文，自由起草正文，完成 exact candidates、五维扫描和带版本事务；最终仅在 ready 且 projection fresh 时完成。",
       "files": [
-        "agents/evals/files/test-project/.canon-ledger/state.json",
         "agents/evals/files/test-project/大纲/总纲.md",
         "agents/evals/files/test-project/大纲/第1卷-详细大纲.md",
-        "agents/evals/files/test-project/大纲/第1卷-时间线.md",
-        "agents/evals/files/test-project/.canon-ledger/summaries/ch0003.md",
-        "agents/evals/files/test-project/.canon-ledger/memory_scratchpad.json",
-        "agents/evals/files/test-project/设定集/世界观.md"
+        "agents/evals/files/test-project/设定集/文风提示词.md"
       ],
       "expectations": [
-        "正文文件 正文/第0004章*.md 被创建且非空",
-        "正文中包含萧炎参加迦南学院测试的内容（符合章纲）",
-        "正文中回应了上章钩子（纳兰嫣然信使）",
-        "正文中没有出现 [TODO] 或 [待补充] 占位符",
-        "Step 3 调用了 reviewer agent 进行审查",
-        "Step 1 由 context-agent 生成了写作任务书",
-        "Step 2 只根据写作任务书起草正文",
-        "Step 5 调用了 data-agent 回写数据",
-        "不强制章末钩子或固定章长；字数跟用户或大纲走"
+        "起草前核对 workflow_digest、head_hash、目标章和 active author axioms",
+        "调用 context-agent、data-agent extract、reviewer 和 data-agent assemble",
+        "不使用 state.json、index.db 或 legacy commit 作为当前事实",
+        "proposal 的 sources 全部被 support_map 使用，scan 绑定 HEAD/axiom/registry 并覆盖五维",
+        "prepare/decide/finalize 回显 expected_stage_digest、transaction、target/material 和 finalize_token",
+        "版本变化时刷新而不是把旧操作应用到新 STAGING",
+        "不强制章纲完成度、章末钩子、固定章长或文风评分"
       ]
     },
     {
       "id": 2,
-      "prompt": "使用 /canon-ledger-write --fast 写第4章。项目在 agents/evals/files/test-project/。",
-      "expected_output": "fast 模式跳过部分审查维度但仍完成核心流程",
-      "files": [
-        "agents/evals/files/test-project/.canon-ledger/state.json",
-        "agents/evals/files/test-project/大纲/第1卷-详细大纲.md"
-      ],
+      "prompt": "使用 /canon-ledger-write 写第4章，但项目没有 CURRENT 且存在 legacy accepted prefix。",
+      "expected_output": "不开始起草，统一 workflow 返回 migration_required，只给 legacy cutover/repair 恢复动作。",
+      "files": [],
       "expectations": [
-        "正文文件被创建且非空",
-        "流程中包含 Step 3（审查），但为轻量模式",
-        "仍完成 Step 5 数据回写",
-        "正文中没有出现 [TODO] 或 [待补充]"
+        "prewrite 不回落 legacy gate",
+        "不调用 chapter-commit、review-pipeline、update-state 或 legacy human-review",
+        "不生成正文或可 prepare proposal",
+        "唯一下一步是 migrate/repair 后重新读取 status"
       ]
     },
     {
       "id": 3,
-      "prompt": "使用 /canon-ledger-write 写第4章。项目在 agents/evals/files/test-project/。本分支不得做风格适配或 Anti-AI 终检。",
-      "expected_output": "完成事实/剧情主链；不输出 anti_ai_force_check；不加载 style-adapter/polish-guide",
-      "files": [
-        "agents/evals/files/test-project/.canon-ledger/state.json",
-        "agents/evals/files/test-project/大纲/第1卷-详细大纲.md"
-      ],
+      "prompt": "使用 /canon-ledger-write 写第4章；用户要求本章句子更短、对白自然，但不要检查文风。",
+      "expected_output": "文风要求只进入独立 style 轨，事实事务与人工 case 不因句式或节奏变化而增加。",
+      "files": [],
       "expectations": [
-        "没有加载 style-adapter.md 或 polish-guide.md",
-        "没有要求 anti_ai_force_check=pass",
-        "Step 4 只修补可验证的事实问题，不改口吻",
-        "若存在 设定集/文风提示词.md 则按其作者提示词起草，否则按模型默认写"
+        "本轮文风覆盖优先于全书偏好",
+        "不生成 style/prose observation 或人工 case",
+        "style 文件不进入 author_axiom_digest、HEAD 或 migration digest",
+        "事实检查仍完整执行五维长期一致性扫描"
       ]
     }
   ]

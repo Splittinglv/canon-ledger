@@ -23,6 +23,8 @@ class StoryEvent(BaseModel):
         "world_rule_broken",
         "power_breakthrough",
         "artifact_obtained",
+        "entity_observed",
+        "timeline_observed",
         "knowledge_state_changed",
         "presence_observed",
         "custody_changed",

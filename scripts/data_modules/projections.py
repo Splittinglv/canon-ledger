@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from .canon_evidence import classify_evidence_contract
 from .chapter_commit_service import ChapterCommitService
 from .chapter_content_binding import verify_commit_content_binding
 from .config import DataModulesConfig
@@ -142,6 +143,16 @@ def _vector_snapshot_stale(project_root: Path, payload: dict[str, Any]) -> bool:
 
 def retry_projection(project_root: str | Path, *, chapter: int) -> dict[str, Any]:
     root = Path(project_root)
+    if (root / ".story-system" / "v3" / "CURRENT").is_file():
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "action": "retry",
+            "ok": False,
+            "project_root": str(root),
+            "chapter": chapter,
+            "error": "canon_v3_active_v2_projection_retry_disabled",
+            "next_action": "canon-v3 rebuild-projection",
+        }
     path = _commit_path(root, chapter)
     payload, error = _read_commit(path, expected_chapter=chapter)
     if error:
@@ -215,9 +226,12 @@ def retry_projection(project_root: str | Path, *, chapter: int) -> dict[str, Any
     if _vector_snapshot_stale(root, payload):
         retry_writers.add("vector")
     if retry_writers:
+        replay_kwargs: dict[str, Any] = {"only_writers": retry_writers}
+        if classify_evidence_contract(payload) == "legacy":
+            replay_kwargs["allow_legacy_replay"] = True
         projected = ChapterCommitService(root).apply_projection_writers(
             payload,
-            only_writers=retry_writers,
+            **replay_kwargs,
         )
     else:
         # A successful retry command is intentionally a no-op once every
@@ -240,6 +254,18 @@ def retry_projection(project_root: str | Path, *, chapter: int) -> dict[str, Any
 
 def replay_projections(project_root: str | Path, *, start_chapter: int, end_chapter: int) -> dict[str, Any]:
     root = Path(project_root)
+    if (root / ".story-system" / "v3" / "CURRENT").is_file():
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "action": "replay",
+            "ok": False,
+            "project_root": str(root),
+            "start_chapter": start_chapter,
+            "end_chapter": end_chapter,
+            "error": "canon_v3_active_v2_projection_replay_disabled",
+            "next_action": "canon-v3 rebuild-projection",
+            "results": [],
+        }
     if start_chapter <= 0 or end_chapter <= 0 or start_chapter > end_chapter:
         return {
             "schema_version": SCHEMA_VERSION,

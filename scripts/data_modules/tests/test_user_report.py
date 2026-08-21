@@ -149,19 +149,26 @@ def _commit_payload(
     *,
     chapter: int = 1,
     blocking_count: int = 0,
+    force_rejected: bool = False,
     projection_status: dict | None = None,
 ) -> dict:
     """构造绑定当前正文的真实提交，不使用旧版占位数据。"""
     binding = build_chapter_binding(project_root, chapter)
-    write_current_chapter_contract(project_root, chapter)
+    planned_nodes = ["本章必须完成"] if force_rejected else []
+    write_current_chapter_contract(
+        project_root,
+        chapter,
+        planned_nodes=planned_nodes,
+    )
     payload = ChapterCommitService(project_root).build_commit(
         chapter=chapter,
         review_result=standard_review(binding, blocking_count=blocking_count),
         fulfillment_result={
-            "planned_nodes": [],
+            "planned_nodes": planned_nodes,
             "covered_nodes": [],
-            "missed_nodes": [],
+            "missed_nodes": planned_nodes,
             "extra_nodes": [],
+            "enforcement": "strict" if force_rejected else "advisory",
             "chapter_binding": binding,
         },
         disambiguation_result={"pending": [], "chapter_binding": binding},
@@ -260,7 +267,7 @@ def test_render_write_report_uses_commit_snapshots_when_tmp_artifacts_are_cleane
 
 def test_render_write_report_commit_rejected(tmp_path: Path) -> None:
     _write_success_case(tmp_path, chapter=1)
-    payload = _commit_payload(tmp_path, chapter=1, blocking_count=1)
+    payload = _commit_payload(tmp_path, chapter=1, force_rejected=True)
     _write_commit(tmp_path, payload)
 
     report = build_user_report(tmp_path, stage="write", chapter=1)
