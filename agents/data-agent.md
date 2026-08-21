@@ -28,7 +28,7 @@ color: green
 
 组装并返回 `canon-v3/historical-audit/v1` 只读 audit bundle，不生成可 prepare proposal、不写 STAGING，也不写文件。调用方负责把返回值持久化到固定派生路径；本 agent 的唯一文件写入仍是 `phase=assemble` 的 v2 proposal。
 
-## 必需绑定
+## 章节候选的必需绑定
 
 调用方必须提供：
 
@@ -40,6 +40,9 @@ asof_snapshot_file
 ```
 
 workflow 非 ready/当前 staged recovery、目标章不允许、HEAD 或 axiom digest 不一致时停止。不得读取 state/index/legacy 数据补齐。
+这些 chapter/body/as-of/scan 绑定只适用于 `phase=extract|assemble` 和
+`mode=historical_audit`。下文 author-axiom proposal 使用自己的无章节绑定，
+不得虚构 chapter、chapter_file、正文 span 或 reviewer attestation。
 
 ## FactCandidate
 

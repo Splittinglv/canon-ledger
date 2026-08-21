@@ -145,6 +145,21 @@ def _primary_action(snapshot: Mapping[str, Any]) -> dict[str, str]:
             "label": "逐项确认旧正史并原子发布重新认证链",
             "command": "canon_ledger.py canon-v3 repair-cutover --apply --input-file <request.json>",
         }
+    if state == "migration_required" and recovery in {
+        "remigrate_legacy_suffix",
+        "repair_legacy_prefix",
+    }:
+        # A frozen v2 prefix that changed after cutover cannot be made safe by
+        # calling ``migrate`` again: migrate_legacy deliberately rejects an
+        # existing stale CURRENT.  The only universally executable next step
+        # is the read-only audit.  It identifies the exact invalid source so a
+        # human can restore the frozen bytes or explicitly rebuild the suffix;
+        # status must then be re-read before any write is attempted.
+        return {
+            "code": recovery,
+            "label": "审计失效的旧前缀并由作者修复精确来源",
+            "command": "canon_ledger.py canon-v3 audit-cutover",
+        }
     if state == "migration_required" and recovery == (
         "resolve_recertification_staging_conflict"
     ):

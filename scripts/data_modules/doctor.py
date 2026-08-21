@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import json
 import platform
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -30,6 +31,7 @@ from .projection_log import (
 )
 from .story_runtime_health import build_story_runtime_health
 from .commit_lineage import list_needs_revalidation
+from .workflow_authority import WORKFLOW_AUTHORITY_SCHEMA, WorkflowAuthority
 
 
 SCHEMA_VERSION = "canon-ledger-doctor/v1"
@@ -37,6 +39,17 @@ CHECK_OK = "ok"
 CHECK_WARNING = "warning"
 CHECK_ERROR = "error"
 CHECK_SKIPPED = "skipped"
+CANON_V3_STATES = {
+    "ready",
+    "ready_to_finalize",
+    "awaiting_human",
+    "rewrite_required",
+    "recompile_required",
+    "projection_rebuild_required",
+    "migration_required",
+    "invalid",
+}
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _check(
@@ -83,6 +96,494 @@ def _read_json(path: Path) -> tuple[dict[str, Any], str]:
     if not isinstance(payload, dict):
         return {}, "json root is not object"
     return payload, ""
+
+
+def _workflow_primary_command(workflow: dict[str, Any]) -> str:
+    primary = workflow.get("primary_action")
+    if not isinstance(primary, dict):
+        return "canon_ledger.py canon-v3 status"
+    command = str(primary.get("command") or "").strip()
+    return command or "canon_ledger.py canon-v3 status"
+
+
+def _workflow_summary(workflow: dict[str, Any]) -> str:
+    primary = workflow.get("primary_action")
+    primary = primary if isinstance(primary, dict) else {}
+    return json.dumps(
+        {
+            "schema_version": workflow.get("schema_version"),
+            "state": workflow.get("state"),
+            "bootstrap_mode": workflow.get("bootstrap_mode"),
+            "transaction_kind": workflow.get("transaction_kind"),
+            "chapter": workflow.get("chapter"),
+            "head_hash": workflow.get("head_hash"),
+            "generation": workflow.get("generation"),
+            "stage_digest": workflow.get("stage_digest"),
+            "projection_fresh": workflow.get("projection_fresh"),
+            "can_write_next": workflow.get("can_write_next"),
+            "primary_action": {
+                "code": primary.get("code"),
+                "command": primary.get("command"),
+            },
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _canon_v3_checks(
+    project_root: Path,
+    *,
+    deep: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
+    """Validate the exact public v3 authority before compatibility surfaces."""
+
+    checks: list[dict[str, Any]] = []
+    diagnostics: dict[str, Any] = {
+        "current": {},
+        "staging": {},
+        "author_axioms": {},
+        "projection": {},
+        "cutover_audit": {},
+    }
+    workflow_available = True
+    try:
+        workflow = WorkflowAuthority(project_root).snapshot()
+    except Exception as exc:
+        workflow_available = False
+        workflow = {}
+        checks.append(
+            _check(
+                "canon_v3.workflow_snapshot",
+                status=CHECK_ERROR,
+                severity="blocker",
+                message="Canon v3 workflow snapshot unavailable",
+                path=str(project_root / ".story-system" / "v3"),
+                expected=WORKFLOW_AUTHORITY_SCHEMA,
+                actual=str(exc),
+                impact="无法确定 HEAD、STAGING 或唯一恢复动作，不能继续写作。",
+                repair="运行 canon_ledger.py canon-v3 status；若仍失败，再运行 /canon-ledger-doctor --deep。",
+            )
+        )
+
+    state = str(workflow.get("state") or "invalid")
+    digest = str(workflow.get("workflow_digest") or "")
+    view_digest = str(workflow.get("authority_view_digest") or "")
+    schema_ok = workflow.get("schema_version") == WORKFLOW_AUTHORITY_SCHEMA
+    shape_ok = (
+        state in CANON_V3_STATES
+        and bool(_SHA256_RE.fullmatch(digest))
+        and bool(_SHA256_RE.fullmatch(view_digest))
+    )
+    ready = bool(
+        schema_ok
+        and shape_ok
+        and state == "ready"
+        and workflow.get("head_hash")
+        and workflow.get("can_write_next")
+        and workflow.get("projection_fresh")
+    )
+    if workflow_available:
+        checks.append(
+            _check(
+                "canon_v3.workflow_snapshot",
+                status=CHECK_OK if ready else CHECK_ERROR,
+                severity="info" if ready else "blocker",
+                message=f"Canon v3 workflow state: {state}",
+                path=str(project_root / ".story-system" / "v3"),
+                expected=(
+                    f"{WORKFLOW_AUTHORITY_SCHEMA}; ready + can_write_next + fresh projection"
+                ),
+                actual=_workflow_summary(workflow),
+                impact=(
+                    ""
+                    if ready
+                    else "当前权威状态不允许开始下一章；兼容索引或旧报告不能覆盖它。"
+                ),
+                repair="" if ready else _workflow_primary_command(workflow),
+            )
+        )
+
+    primary = workflow.get("primary_action")
+    primary_ok = bool(
+        isinstance(primary, dict)
+        and str(primary.get("code") or "").strip()
+        and str(primary.get("command") or "").strip()
+    )
+    if workflow_available:
+        checks.append(
+            _check(
+                "canon_v3.primary_action",
+                status=CHECK_OK if primary_ok else CHECK_ERROR,
+                severity="info" if primary_ok else "blocker",
+                message="workflow exposes one author-facing recovery action",
+                expected="primary_action.code + primary_action.command",
+                actual=json.dumps(primary or {}, ensure_ascii=False, sort_keys=True),
+                impact="" if primary_ok else "无法给作者提供确定、可重放的恢复动作。",
+                repair=(
+                    ""
+                    if primary_ok
+                    else "运行 canon_ledger.py canon-v3 status 获取新的 primary_action。"
+                ),
+            )
+        )
+
+    from .canon_v3.repository import CanonV3Repository
+
+    repository = CanonV3Repository(project_root)
+    workflow_head = workflow.get("head_hash")
+    current_head: str | None = None
+    current_generation: int | None = None
+    try:
+        current_head = repository.current_head(validate=True)
+        diagnostics["current"] = {
+            "head_hash": current_head,
+            "workflow_head_hash": workflow_head,
+        }
+        if workflow_available and current_head != workflow_head:
+            raise ValueError(
+                f"workflow/CURRENT mismatch: workflow={workflow_head}, current={current_head}"
+            )
+        if current_head is None:
+            if not workflow_available or state != "migration_required":
+                raise ValueError("CURRENT missing outside migration_required")
+            checks.append(
+                _check(
+                    "canon_v3.current_manifest",
+                    status=CHECK_SKIPPED,
+                    severity="info",
+                    message="CURRENT not published yet",
+                    path=str(repository.current_path),
+                    expected="absent only before initialize/migrate",
+                    actual=f"bootstrap_mode={workflow.get('bootstrap_mode')}",
+                    impact="由 workflow blocker 和 primary_action 决定下一步。",
+                    repair=_workflow_primary_command(workflow),
+                )
+            )
+        else:
+            manifest = repository.read_manifest(
+                current_head,
+                validate_references=True,
+            )
+            current_generation = int(manifest.get("generation") or 0)
+            chapter_commits = repository.current_commits()
+            axiom_commits = repository.current_author_axiom_commits()
+            diagnostics["current"].update(
+                {
+                    "generation": int(manifest.get("generation") or 0),
+                    "chapter_commit_count": len(chapter_commits),
+                    "author_axiom_commit_count": len(axiom_commits),
+                    "reachable_objects_validated": True,
+                    "deep": bool(deep),
+                }
+            )
+            if workflow_available and current_generation != int(
+                workflow.get("generation") or 0
+            ):
+                raise ValueError("workflow/CURRENT generation mismatch")
+            checks.append(
+                _check(
+                    "canon_v3.current_manifest",
+                    status=CHECK_OK,
+                    severity="info",
+                    message="CURRENT manifest and reachable immutable objects valid",
+                    path=str(repository.current_path),
+                    expected="content-addressed manifest/commit/transaction/decision references",
+                    actual=json.dumps(
+                        diagnostics["current"], ensure_ascii=False, sort_keys=True
+                    ),
+                )
+            )
+    except Exception as exc:
+        diagnostics["current"]["error"] = str(exc)
+        checks.append(
+            _check(
+                "canon_v3.current_manifest",
+                status=CHECK_ERROR,
+                severity="blocker",
+                message="CURRENT manifest or reachable immutable object invalid",
+                path=str(repository.current_path),
+                expected="workflow HEAD equals a fully validated CURRENT manifest",
+                actual=str(exc),
+                impact="活动正史的内容寻址或引用链不可信，必须保持只读。",
+                repair=_workflow_primary_command(workflow),
+            )
+        )
+
+    authority_head = workflow_head if workflow_available else current_head
+    authority_generation = (
+        int(workflow.get("generation") or 0)
+        if workflow_available
+        else current_generation
+    )
+
+    from .canon_v3.author_axiom import AuthorAxiomStagingPointer
+    from .canon_v3.service import CanonV3Service, StagingPointer
+    from .canon_v3.staging_authority import authoritative_staging_kinds
+
+    try:
+        staging_kinds = authoritative_staging_kinds(project_root)
+        diagnostics["staging"] = {"kinds": list(staging_kinds)}
+        if len(staging_kinds) > 1:
+            raise ValueError(
+                "multiple authoritative staging files: " + ",".join(staging_kinds)
+            )
+        pointer: Any = None
+        if staging_kinds:
+            kind = staging_kinds[0]
+            relative = (
+                Path(".story-system/v3/STAGING.json")
+                if kind == "chapter"
+                else Path(".story-system/v3/AUTHOR_AXIOM_STAGING.json")
+            )
+            raw, error = _read_json(project_root / relative)
+            if error:
+                raise ValueError(f"{kind} STAGING unreadable: {error}")
+            pointer = (
+                StagingPointer.model_validate(raw)
+                if kind == "chapter"
+                else AuthorAxiomStagingPointer.model_validate(raw)
+            )
+            if kind == "chapter" and not pointer.is_v2:
+                raise ValueError("unpublished v1 STAGING is not authoritative")
+            diagnostics["staging"].update(
+                {
+                    "schema_version": pointer.schema_version,
+                    "transaction_hash": pointer.transaction_hash,
+                    "stage_digest": pointer.stage_digest,
+                }
+            )
+            if not workflow_available:
+                raise ValueError("workflow unavailable; cannot verify STAGING binding")
+            expected_kind = str(workflow.get("transaction_kind") or "chapter")
+            if expected_kind != kind:
+                raise ValueError(
+                    f"workflow/STAGING kind mismatch: workflow={expected_kind}, file={kind}"
+                )
+            if pointer.transaction_hash != workflow.get("transaction_hash"):
+                raise ValueError("workflow/STAGING transaction mismatch")
+            if pointer.stage_digest != workflow.get("stage_digest"):
+                raise ValueError("workflow/STAGING stage digest mismatch")
+        elif workflow_available and workflow.get("transaction_hash") and str(
+            workflow.get("transaction_kind") or ""
+        ) in {"chapter", "author_axiom"}:
+            raise ValueError("workflow transaction exists without its STAGING file")
+        checks.append(
+            _check(
+                "canon_v3.staging",
+                status=CHECK_OK,
+                severity="info",
+                message="authoritative STAGING is singular and exact-version bound",
+                path=str(project_root / ".story-system" / "v3"),
+                expected="zero or one chapter/author-axiom STAGING",
+                actual=json.dumps(
+                    diagnostics["staging"], ensure_ascii=False, sort_keys=True
+                ),
+            )
+        )
+    except Exception as exc:
+        diagnostics["staging"]["error"] = str(exc)
+        checks.append(
+            _check(
+                "canon_v3.staging",
+                status=CHECK_ERROR,
+                severity="blocker",
+                message="STAGING authority or exact version binding invalid",
+                path=str(project_root / ".story-system" / "v3"),
+                expected="one staging kind bound to workflow transaction/stage digest",
+                actual=str(exc),
+                impact="旧选择可能被应用到错误事务，禁止决定或发布。",
+                repair=_workflow_primary_command(workflow),
+            )
+        )
+
+    service = CanonV3Service(project_root)
+    try:
+        active_axioms = service.active_author_axioms()
+        axiom_status = service.author_axiom_status()
+        diagnostics["author_axioms"] = {
+            "schema_version": active_axioms.get("schema_version"),
+            "head_hash": active_axioms.get("head_hash"),
+            "author_axiom_digest": active_axioms.get("author_axiom_digest"),
+            "record_count": len(active_axioms.get("records") or []),
+            "genesis_admission_count": len(
+                active_axioms.get("genesis_admissions") or []
+            ),
+            "workflow_state": axiom_status.get("state"),
+            "transaction_hash": axiom_status.get("transaction_hash"),
+        }
+        if active_axioms.get("head_hash") != authority_head:
+            raise ValueError("active author-axiom snapshot HEAD mismatch")
+        if workflow_available and active_axioms.get(
+            "author_axiom_digest"
+        ) != workflow.get("author_axiom_digest"):
+            raise ValueError("active author-axiom digest mismatch")
+        if workflow_available and str(
+            workflow.get("transaction_kind") or ""
+        ) == "author_axiom":
+            if axiom_status.get("transaction_hash") != workflow.get(
+                "transaction_hash"
+            ):
+                raise ValueError("author-axiom workflow transaction mismatch")
+        checks.append(
+            _check(
+                "canon_v3.author_axioms",
+                status=CHECK_OK,
+                severity="info",
+                message="active author axioms and axiom workflow bind the same HEAD",
+                expected="HEAD-bound immutable axiom snapshot",
+                actual=json.dumps(
+                    diagnostics["author_axioms"], ensure_ascii=False, sort_keys=True
+                ),
+            )
+        )
+    except Exception as exc:
+        diagnostics["author_axioms"]["error"] = str(exc)
+        checks.append(
+            _check(
+                "canon_v3.author_axioms",
+                status=CHECK_ERROR,
+                severity="blocker",
+                message="author-axiom authority invalid",
+                expected="active digest and transaction match workflow HEAD/STAGING",
+                actual=str(exc),
+                impact="硬设定版本无法可靠用于查询或写作。",
+                repair=_workflow_primary_command(workflow),
+            )
+        )
+
+    if authority_head:
+        from .canon_v3.projection import projection_path, read_projection
+
+        canon_projection_path = projection_path(project_root)
+        try:
+            projection = read_projection(project_root, require_fresh=True)
+            binding = projection.get("binding") or {}
+            diagnostics["projection"] = dict(binding)
+            if (
+                binding.get("head_hash") != authority_head
+                or int(binding.get("generation") or 0)
+                != int(authority_generation or 0)
+                or (workflow_available and not workflow.get("projection_fresh"))
+            ):
+                raise ValueError("projection/workflow binding mismatch")
+            checks.append(
+                _check(
+                    "canon_v3.projection",
+                    status=CHECK_OK,
+                    severity="info",
+                    message="Canon projection is fresh for the exact HEAD",
+                    path=str(canon_projection_path),
+                    expected="projection binding equals workflow HEAD/generation",
+                    actual=json.dumps(binding, ensure_ascii=False, sort_keys=True),
+                )
+            )
+        except Exception as exc:
+            diagnostics["projection"]["error"] = str(exc)
+            repair = _workflow_primary_command(workflow)
+            if (workflow.get("primary_action") or {}).get("code") == (
+                "rebuild_projection"
+            ):
+                repair = "canon_ledger.py canon-v3 rebuild-projection"
+            checks.append(
+                _check(
+                    "canon_v3.projection",
+                    status=CHECK_ERROR,
+                    severity="blocker",
+                    message="Canon projection is missing, stale, or bound to another HEAD",
+                    path=str(canon_projection_path),
+                    expected="fresh HEAD/generation-bound projection",
+                    actual=str(exc),
+                    impact="事实查询和下一章上下文不得回退 legacy index。",
+                    repair=repair,
+                )
+            )
+    else:
+        checks.append(
+            _check(
+                "canon_v3.projection",
+                status=CHECK_SKIPPED,
+                severity="info",
+                message="projection not expected before CURRENT publication",
+                expected="initialize/migrate publishes CURRENT, then builds projection",
+                actual=f"bootstrap_mode={workflow.get('bootstrap_mode')}",
+                repair=_workflow_primary_command(workflow),
+            )
+        )
+
+    bootstrap_mode = str(workflow.get("bootstrap_mode") or "")
+    cutover = workflow.get("cutover_chapter")
+    should_audit_cutover = bool(
+        bootstrap_mode in {"legacy_cutover", "legacy_repair", "recertification"}
+        or (isinstance(cutover, int) and cutover > 0)
+    )
+    if should_audit_cutover:
+        from .canon_v3.migration import audit_cutover
+
+        try:
+            audit = audit_cutover(
+                project_root,
+                cutover_chapter=(
+                    int(cutover) if isinstance(cutover, int) and cutover >= 0 else None
+                ),
+            )
+            diagnostics["cutover_audit"] = {
+                "schema_version": audit.get("schema_version"),
+                "state": audit.get("state"),
+                "requires_recertification": audit.get("requires_recertification"),
+                "required_case_count": audit.get("required_case_count"),
+                "reason_codes": list(audit.get("reason_codes") or []),
+                "detached_plan_digest": audit.get("detached_plan_digest"),
+            }
+            audit_state = str(audit.get("state") or "blocked")
+            blocked = audit_state == "blocked"
+            checks.append(
+                _check(
+                    "canon_v3.cutover_audit",
+                    status=CHECK_ERROR if blocked else CHECK_OK,
+                    severity="blocker" if blocked else "info",
+                    message=f"legacy cutover audit: {audit_state}",
+                    expected="ready or exact needs_recertification plan",
+                    actual=json.dumps(
+                        diagnostics["cutover_audit"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
+                    impact=(
+                        "旧前缀、证据、目标或身份准入未通过，只能保持只读。"
+                        if blocked
+                        else ""
+                    ),
+                    repair="" if not blocked else _workflow_primary_command(workflow),
+                )
+            )
+        except Exception as exc:
+            diagnostics["cutover_audit"]["error"] = str(exc)
+            checks.append(
+                _check(
+                    "canon_v3.cutover_audit",
+                    status=CHECK_ERROR,
+                    severity="blocker",
+                    message="legacy cutover audit failed",
+                    expected="deterministic read-only cutover audit",
+                    actual=str(exc),
+                    impact="不能证明旧前缀可迁移或重新认证。",
+                    repair=_workflow_primary_command(workflow),
+                )
+            )
+    else:
+        diagnostics["cutover_audit"] = {"state": "not_applicable"}
+        checks.append(
+            _check(
+                "canon_v3.cutover_audit",
+                status=CHECK_SKIPPED,
+                severity="info",
+                message="legacy cutover audit not applicable",
+                actual=f"bootstrap_mode={bootstrap_mode};cutover={cutover}",
+            )
+        )
+
+    return checks, workflow, diagnostics
 
 
 def _expected_profile(snapshot: ProjectPhaseSnapshot) -> dict[str, Any]:
@@ -270,7 +771,10 @@ def _sqlite_checks(project_root: Path) -> list[dict[str, Any]]:
                     expected=f"sqlite db with {table} table",
                     actual="missing",
                     impact=impact,
-                    repair="运行对应 index/rag 命令生成数据库；init 刚结束时可暂时忽略。",
+                    repair=(
+                        "该数据库只作兼容增强；先运行 canon_ledger.py canon-v3 status，"
+                        "并只执行返回的 primary_action。"
+                    ),
                 )
             )
             continue
@@ -284,7 +788,11 @@ def _sqlite_checks(project_root: Path) -> list[dict[str, Any]]:
                 expected=f"{table} table readable",
                 actual=f"rows={count}" if table_ok else error,
                 impact="" if table_ok else impact,
-                repair="" if table_ok else "重新运行索引/RAG 构建命令；若 sqlite 损坏，从备份恢复。",
+                repair=(
+                    ""
+                    if table_ok
+                    else "该数据库不具备 Canon 权威；先按 canon-v3 status 的 primary_action 恢复。"
+                ),
             )
         )
     return checks
@@ -362,8 +870,8 @@ def _rag_checks(project_root: Path) -> list[dict[str, Any]]:
         checks.append(
             _check(
                 "rag.retrieval_provenance",
-                status=CHECK_ERROR if needs_rebuild else CHECK_OK,
-                severity="blocker" if needs_rebuild else "info",
+                status=CHECK_WARNING if needs_rebuild else CHECK_OK,
+                severity="warning" if needs_rebuild else "info",
                 message="retrieval rows bound to accepted commit snapshots",
                 expected="all default-context rows carry a commit snapshot marker",
                 actual=(
@@ -372,12 +880,13 @@ def _rag_checks(project_root: Path) -> list[dict[str, Any]]:
                     else f"unsupported_or_unbound_rows={unsupported_rows}"
                 ),
                 impact=(
-                    "向量投影含未绑定行或不受支持的结构，写作上下文不能信任该读模型。"
+                    "兼容向量库含未绑定行或不受支持的结构，不能把它当作 Canon 事实源。"
                     if needs_rebuild
                     else ""
                 ),
                 repair=(
-                    "对已提交章节运行 projections replay，重建带来源绑定的 BM25/向量索引。"
+                    "运行 canon_ledger.py canon-v3 status，并只执行返回的 primary_action；"
+                    "不要运行任何 v2 projection 补跑命令恢复 Canon。"
                     if needs_rebuild
                     else ""
                 ),
@@ -405,14 +914,17 @@ def _projection_log_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -
         return [
             _check(
                 "projection_log.present",
-                status=CHECK_ERROR,
-                severity="blocker",
+                status=CHECK_WARNING,
+                severity="warning",
                 message="projection log missing for project with commits",
                 path=str(log_path),
                 expected="projection_log.jsonl exists after projection run",
                 actual="missing",
-                impact="当前提交缺少可审计的投影执行记录，不能确认读模型已与事实源同步。",
-                repair="运行 projections replay，按当前提交重建投影并生成执行日志。",
+                impact="旧 projection 日志缺失；Canon v3 freshness 由 HEAD-bound projection 单独校验。",
+                repair=(
+                    "运行 canon_ledger.py canon-v3 status，并只执行返回的 primary_action；"
+                    "不要补跑任何 v2 projection 队列。"
+                ),
             )
         ]
     latest = latest_projection_run(project_root, chapter=latest_commit.chapter)
@@ -420,14 +932,17 @@ def _projection_log_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -
         return [
             _check(
                 "projection_log.latest_run",
-                status=CHECK_ERROR,
-                severity="blocker",
+                status=CHECK_WARNING,
+                severity="warning",
                 message="projection log has no run for latest commit",
                 path=str(log_path),
                 expected=f"run for chapter {latest_commit.chapter}",
                 actual="missing",
-                impact="最新 commit 的投影执行历史不可见。",
-                repair="运行 projections replay，为最新提交补齐当前投影执行记录。",
+                impact="最新旧式 projection 执行历史不可见，但它不能覆盖 Canon v3 workflow。",
+                repair=(
+                    "运行 canon_ledger.py canon-v3 status，并只执行返回的 primary_action；"
+                    "不要补跑任何 v2 projection 队列。"
+                ),
             )
         ]
     failed = projection_run_failed(latest)
@@ -436,14 +951,23 @@ def _projection_log_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -
     return [
         _check(
             "projection_log.latest_run",
-            status=CHECK_OK if status_ok else CHECK_ERROR,
-            severity="info" if status_ok else "blocker",
+            status=CHECK_OK if status_ok else CHECK_WARNING,
+            severity="info" if status_ok else "warning",
             message="latest projection log run",
             path=str(log_path),
             expected="latest run status done/skipped",
             actual=f"chapter={latest.get('chapter')} status={latest.get('status')}",
-            impact="read-model 投影失败或未完成，需要补跑。" if not status_ok else "",
-            repair="查看 projection_log.jsonl 的 writers 字段，修复后补跑 projection retry/replay。" if not status_ok else "",
+            impact=(
+                "旧 read-model projection 未完成；当前事实可用性只看 Canon v3 projection。"
+                if not status_ok
+                else ""
+            ),
+            repair=(
+                "运行 canon_ledger.py canon-v3 status，并只执行返回的 primary_action；"
+                "不要运行任何 v2 projection 补跑命令恢复 Canon。"
+                if not status_ok
+                else ""
+            ),
         )
     ]
 
@@ -562,6 +1086,8 @@ def build_doctor_report(
 ) -> dict[str, Any]:
     snapshot = resolve_project_phase(project_root, chapter=chapter)
     checks: list[dict[str, Any]] = []
+    workflow: dict[str, Any] = {}
+    canon_v3: dict[str, Any] = {}
     checks.extend(_preflight_checks(preflight_report))
 
     if snapshot.phase == PHASE_NO_PROJECT or not snapshot.project_root:
@@ -580,6 +1106,8 @@ def build_doctor_report(
         )
     else:
         root = Path(snapshot.project_root)
+        v3_checks, workflow, canon_v3 = _canon_v3_checks(root, deep=deep)
+        checks.extend(v3_checks)
         checks.extend(_file_checks(root, snapshot))
         checks.extend(_json_checks(root))
         try:
@@ -603,11 +1131,19 @@ def build_doctor_report(
                     "story_runtime.health",
                     status=CHECK_OK if runtime_health.get("mainline_ready") else CHECK_WARNING,
                     severity="info" if runtime_health.get("mainline_ready") else "warning",
-                    message="story runtime health",
-                    expected="mainline_ready true when writing stage",
+                    message="legacy compatibility runtime health",
+                    expected="advisory compatibility summary; Canon authority comes from workflow",
                     actual=json.dumps(runtime_health, ensure_ascii=False),
-                    impact="" if runtime_health.get("mainline_ready") else "当前章节可能会使用 fallback source。",
-                    repair="" if runtime_health.get("mainline_ready") else "补齐 Story System 合同和 accepted commit 后再写。",
+                    impact=(
+                        ""
+                        if runtime_health.get("mainline_ready")
+                        else "兼容 runtime 摘要未就绪；它不能触发事实 fallback，也不能覆盖 v3 blocker。"
+                    ),
+                    repair=(
+                        ""
+                        if runtime_health.get("mainline_ready")
+                        else "事实恢复只执行 canon-v3 status 返回的 primary_action；合同缺项仅作写作素材告警。"
+                    ),
                 )
             )
         checks.extend(_sqlite_checks(root))
@@ -621,13 +1157,29 @@ def build_doctor_report(
 
     blocking = [item for item in checks if item["severity"] == "blocker" and item["status"] == CHECK_ERROR]
     warnings = [item for item in checks if item["status"] == CHECK_WARNING]
-    recommended_actions = [item["repair"] for item in checks if item.get("repair")]
+    primary_action = workflow.get("primary_action") if workflow else {}
+    primary_command = (
+        str(primary_action.get("command") or "").strip()
+        if isinstance(primary_action, dict)
+        else ""
+    )
+    # One exact workflow produces one author-facing action. Compatibility and
+    # environment repairs remain attached to their warning rows for diagnosis,
+    # but never compete with or override the workflow authority.
+    recommended_actions = (
+        [primary_command]
+        if primary_command
+        else [str(item["repair"]) for item in checks if item.get("repair")]
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "ok": not blocking,
         "project_root": snapshot.project_root,
         "mode": "deep" if deep else "standard",
         "phase": snapshot.phase,
+        "workflow_snapshot": workflow,
+        "primary_action": primary_action,
+        "canon_v3": canon_v3,
         "expected_profile": _expected_profile(snapshot),
         "blocking_count": len(blocking),
         "warning_count": len(warnings),
@@ -646,6 +1198,22 @@ def format_doctor_report(report: dict[str, Any], output_format: str = "text") ->
         f"phase: {report.get('phase')}",
         f"blocking: {report.get('blocking_count')} warnings: {report.get('warning_count')}",
     ]
+    workflow = report.get("workflow_snapshot") or {}
+    if workflow:
+        lines.append(
+            "canon_v3: "
+            f"state={workflow.get('state')} "
+            f"head={workflow.get('head_hash') or 'none'} "
+            f"generation={workflow.get('generation')} "
+            f"stage={workflow.get('stage_digest') or 'none'} "
+            f"projection_fresh={workflow.get('projection_fresh')}"
+        )
+        primary = report.get("primary_action") or {}
+        if primary:
+            lines.append(
+                "primary_action: "
+                f"{primary.get('code')} -> {primary.get('command')}"
+            )
     for item in report.get("checks") or []:
         if item.get("status") == CHECK_OK:
             continue
@@ -657,7 +1225,8 @@ def format_doctor_report(report: dict[str, Any], output_format: str = "text") ->
         if item.get("impact"):
             lines.append(f"  impact: {item.get('impact')}")
         if item.get("repair"):
-            lines.append(f"  repair: {item.get('repair')}")
+            label = "advisory" if item.get("status") == CHECK_WARNING else "repair"
+            lines.append(f"  {label}: {item.get('repair')}")
     actions = report.get("recommended_actions") or []
     if actions:
         lines.append("recommended_actions:")

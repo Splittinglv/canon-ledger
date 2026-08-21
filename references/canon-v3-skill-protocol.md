@@ -33,10 +33,17 @@ EOF
 [ "$_ENV_PARSE_OK" -eq 1 ] || exit 1
 export CANON_LEDGER_PLUGIN_ROOT CURSOR_PLUGIN_ROOT SCRIPTS_DIR WORKSPACE_ROOT CURSOR_PROJECT_DIR CANON_LEDGER_PYTHON
 unset _PLUGIN_ROOT_HINT _ENV_LINES _ENV_PARSE_OK
+```
+
+已存在或已能识别的书项目再用统一 locator 固定项目根：
+
+```bash
 export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" --project-root "${WORKSPACE_ROOT}" where)"
 ```
 
 不得扫描缓存目录寻找另一个插件副本，不得凭当前工作目录猜项目根。
+
+`/canon-ledger-init` 创建**全新且尚未可识别**的目标目录时是唯一定位例外：它先记录用户明示给出的绝对目标路径，不对该未建项目运行 `where/status`，也不把当前工作区中的另一本书当作目标。统一 `canon_ledger.py init <target> <title> <genre> ...` 会创建可识别骨架并尝试建立 genesis；它返回后才对 exact target 运行 locator 和 `canon-v3 status`。目标已是书项目或包含任何旧内容时不属于 clean init，必须先读它自己的 workflow，不得覆盖。
 
 ## 唯一 Workflow Authority
 
@@ -51,8 +58,9 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_le
 
 | state | 允许的事实推进动作 |
 |---|---|
-| `migration_required` + `bootstrap_mode=new_project` | `canon-v3 initialize` |
+| `migration_required` + `bootstrap_mode=new_project` | 仅对已识别、无 CURRENT 且无 accepted legacy prefix 的 clean skeleton 执行 `canon-v3 initialize`；统一 init 工具已成功时不重复调用 |
 | `migration_required` + `bootstrap_mode=legacy_cutover` | `canon-v3 migrate` |
+| `migration_required` + `bootstrap_mode=legacy_repair` | 只执行 snapshot 的 `canon-v3 audit-cutover`，按稳定 reason code 由作者恢复冻结来源或显式重建后缀，再重读 status；不得再次调用 migrate、猜测新边界或原地 initialize |
 | `migration_required` + `bootstrap_mode=recertification` | `repair-cutover --dry-run`，再由 `/canon-ledger-confirm` 逐项确认并 apply |
 | `ready` | 仅允许 `allowed_write_chapters` 中的目标章进入 plan/write/staged review |
 | `ready_to_finalize` | 只允许对当前 STAGING 做 exact finalize |
@@ -62,7 +70,7 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_le
 | `projection_rebuild_required` | 只允许 rebuild/doctor；事实视图不得回退旧索引 |
 | `invalid` | 只允许 doctor、只读诊断和 style-only 操作 |
 
-只有 `state=ready && can_write_next=true && projection_fresh=true` 才能建议开始下一章。
+只有 `state=ready && can_write_next=true && projection_fresh=true` 才能建议开始下一章。成功建立 CURRENT 后 `bootstrap_mode=canon_v3`；`new_project` 只表示尚待 initialize 的无 HEAD 状态，不是初始化成功标志。
 
 ## 有版本的人工操作
 

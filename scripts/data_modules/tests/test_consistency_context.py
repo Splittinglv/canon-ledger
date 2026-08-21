@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from data_modules.consistency_context import sanitize_story_contracts
+from data_modules.consistency_context import (
+    sanitize_initial_canon,
+    sanitize_story_contracts,
+)
 from data_modules.story_contracts import persist_story_seed
 
 
@@ -76,6 +79,51 @@ def test_sanitize_story_contracts_leaves_empty_contracts_empty():
     assert cleaned["chapter_brief"] == {}
     assert cleaned["volume_brief"] == {}
     assert cleaned["review_contract"] == {}
+
+
+def test_initial_canon_keeps_hard_facts_but_drops_character_design_fields():
+    cleaned = sanitize_initial_canon(
+        {
+            "project": {"title": "雾港来信", "genre": "悬疑"},
+            "protagonist": {
+                "name": "林舟",
+                "desire": "查明姐姐失踪真相",
+                "flaw": "过度相信旧友",
+                "archetype": "孤狼侦探",
+            },
+            "world": {"factions": "巡夜司与商会", "cultivation_chain": "炼气→筑基"},
+            "characters": {
+                "protagonist_structure": "双主角",
+                "heroine_config": "单女主",
+                "heroine_names": "苏云",
+                "heroine_role": "情感线",
+                "co_protagonists": "江雪",
+                "co_protagonist_roles": "调查搭档",
+                "antagonist_tiers": "终局:商会会长",
+                "antagonist_level": "终局",
+            },
+        }
+    )
+
+    assert cleaned["protagonist"] == {"name": "林舟"}
+    assert cleaned["world"] == {
+        "cultivation_chain": "炼气→筑基",
+        "factions": "巡夜司与商会",
+    }
+    assert cleaned["characters"] == {
+        "co_protagonists": "江雪",
+        "heroine_names": "苏云",
+    }
+    serialized = str(cleaned)
+    for soft_value in (
+        "查明姐姐失踪真相",
+        "过度相信旧友",
+        "孤狼侦探",
+        "情感线",
+        "调查搭档",
+        "终局:商会会长",
+    ):
+        assert soft_value not in serialized
 
 
 def test_sanitize_story_contracts_rebuilds_only_consistency_fields():

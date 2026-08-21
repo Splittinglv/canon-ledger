@@ -2,6 +2,121 @@
   "schema_version": "canon-ledger-author-glossary/v1",
   "terms": [
     {
+      "technical": "HEAD",
+      "author": "当前正史版本",
+      "explanation": "当前已经发布、可供写作和查询使用的不可变正史版本；显示为内容哈希，版本变化后必须重新读取流程状态。"
+    },
+    {
+      "technical": "CURRENT",
+      "author": "当前正史指针",
+      "explanation": "指向当前 HEAD 的原子指针；只有正式发布事务才能切换它，临时文件和旧索引不能覆盖它。"
+    },
+    {
+      "technical": "manifest",
+      "author": "正史版本目录",
+      "explanation": "HEAD 指向的不可变目录，列出该版本采用的章节事实和作者硬设定记录。"
+    },
+    {
+      "technical": "immutable object",
+      "author": "不可变正史记录",
+      "explanation": "按内容哈希保存的提议、决定、提交或版本目录；内容一旦变化就会得到新的哈希。"
+    },
+    {
+      "technical": "STAGING",
+      "author": "待确认事实事务",
+      "explanation": "尚未发布到 HEAD 的当前章节或作者硬设定事务；同一时刻最多只能有一种权威 STAGING。"
+    },
+    {
+      "technical": "workflow",
+      "author": "当前写作流程状态",
+      "explanation": "由 HEAD、STAGING、正文绑定、人工决定和投影新鲜度共同计算出的唯一权威流程。"
+    },
+    {
+      "technical": "workflow_snapshot",
+      "author": "权威流程快照",
+      "explanation": "一次完整读取到的 exact Canon v3 状态；状态、版本和恢复动作必须作为同一份快照使用。"
+    },
+    {
+      "technical": "workflow_digest",
+      "author": "流程版本指纹",
+      "explanation": "标识一份权威流程快照的哈希；它变化时，旧提议或旧确认不能自动套用。"
+    },
+    {
+      "technical": "primary_action",
+      "author": "唯一恢复动作",
+      "explanation": "当前 workflow 明确允许作者执行的下一步；遇到阻断时只执行这一个动作，不从旧报告猜测。"
+    },
+    {
+      "technical": "transaction_hash",
+      "author": "当前事实事务版本",
+      "explanation": "标识当前待确认事实事务的内容哈希；确认和发布必须回显同一个值。"
+    },
+    {
+      "technical": "stage_digest",
+      "author": "待确认版本指纹",
+      "explanation": "绑定当前 STAGING、已有决定和人工材料的精确版本；任何变化都要求刷新后重新确认。"
+    },
+    {
+      "technical": "finalize_token",
+      "author": "本次发布凭证",
+      "explanation": "只在当前事务已经可以发布时生成，并且只对当前 stage digest 有效。"
+    },
+    {
+      "technical": "author-axiom",
+      "author": "作者硬设定",
+      "explanation": "作者明确给出的长期硬事实；只有经过独立的提议、确认和发布后才进入 HEAD。"
+    },
+    {
+      "technical": "migration_required",
+      "author": "需要建立或修复 v3 正史",
+      "explanation": "当前不能继续写新章；按 workflow 的 bootstrap mode 和唯一恢复动作完成初始化、迁移或重新认证。"
+    },
+    {
+      "technical": "legacy_repair",
+      "author": "旧正史来源需要修复",
+      "explanation": "已经存在 HEAD，但导入的旧前缀或后缀来源发生变化；只执行 workflow 给出的精确修复动作，不重新初始化。"
+    },
+    {
+      "technical": "ready",
+      "author": "可以继续下一步写作",
+      "explanation": "只有同时满足 can_write_next=true 且 projection_fresh=true，才表示可以开始允许的下一章。"
+    },
+    {
+      "technical": "ready_to_finalize",
+      "author": "当前事务可以发布",
+      "explanation": "当前 STAGING 的必需确认已经完成；只允许使用同一 stage digest 和 finalize token 发布。"
+    },
+    {
+      "technical": "awaiting_human",
+      "author": "等待作者确认关键事实",
+      "explanation": "当前事务有必须由作者决定的事实；使用 /canon-ledger-confirm 查看并确认当前版本。"
+    },
+    {
+      "technical": "rewrite_required",
+      "author": "需要修改当前章正文",
+      "explanation": "作者已确认正文里有必须改写的长期事实问题；修改当前章并重新绑定、检查和提议。"
+    },
+    {
+      "technical": "recompile_required",
+      "author": "需要重新准备当前事务",
+      "explanation": "正文、HEAD 或 STAGING 版本已经变化；按当前版本重新绑定、提取、扫描并创建提议。"
+    },
+    {
+      "technical": "projection_rebuild_required",
+      "author": "需要重建当前正史视图",
+      "explanation": "HEAD 有效，但派生事实视图没有绑定到它；重建 Canon v3 projection 前不能回退旧索引查询事实。"
+    },
+    {
+      "technical": "projection_fresh",
+      "author": "正史视图已追上当前版本",
+      "explanation": "派生事实视图的 HEAD 和 generation 与 CURRENT 完全一致；false 时不能用于事实查询或下一章上下文。"
+    },
+    {
+      "technical": "exact-version-conflict",
+      "author": "内容版本已变化",
+      "explanation": "HEAD、事务、待确认材料或决定版本与操作开始时不同；刷新 workflow 后重新查看，不把旧选择自动应用到新版本。"
+    },
+    {
       "technical": "subagent",
       "author": "写作助手",
       "explanation": "负责某一类写作任务的辅助步骤，例如写前准备、写作检查或资料整理。"
@@ -9,137 +124,137 @@
     {
       "technical": "context-agent",
       "author": "写前准备",
-      "explanation": "整理本章需要参考的前情、章纲、伏笔和设定。"
+      "explanation": "从 fresh HEAD-bound projection 整理本章需要参考的前情、伏笔和已发布设定。"
     },
     {
       "technical": "reviewer",
       "author": "写作检查",
-      "explanation": "检查本章是否存在影响继续写作的问题。"
+      "explanation": "检查本章是否存在影响继续写作或长期事实发布的问题。"
     },
     {
       "technical": "data-agent",
-      "author": "保存本章故事事实",
-      "explanation": "提取本章新发生的事件、人物状态和设定变化。"
+      "author": "准备本章故事事实",
+      "explanation": "从正文提取候选事件、人物状态和设定变化，先进入 v3 proposal/STAGING，不直接写入正史。"
     },
     {
       "technical": "deconstruction-agent",
       "author": "参考作品拆解",
-      "explanation": "把参考作品的可借鉴结构整理成创意素材。"
+      "explanation": "把参考作品的可借鉴结构整理成创意素材，不直接写入 Canon。"
     },
     {
       "technical": "artifact",
       "author": "中间结果文件",
-      "explanation": "流程中保存的检查、提取或提交前材料。"
+      "explanation": "流程中保存的检查、提取或提交前材料；它本身不是 HEAD。"
     },
     {
       "technical": "review_results",
       "author": "写作检查结果",
-      "explanation": "本章写作检查的结构化结果。"
+      "explanation": "本章写作检查的结构化结果；是否可推进仍以 workflow 为准。"
     },
     {
       "technical": "fulfillment_result",
       "author": "本章目标完成情况",
-      "explanation": "本章是否覆盖了章纲要求的关键节点。"
+      "explanation": "本章是否覆盖了章纲要求的关键节点，不直接决定 Canon 发布。"
     },
     {
       "technical": "disambiguation_result",
-      "author": "待确认的人名/设定歧义",
-      "explanation": "系统不确定某些称呼或设定指向，需要确认后再入库。"
+      "author": "待确认的人名或设定歧义",
+      "explanation": "系统不确定某些称呼或设定指向，需要在当前版本的人工 case 中确认。"
     },
     {
       "technical": "extraction_result",
-      "author": "本章新发生的故事事实",
-      "explanation": "本章可写入故事资料的事件、状态和关系变化。"
+      "author": "本章事实候选",
+      "explanation": "从正文提取、等待 v3 编译和确认的事件、状态与关系变化；尚未发布时不是正史。"
     },
     {
       "technical": "chapter-commit",
-      "author": "提交本章事实",
-      "explanation": "把本章通过检查的故事事实正式保存进主链。"
+      "author": "旧版本章事实提交",
+      "explanation": "兼容识别用的退役 v2 写入动作；生产流程不得调用，当前事实必须走 Canon v3 prepare/decide/finalize。"
     },
     {
       "technical": "CHAPTER_COMMIT",
-      "author": "本章事实存档",
-      "explanation": "系统保存本章事实时生成的权威记录。"
+      "author": "旧版本章事实存档",
+      "explanation": "兼容读取的旧版记录；它不能覆盖 CURRENT，也不能作为新的写作或恢复动作。"
     },
     {
       "technical": "commit",
-      "author": "入账存档",
-      "explanation": "把本章已确认的事实正式记入故事资料。"
+      "author": "不可变事实提交",
+      "explanation": "正式发布后被 manifest 引用的 v3 记录；只有 CURRENT 指向的 HEAD 中的提交处于活动状态。"
     },
     {
       "technical": "projection",
-      "author": "更新故事资料",
-      "explanation": "把已保存的本章事实同步到状态、摘要、长期记忆和检索库。"
+      "author": "当前正史事实视图",
+      "explanation": "从 HEAD 派生、绑定同一 HEAD 和 generation 的查询视图；可以重建，但不能反向成为正史来源。"
     },
     {
       "technical": "state",
-      "author": "状态",
-      "explanation": "角色、地点和故事进度的当前状态。"
+      "author": "旧版状态资料",
+      "explanation": "兼容诊断用的旧派生资料；当前事实状态只从 fresh Canon v3 projection 读取。"
     },
     {
       "technical": "index",
-      "author": "索引",
-      "explanation": "用于查询章节、角色和事件的资料索引。"
+      "author": "旧版资料索引",
+      "explanation": "兼容检索或诊断用的派生索引，不能替代 HEAD-bound projection。"
     },
     {
       "technical": "summary",
-      "author": "摘要",
-      "explanation": "章节或剧情的简要记录。"
+      "author": "剧情摘要",
+      "explanation": "帮助阅读的派生记录；涉及事实时必须能追溯到当前 HEAD。"
     },
     {
       "technical": "memory",
-      "author": "长期记忆",
-      "explanation": "跨章节保持一致所需的长期资料。"
+      "author": "长期资料视图",
+      "explanation": "帮助跨章保持一致的派生视图；事实内容必须来自 fresh HEAD-bound projection。"
     },
     {
       "technical": "vector",
-      "author": "检索库",
-      "explanation": "用于相似内容召回和写前查询的资料库。"
+      "author": "可选检索库",
+      "explanation": "用于相似内容召回的兼容增强，不具备 Canon 权威，失败时不能回退为事实来源。"
     },
     {
       "technical": "write-gate",
-      "author": "自检关卡",
-      "explanation": "写作流程在关键节点做的安全检查。"
+      "author": "写作自检关卡",
+      "explanation": "写作流程在关键节点读取同一份 v3 workflow，决定当前版本是否允许继续。"
     },
     {
       "technical": "blocking issue",
-      "author": "会影响继续写作的问题",
-      "explanation": "不处理会影响提交、连贯性或后续写作的问题。"
+      "author": "会阻止当前流程的问题",
+      "explanation": "当前版本不能安全写作、确认或发布；只执行 workflow 给出的唯一恢复动作。"
     },
     {
       "technical": "fallback",
-      "author": "临时降级读取",
-      "explanation": "主资料不可用时，临时用较简单方式继续读取必要信息。"
+      "author": "非事实能力降级",
+      "explanation": "可选检索或环境能力可以降级，但 Canon 事实绝不回退旧 state、index、memory 或 RAG。"
     },
     {
       "technical": "runtime contract",
       "author": "本章写作要求",
-      "explanation": "本章必须遵守的章纲、设定、禁区和检查规则。"
+      "explanation": "本章的章纲、禁区和检查规则；长期事实约束仍以当前 HEAD 为准。"
     },
     {
       "technical": "schema error",
       "author": "中间结果格式不完整",
-      "explanation": "流程产物缺字段或形状不对，系统无法可靠继续。"
+      "explanation": "流程产物缺字段或形状不对，系统无法可靠继续；刷新 workflow 后重做对应步骤。"
     },
     {
       "technical": "mainline_ready",
-      "author": "这本书的档案是否就绪",
-      "explanation": "Story System 主链是否已经具备继续写作所需的基础资料。"
+      "author": "兼容就绪摘要",
+      "explanation": "兼容报告里的汇总字段，不是 v3 权威；是否可继续只看 workflow 的 state、can_write_next 和 projection_fresh。"
     },
     {
       "technical": "pending",
-      "author": "等待确认",
-      "explanation": "还有事项没有确认，暂时不能当成完成。"
+      "author": "旧版等待确认",
+      "explanation": "兼容状态别名；当前作者动作以 awaiting_human 及其 exact STAGING 为准。"
     },
     {
       "technical": "rejected",
-      "author": "本章事实未通过提交",
-      "explanation": "本章事实没有被正式保存进主链。"
+      "author": "旧版事实未提交",
+      "explanation": "兼容结果别名，不表示当前 v3 workflow；重新读取 status 后执行 primary_action。"
     },
     {
       "technical": "accepted",
-      "author": "本章事实已通过提交",
-      "explanation": "本章事实已经正式保存进主链。"
+      "author": "旧版事实已提交",
+      "explanation": "兼容结果别名；只有 CURRENT 的活动 HEAD 才决定事实是否已经正式发布。"
     }
   ]
 }

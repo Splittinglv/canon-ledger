@@ -113,3 +113,10 @@ def test_windows_runner_uses_flat_cursor_repository_paths():
     assert '$env:PYTHONPATH = "scripts"' in runner
     assert '$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path' in runner
     assert 'Join-Path $PSScriptRoot "..\\.."' not in runner
+
+
+def test_scripts_package_does_not_define_a_second_release_version():
+    package_init = (SCRIPTS_DIR / "__init__.py").read_text(encoding="utf-8")
+
+    assert "__version__" not in package_init
+    assert ".cursor-plugin/plugin.json" in package_init

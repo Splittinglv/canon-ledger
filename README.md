@@ -105,7 +105,10 @@ setting, timeline, continuity, character, logic
 /canon-ledger-confirm 12
 ```
 
-确认流底层只调用 `canon-v3 decide`。`correct` 和 `rewrite` 都不会在旧 transaction 上直接发布。
+确认 Skill 按当前唯一事务分派：章节与 author-axiom case 先提交 exact
+`decide`，达到 `ready_to_finalize` 后再提交 exact `finalize`；legacy
+recertification 则生成完整绑定的 publish request 并调用 `repair-cutover --apply`。
+`correct` 和 `rewrite` 都不会在旧 transaction 上直接发布。
 
 ## Workflow snapshot 是唯一门禁
 
@@ -119,7 +122,7 @@ CLI、write gate、报告、context、Skills 和 Dashboard 读取同一个 `cano
 | `rewrite_required` | 已确认事实冲突或作者选 rewrite | 修改本章并完整重跑 |
 | `recompile_required` | 正文、HEAD 或候选修订变化 | 重新 binding、scan、prepare |
 | `projection_rebuild_required` | 正史已发布但读模型未追上 | `canon-v3 rebuild-projection` |
-| `migration_required` | 尚未切 v3、旧前缀变化或旧 schema 待重新认证 | 按 `bootstrap_mode` initialize/migrate/repair |
+| `migration_required` | 尚未切 v3、旧前缀变化或旧 schema 待重新认证 | 按 `bootstrap_mode` initialize/migrate/audit/repair |
 | `invalid` | 内容寻址对象或引用校验失败 | 停止写作并体检 |
 
 只有 `state=ready`、`can_write_next=true` 且 projection fresh 才能继续下一章。`ready_to_finalize`、暂存 transaction、合同就绪或旧报告里的 blocking 数量都不表示完成。
@@ -134,7 +137,10 @@ CLI、write gate、报告、context、Skills 和 Dashboard 读取同一个 `cano
 /canon-ledger-write 1
 ```
 
-新项目首次使用 v3 时会创建 genesis：
+新项目骨架完成后会从 closed `MASTER_SETTING.initial_canon` 创建 genesis。默认只接收
+明确身份以及会约束后文的世界、规则、物品能力等硬事实；人物欲望、缺陷、人设类型、
+剧情定位和生成的设定模板仍是软设计，不自动进入 Canon。后续要把某项设计变成长期硬设定，
+必须走 managed author-axiom 的逐项人工决定：
 
 ```bash
 python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
@@ -151,7 +157,7 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
 
 ### 规划与长期硬设定
 
-卷纲、章纲和剧情目标是软计划，不表示事件已经发生。规划过程中新增或修改世界规则、角色永久设定等硬内容时，先保存为 author-axiom proposal；完成 v3 recertification/finalize 前，query 和写作上下文继续使用上一个 active axiom digest。这样 `/canon-ledger-plan` 不会成为第二条事实写入路径。
+卷纲、章纲和剧情目标是软计划，不表示事件已经发生。规划过程中新增、修改或删除世界规则、角色永久设定等硬内容时，先保存为 managed author-axiom draft，再执行 author-axiom prepare/decide/finalize；完成前，query 和写作上下文继续使用上一个 active axiom digest。这样 `/canon-ledger-plan` 不会成为第二条事实写入路径。
 
 ### 自定义长期文风
 
@@ -180,9 +186,10 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
   --project-root "<PROJECT_ROOT>" canon-v3 migrate --cutover-chapter K
 ```
 
-`migrate` 先生成 detached cutover plan：所有 event/delta/timeline/entity 输入都转成 typed legacy candidates，真实正文 span、identity resolution、slot transition 和 normalized facts 分别留下 admission receipt。旧 opaque ID 只是 alias，不能直接决定 promise/loop/knowledge/timeline/rule slot；alias 与 namespace 先统一后才折叠状态。无法证明的项进入人工 recertification，而不是带着事实洞继续。全部通过后才 CAS 切换 CURRENT。
+`migrate` 先编译 detached cutover material：所有 event/delta/timeline/entity 输入都转成 typed legacy candidates，真实正文 span、identity resolution、slot transition 和 normalized facts 分别留下 admission receipt。旧 opaque ID 只是 alias，不能直接决定 promise/loop/knowledge/timeline/rule slot；alias 与 namespace 先统一后才折叠状态。首次 cutover 遇到无法证明、未分类或身份冲突的输入会直接报错且不创建 CURRENT；先修复旧来源/证据，再重跑 migrate，不能把缺口交给普通人工 case 掩盖。全部通过后才 CAS 切换 CURRENT。
 
-8.0 以前的 legacy genesis 和未发布 STAGING 默认进入 `migration_required/recertification`。旧 positive decisions 不自动复用；负裁决会转成语义谱系。旧 HEAD 和对象保留只读，修复链在 detached 区域完成后原子切换。
+仅已存在的 `canon-v3/legacy-genesis/v1` 进入 detached
+`migration_required/recertification`：旧 positive decisions 不自动复用，负裁决会转成语义谱系，旧 HEAD 和对象保留只读，修复链完成后才原子切换。未发布的 v1 chapter/author-axiom STAGING 不参加 recertification，而是返回 `recompile_required`，要求按当前 v2 proposal、binding 与 HEAD 重新 prepare；任何 STAGING 存在时都与 legacy recertification 互斥。
 
 重新认证先只读生成逐项材料：
 
@@ -202,10 +209,15 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
 
 partial/stale/concurrent 请求不会切换 CURRENT；响应丢失只能重放同一请求。
 
+已有 CURRENT 的冻结 legacy prefix 若后来失绑，会进入 `bootstrap_mode=legacy_repair`。
+此时普通 `migrate` 会安全拒绝；唯一通用下一步是执行 snapshot 指向的只读
+`canon-v3 audit-cutover`，根据稳定 reason code 由作者恢复原冻结来源，或显式重建受影响后缀，
+再重新读取 status。插件不会猜新的 cutover 边界或自动覆盖当前 HEAD。
+
 ### cutover 后的规则
 
-- K 以内的 v1/v2 commit 是**只读前缀**。
-- K 之后只有 `canon-v3 prepare/decide/finalize` 可以写事实。
+- K 以内的 v1/v2 **章节事实 commit** 是只读前缀。
+- K 之后的章节事实只有 `canon-v3 prepare/decide/finalize` 可以写；跨章节的作者硬设定只走独立的 author-axiom prepare/decide/finalize，并成为新的 active axiom digest。
 - 不再支持 v2 `chapter-commit` 写入、`--from-last-commit` replay、旧 `human-review resolve` 或长期双写。
 - 修改 K 以内正文会使迁移来源摘要失效并 fail closed。必须从最早受影响章节重新建立后缀边界，旧人工决定默认重新确认；不能继续在旧 prefix 上写下一章。
 
@@ -269,6 +281,21 @@ ln -s "/absolute/path/to/canon-ledger" ~/.cursor/plugins/local/canon-ledger
 清单排除，不会为了通过它们而恢复 legacy 写入口；范围与显式审计方式见
 [当前产品测试与 retired v2 规格](references/testing-current-vs-retired-v2.md)。
 
+当前发布至少执行：
+
+```bash
+python -m pytest
+python scripts/run_behavior_evals.py --suite fast
+python scripts/sync_plugin_version.py --check --expected-version 8.0.0
+python scripts/validate_plugin_package.py --strict --format json
+python scripts/validate_release_notes.py --version 8.0.0 --previous-tag v7.2.0 --format json
+npm --prefix dashboard/frontend run build
+```
+
+此外要对全部 9 个 Skill 运行 `skill-creator` 的 `quick_validate.py`，并在干净临时项目中
+做真实初始化、workflow/Doctor 恢复和关键人工节点前向测试。版本号变化时使用 manifest
+作为唯一版本源同步命令，不把测试硬编码当成第二版本源。
+
 ### 工作区
 
 插件仓库和书稿分开。打开书的父目录作为工作区：
@@ -286,6 +313,19 @@ workspace/
     │   └── 文风提示词.md
     └── 审查报告/
 ```
+
+## 版本
+
+| 版本 | 说明 |
+|------|------|
+| **v8.0.0 (当前)** | Canon v3 统一正史写入、精确人工决定、managed author-axiom、fail-closed 迁移/重新认证与 HEAD-bound 投影。 |
+| **v7.2.0** | 堵住正史静默改写与前缀脱节；伏笔、关系和知识边界绑定正文证据。 |
+| **v7.1.0** | 新增对话式人工确认，并收紧章节提交与确认链。 |
+| **v7.0.2** | 收口残留写法口径，同时保留事实型设定。 |
+| **v7.0.1** | 仓库更名为 Splittinglv/canon-ledger，并补充 AI 辅助开发说明。 |
+| **v7.0.0** | 更名为叙典 CanonLedger，启用独立命令、运行目录与产品身份。 |
+| **v6.2.2** | 长期一致性真源可重建，文风由作者或模型决定。 |
+| **v6.2.1** | 上游引擎 v6.2.1 的 Cursor 本地插件基线。 |
 
 ## 项目与许可
 

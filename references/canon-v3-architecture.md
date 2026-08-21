@@ -33,10 +33,10 @@ Typed Canon Compiler（唯一证据与策略权威）
 Prepared Transaction
   conflict -> rewrite_required
   required -> awaiting_human
-  otherwise -> ready
+  otherwise -> ready_to_finalize
         |
         v
-精确绑定的 Human Decisions
+必要时：精确绑定的 Human Decisions
         |
         v
 从原始输入完整重编译 / finalize
@@ -139,13 +139,23 @@ transactions、decisions、commits、manifests 使用内容寻址并且只写一
 gate、报告、CLI、context、Skills 与 dashboard 只能读取同一个带 `workflow_digest` 的 `workflow_snapshot`。识别出书项目后，无论 CURRENT 是否存在都走该状态机：
 
 - `ready`：当前 HEAD、正文绑定与投影一致，可写下一章。
+- `ready_to_finalize`：当前 STAGING 没有未解决 required case，只能消费 exact finalize request；尚未发布到 HEAD。
 - `awaiting_human`：存在 required 决策，HEAD 未变化。
 - `rewrite_required`：确认存在正文穿帮，必须先改稿。
+- `recompile_required`：正文、HEAD、证据或人工 correction 已使当前编译绑定失效，必须重新 binding/extract/scan/prepare。
 - `projection_rebuild_required`：HEAD 已发布但派生投影未追上，禁止下一章。
 - `migration_required`：项目尚未切换到 v3 或编辑穿过迁移边界。
 - `invalid`：不可变对象、引用或摘要校验失败。
 
-无 CURRENT 时以 `bootstrap_mode` 区分 `new_project|legacy_cutover|legacy_repair|recertification`；这些模式均为 `migration_required` 且 `can_write_next=false`，唯一动作分别为 initialize/migrate/repair。规划合同就绪不能覆盖 Canon 状态。
+`bootstrap_mode` 表示当前权威来源需要的唯一恢复路由，不是“是否存在目录”的别名：
+
+- 已识别 clean skeleton、无 CURRENT 且无 accepted legacy prefix：`new_project`，执行 initialize。
+- 无 CURRENT 但存在 accepted legacy prefix：`legacy_cutover`，执行 migrate。
+- 已有 CURRENT，但冻结的 legacy prefix/来源绑定变化：`legacy_repair`。唯一通用下一步是只读 `audit-cutover`；作者按稳定 reason code 恢复冻结来源或显式重建受影响后缀，再重读 status。普通 `migrate` 会拒绝 stale CURRENT，不能作为修复命令。
+- 已有 CURRENT，且 genesis schema 为 `canon-v3/legacy-genesis/v1`：`recertification`，先产生 detached review material，再逐项确认和 CAS 发布。
+- 有可验证 CURRENT 且无迁移 blocker：`canon_v3`。初始化成功后必须是这个模式，不是 `new_project`。
+
+前四种待恢复模式都是 `migration_required && can_write_next=false`。规划合同就绪不能覆盖 Canon 状态。
 
 独立 review 不再调用 legacy `review-pipeline/update-state`。下一章草稿复用 extract→reviewer→assemble→prepare；历史范围默认 audit-only。队列完全由 compiler 从 prepared transaction 推导。
 
@@ -155,16 +165,21 @@ v1/v2 在切换后只读。迁移先生成 detached cutover transaction：所有
 
 旧 opaque ID 只作为 alias，不能直接决定 rule/information/timeline/promise/loop slot。update/terminal 必须命中 exact active prior；重复 ID、错目标或不同语义复用进入人工。迁移先构建 namespace-aware 身份图，再编译事实；namespace 是唯一类型权威，type 由它派生，alias 不唯一时不得自动取第一个。`omitted_fact_ids`、字段无法证明、namespace 冲突或未映射输入都会直接进入 `migration_required`。
 
-8.0 以前的 genesis、decision 和未发布 STAGING 只读并要求 recertification。只读
+只有 `canon-v3/legacy-genesis/v1` 走 recertification。只读
 `repair-cutover --dry-run` 为 prefix admission、identity、target、suffix、positive decision
 和 negative lineage 生成逐项 review material，并绑定 current HEAD、detached plan digest 与
 publish token。全部 case 由作者确认后，`repair-cutover --apply` 才在统一 staging lock 下重读
 来源、针对新 parent HEAD 重新编译 suffix wrapper，并 CAS 切换 CURRENT；partial、stale、并发
 HEAD 或任一重编译差异都不发布。旧 transaction 只保留为 provenance，不能继续成为新链 parent。
 
+未发布的 v1 chapter/author-axiom STAGING 不进入上述 detached 认证，而是
+`recompile_required`：调用方必须使用当前 proposal schema、正文/axiom source、HEAD 与 workflow
+重新 prepare。任何 chapter/author-axiom STAGING 存在时，recertification audit/apply 都报告冲突，
+保证全项目只有一个权威待审事务。
+
 ## Skill 与 Author Axiom 边界
 
-9 个 Canon Skills 都是本协议的调用方，不能复制另一套状态判断。`init` 建立 genesis；`plan` 的章纲是软计划；`write/review/confirm` 共用唯一事务；`query/dashboard` 只读 HEAD；`doctor` 诊断；`learn` 永远 style-only。
+9 个 Canon Skills 都是本协议的调用方，不能复制另一套状态判断。`init` 对作者确认的 `MASTER_SETTING.initial_canon` 做一次性净化和 verified `author_axiom_snapshot` 导入，以 genesis admissions 建立 CURRENT；这不是一个 managed author-axiom commit。`plan` 的章纲是软计划；`write/review/confirm` 共用唯一事务；`query/dashboard` 只读 HEAD；`doctor` 诊断；`learn` 永远 style-only。
 
 长期硬设定由 HEAD 可达的独立 `author_axiom_commits` 绑定。`plan` 只在受管
 `.canon-ledger/tmp/author_axioms/*.json` 生成 draft；每个 JSON leaf 绑定文件、UTF-8 byte span、
@@ -175,8 +190,6 @@ exact 人工 case，使用与章节事务相同的全局 staging lock 和 CURREN
 旧章失绑。文风文件明确排除在 axiom digest、HEAD、迁移与人工 case 外。
 
 如果编辑 K 之前的正文，必须从最早受影响章节迁移整个后缀。旧人工决定默认失效并重新确认，除非其所有精确绑定摘要完全相同。禁止长期双写，也禁止正常路径上的 legacy replay。
-
-紧急安全模式在完整迁移前执行最小收口：checkpoint 禁止 ignore、策略取最强、禁用通用 replace，无法证明的正史变化转人工确认。
 
 ## 发布门槛
 

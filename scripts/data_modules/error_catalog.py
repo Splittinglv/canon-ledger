@@ -108,15 +108,26 @@ def _default_catalog() -> tuple[list[ErrorCatalogEntry], AuthorError]:
 def _haystack_from_issue(issue: Any) -> tuple[str, str]:
     if isinstance(issue, dict):
         code = str(issue.get("code") or issue.get("id") or issue.get("type") or "").strip()
+        transaction_kind = str(issue.get("transaction_kind") or "").strip()
+        workflow = issue.get("workflow_snapshot")
+        if not transaction_kind and isinstance(workflow, dict):
+            transaction_kind = str(workflow.get("transaction_kind") or "").strip()
+        match_code = (
+            f"author_axiom:{code}"
+            if transaction_kind == "author_axiom"
+            and code in {"rewrite_required", "recompile_required"}
+            else code
+        )
         text_parts = [
             code,
+            f"transaction_kind={transaction_kind}" if transaction_kind else "",
             str(issue.get("message") or ""),
             str(issue.get("reason") or ""),
             str(issue.get("impact") or ""),
             str(issue.get("repair") or ""),
             str(issue.get("actual") or ""),
         ]
-        return code, "\n".join(text_parts)
+        return match_code, "\n".join(text_parts)
     text = str(issue or "")
     return text.strip(), text
 

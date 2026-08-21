@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+import sync_plugin_version
+
 
 ROOT = Path(__file__).resolve().parents[3]
 SKILLS = ROOT / "skills"
@@ -146,11 +148,67 @@ def test_plan_and_init_cannot_create_unreviewed_hard_facts() -> None:
     init = _read(SKILLS / "canon-ledger-init" / "SKILL.md")
     plan = _read(SKILLS / "canon-ledger-plan" / "SKILL.md")
     assert "canon-v3 initialize" in init
-    assert "author-axiom digest" in init
+    for marker in (
+        "author_axiom_snapshot",
+        "genesis_admissions",
+        "author_axiom_digest",
+        "genesis_overrides",
+        "bootstrap_mode=canon_v3",
+    ):
+        assert marker in init
+    assert "初始事实并不伪装成一个 managed draft commit" in _read(
+        SKILLS / "canon-ledger-init" / "references" / "system-data-flow.md"
+    )
     assert "author_axiom_proposals" in plan
     assert "不得直接覆盖活动设定" in plan
     assert "软计划" in plan
     assert "style" in plan
+
+
+def test_init_docs_match_clean_target_and_workflow_bootstrap_contract() -> None:
+    protocol = _read(REFERENCES / "canon-v3-skill-protocol.md")
+    architecture = _read(REFERENCES / "canon-v3-architecture.md")
+    init = _read(SKILLS / "canon-ledger-init" / "SKILL.md")
+    flow = _read(
+        SKILLS / "canon-ledger-init" / "references" / "system-data-flow.md"
+    )
+    collection = _read(
+        SKILLS / "canon-ledger-init" / "references" / "init-collection-schema.md"
+    )
+
+    for marker in (
+        "全新且尚未可识别",
+        "bootstrap_mode=new_project",
+        "bootstrap_mode=legacy_cutover",
+        "bootstrap_mode=legacy_repair",
+        "bootstrap_mode=recertification",
+        "bootstrap_mode=canon_v3",
+    ):
+        assert marker in protocol
+    assert "`new_project` 只表示尚待 initialize 的无 HEAD 状态" in protocol
+
+    for text in (init, flow):
+        for marker in (
+            "MASTER_SETTING.initial_canon",
+            "author_axiom_snapshot",
+            "genesis_admissions",
+            "bootstrap_mode=canon_v3",
+            "managed author-axiom commit",
+            "genesis_overrides",
+        ):
+            assert marker in text
+    assert "统一 init 工具在生成骨架后直接尝试建立 genesis" in flow
+    assert "只有 status 精确返回" in init
+
+    assert "必需输入只有 exact target、书名和题材" in collection
+    assert '"protagonist_desire"' in collection
+    assert "不进入 `initial_canon`" in collection
+    assert "大纲、人物动机、剧情取舍、节奏和文风都不是默认强制事实审查项" in collection
+
+    for state in ("ready_to_finalize", "recompile_required"):
+        assert f"`{state}`" in architecture
+    assert "otherwise -> ready_to_finalize" in architecture
+    assert "初始化成功后必须是这个模式，不是 `new_project`" in architecture
 
 
 def test_query_context_and_dashboard_are_head_bound() -> None:
@@ -276,6 +334,8 @@ def test_reviewer_contract_is_v2_and_fact_only() -> None:
         assert stale not in text
     assert "无证据锚点的低概率猜测忽略" in text
     assert "文风、文笔" in text
+    assert "author_axiom_recertification" not in text
+    assert "author-axiom 的 add/update/remove 使用独立" in text
 
 
 def test_data_agent_proposal_is_v2_and_has_no_unused_source_escape() -> None:
@@ -295,6 +355,8 @@ def test_data_agent_proposal_is_v2_and_has_no_unused_source_escape() -> None:
         # The agent may name retired fields only in an explicit prohibition.
         if forbidden in text:
             assert "禁止输出或沿用" in text
+    assert "这些 chapter/body/as-of/scan 绑定只适用于" in text
+    assert "不得虚构 chapter、chapter_file" in text
 
 
 def test_markdown_reference_links_resolve() -> None:
@@ -326,11 +388,83 @@ def test_skill_and_agent_evals_use_v2_language() -> None:
     assert "extraction_incomplete" in agent_eval
 
 
+def test_plugin_release_version_surfaces_are_in_sync() -> None:
+    plugin = json.loads(_read(ROOT / ".cursor-plugin" / "plugin.json"))
+    marketplace = json.loads(_read(ROOT / ".cursor-plugin" / "marketplace.json"))
+    readme = _read(ROOT / "README.md")
+    plugin_version = str(plugin["version"])
+
+    assert sync_plugin_version.VERSION_PATTERN.fullmatch(plugin_version)
+    assert marketplace["metadata"]["version"] == plugin_version
+    assert marketplace["plugins"][0]["version"] == plugin_version
+    assert sync_plugin_version.get_readme_badge_version(readme) == plugin_version
+    assert sync_plugin_version.get_readme_current_version(readme) == plugin_version
+
+
+def test_root_docs_match_canon_v3_human_and_migration_routes() -> None:
+    readme = _read(ROOT / "README.md")
+    readme_compact = re.sub(r"\s+", " ", readme)
+    notice = _read(ROOT / "NOTICE.md")
+    attribution = _read(ROOT / "ATTRIBUTION.md")
+    release = _read(ROOT / "releases" / "v8.0.0.md")
+    architecture = _read(REFERENCES / "canon-v3-architecture.md")
+
+    for marker in (
+        "章节与 author-axiom case 先提交 exact",
+        "legacy recertification 则生成完整绑定的 publish request",
+        "首次 cutover 遇到无法证明、未分类或身份冲突的输入会直接报错",
+        "未发布的 v1 chapter/author-axiom STAGING 不参加 recertification",
+        "章节事实 commit",
+    ):
+        assert marker in readme_compact
+    for stale in (
+        "确认流底层只调用 `canon-v3 decide`",
+        "无法证明的项进入人工 recertification",
+        "旧 genesis 和未发布 STAGING 需要 recertification",
+    ):
+        assert stale not in readme
+        assert stale not in release
+        assert stale not in architecture
+
+    assert "章纲目标保持 advisory" in notice
+    assert "章纲目标保留为 advisory" in attribution
+    assert "只有 `canon-v3/legacy-genesis/v1` 走 recertification" in architecture
+    assert "未发布的 v1 chapter/author-axiom STAGING" in architecture
+
+
+def test_compatibility_templates_and_optional_design_refs_do_not_claim_authority() -> None:
+    state_schema = _read(ROOT / "templates" / "output" / "state-schema.md")
+    index_schema = _read(ROOT / "templates" / "output" / "index-schema.md")
+    for text in (state_schema, index_schema):
+        assert "不是 Canon v3 权威来源" in text
+        assert "rebuild-projection" in text
+
+    optional_refs = [
+        SKILLS / "canon-ledger-init" / "references" / "worldbuilding" / "character-design.md",
+        SKILLS / "canon-ledger-init" / "references" / "worldbuilding" / "power-systems.md",
+        SKILLS / "canon-ledger-init" / "references" / "worldbuilding" / "setting-consistency.md",
+        SKILLS / "canon-ledger-plan" / "references" / "outlining" / "conflict-design.md",
+        SKILLS / "canon-ledger-plan" / "references" / "outlining" / "outline-structure.md",
+        SKILLS / "canon-ledger-plan" / "references" / "outlining" / "plot-frameworks.md",
+    ]
+    for path in optional_refs:
+        text = _read(path)
+        assert "可选" in text or "仅在用户明确需要" in text
+    joined = "\n".join(_read(path) for path in optional_refs)
+    for stale in (
+        "主角必须能越级",
+        "女主必须有自己的",
+        "三观**: 必须正向",
+        "每10章至少有1个B级",
+        "必须让读者同情主角",
+        "起点至少100万字",
+    ):
+        assert stale not in joined
+
+
 def test_plugin_description_matches_product_boundary() -> None:
     plugin = json.loads(_read(ROOT / ".cursor-plugin" / "plugin.json"))
     marketplace = json.loads(_read(ROOT / ".cursor-plugin" / "marketplace.json"))
-    assert plugin["version"] == "8.0.0"
-    assert marketplace["plugins"][0]["version"] == plugin["version"]
     for description in (plugin["description"], marketplace["plugins"][0]["description"]):
         assert "长期事实" in description
         assert "章纲履约" in description

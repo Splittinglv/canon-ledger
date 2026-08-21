@@ -2,10 +2,10 @@
 CanonLedger scripts package
 
 This package contains the Python scripts for the CanonLedger plugin.
-"""
 
-__version__ = "5.5.5"
-__author__ = "lcy"
+The plugin release version has a single source of truth:
+``.cursor-plugin/plugin.json`` at the repository root.
+"""
 
 __all__ = [
     "security_utils",

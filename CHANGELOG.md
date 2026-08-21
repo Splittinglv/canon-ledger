@@ -1,5 +1,26 @@
 # 更新日志
 
+## v8.0.0 - 正史写入统一为可验证、可确认的 Canon v3 事务链
+
+发版范围：`v7.2.0..v8.0.0`。
+
+### 给作者看的变化
+
+- 模型不再直接改人物状态、关系、时间线或伏笔；每章事实统一经过 `prepare → decide → finalize` 后才进入正史。
+- 候选事实的每个字段都必须绑定正文引文或作者硬设定；证据不足、五维扫描不完整或语义无法唯一确定时会停下请作者确认，不再猜测入库。
+- 核心角色永久状态、重大关系、世界硬规则、关键物品与核心秘密等 checkpoint 必须显式批准或重写；真正歧义可选择批准、省略、修正或重写。
+- 未发布暂存、旧决定、正文改动或投影落后都会在统一 workflow 状态里给出唯一恢复动作，不会把“暂存完成”误报为“已发布”。
+- 章纲继续是剧情方向而不是强制事实；规划中新增的长期硬设定改走 author-axiom 确认链，不会绕过正史事务。
+- 8.0 以前的 v2/legacy 项目需要先备份并迁移；仅 legacy genesis v1 走 detached 重新认证，未发布 v1 STAGING 按当前 schema 重新编译，不自动沿用旧决定。
+
+### 给维护者
+
+- 新增内容寻址的 commit/manifest 仓库、`CURRENT` 原子切换、投影绑定和可重建读模型，发布与投影保持同一 HEAD。
+- typed candidate 使用逐字段 `support_map`、精确 SourceRef 和完整 ScanAttestation；运行时只从已验证候选派生 CanonEffects。
+- Active Slot Registry 统一状态、知识、在场、持有、承诺、伏笔、时间和规则谱系；跨章更新绑定 exact prior digest。
+- 人工决定绑定 stage、transaction、material、target、decision head 与正文 SHA；过期、跨暂存或换证据重放都会被拒绝。
+- 新建、迁移、修复旧前缀、作者硬设定和 Dashboard/Skill/CLI 门禁统一读取 `canon-v3/workflow-snapshot/v2`。
+
 ## v7.2.0 - 堵住静默改写，让知识否定检查真正可达
 
 发版范围：`v7.1.0..v7.2.0`。

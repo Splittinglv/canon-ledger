@@ -16,7 +16,10 @@ from data_modules.project_status import build_project_status
 from data_modules.story_runtime_health import build_story_runtime_health
 from data_modules.story_runtime_sources import load_runtime_sources
 from data_modules.user_report import build_user_report
-from data_modules.workflow_authority import WorkflowAuthority
+from data_modules.workflow_authority import (
+    WorkflowAuthority,
+    normalize_workflow_snapshot,
+)
 from data_modules.write_gates import STAGES, run_write_gate
 
 
@@ -120,9 +123,47 @@ def test_uninitialized_context_is_fact_empty_and_legacy_writers_are_disabled(
         HumanReviewService(tmp_path).persist_queue(1, {}, [])
 
 
+@pytest.mark.parametrize(
+    "recovery_action",
+    ["remigrate_legacy_suffix", "repair_legacy_prefix"],
+)
+def test_legacy_repair_routes_to_executable_read_only_audit(
+    recovery_action: str,
+) -> None:
+    snapshot = normalize_workflow_snapshot(
+        {
+            "schema_version": "canon-v3/workflow-snapshot/v1",
+            "state": "migration_required",
+            "head_hash": "a" * 64,
+            "generation": 2,
+            "chapter": None,
+            "transaction_hash": None,
+            "can_finalize": False,
+            "can_write_next": False,
+            "projection_fresh": True,
+            "cases": [],
+            "counts": {},
+            "recovery_action": recovery_action,
+            "workflow_digest": "b" * 64,
+        }
+    )
+
+    assert snapshot["bootstrap_mode"] == "legacy_repair"
+    assert snapshot["primary_action"] == {
+        "code": recovery_action,
+        "label": "审计失效的旧前缀并由作者修复精确来源",
+        "command": "canon_ledger.py canon-v3 audit-cutover",
+    }
+
+
 def test_contract_availability_is_advisory_once_canon_is_ready(tmp_path: Path) -> None:
     _recognized_book(tmp_path)
     CanonV3Service(tmp_path).initialize_new_project()
+
+    workflow = WorkflowAuthority(tmp_path).snapshot()
+    assert workflow["state"] == "ready"
+    assert workflow["bootstrap_mode"] == "canon_v3"
+    assert workflow["can_write_next"] is True
 
     runtime = load_runtime_sources(tmp_path, 1)
     assert runtime.fallback_sources == []

@@ -2,31 +2,253 @@
   "schema_version": "canon-ledger-author-error-catalog/v1",
   "errors": [
     {
+      "code": "exact-version-conflict",
+      "match": {
+        "codes": [
+          "canon_v3_head_conflict",
+          "legacy_recertification_head_conflict",
+          "canon_v3_proposal_workflow_digest_mismatch",
+          "canon_v3_decision_stage_precondition_failed",
+          "canon_v3_decision_target_precondition_failed",
+          "canon_v3_decision_material_precondition_failed",
+          "canon_v3_decision_head_precondition_failed",
+          "canon_v3_finalize_stage_precondition_failed",
+          "canon_v3_finalize_token_precondition_failed",
+          "canon_v3_author_axiom_workflow_digest_mismatch",
+          "canon_v3_author_axiom_prepare_stage_precondition_failed",
+          "canon_v3_author_axiom_decision_stage_precondition_failed",
+          "canon_v3_author_axiom_decision_target_precondition_failed",
+          "canon_v3_author_axiom_decision_material_precondition_failed",
+          "canon_v3_author_axiom_decision_head_precondition_failed",
+          "canon_v3_author_axiom_finalize_stage_precondition_failed",
+          "canon_v3_author_axiom_finalize_token_precondition_failed"
+        ],
+        "contains": [
+          "canon_v3_head_conflict",
+          "legacy_recertification_head_conflict",
+          "precondition_failed",
+          "workflow_digest_mismatch",
+          "stage_digest mismatch",
+          "stale decision",
+          "expected_decision_head_hash"
+        ]
+      },
+      "severity": "needs_confirmation",
+      "title": "内容版本已经变化",
+      "reason": "操作携带的 HEAD、workflow、STAGING、人工材料、决定版本或发布凭证不再是当前版本。",
+      "impact": "系统不会把旧选择自动应用到新的事实事务；这是一项安全保护，不表示正史已损坏。",
+      "next_action": "重新读取 `canon-v3 status`，按新的 workflow 和 primary_action 展示当前材料后再确认；不要自动重试旧请求到新版本。",
+      "command": "canon_ledger.py canon-v3 status",
+      "auto_handle": false
+    },
+    {
+      "code": "migration_required",
+      "match": {
+        "codes": [
+          "migration_required",
+          "canon_v3_initialize_required",
+          "canon_v3_legacy_cutover_required",
+          "legacy_migration_required",
+          "v3_not_initialized",
+          "legacy_repair"
+        ],
+        "contains": [
+          "canon_v3_workflow_migration_required",
+          "state=migration_required",
+          "legacy_migration_required"
+        ]
+      },
+      "severity": "must_handle",
+      "title": "需要建立或修复 Canon v3 正史",
+      "reason": "当前项目还没有可用的 v3 HEAD，或已导入的旧正史来源需要迁移、修复或重新认证。",
+      "impact": "完成 workflow 指定的恢复动作前，不能开始下一章，也不能回退旧索引读取事实。",
+      "next_action": "先读取 exact `canon-v3 status`，只执行其中的 `primary_action`；new_project、legacy_cutover、legacy_repair 和 recertification 不能互相替代。",
+      "command": "canon_ledger.py canon-v3 status",
+      "auto_handle": false
+    },
+    {
+      "code": "awaiting_human",
+      "match": {
+        "codes": [
+          "awaiting_human",
+          "canon_v3_finalize_awaiting_human",
+          "canon_v3_author_axiom_finalize_awaiting_human"
+        ],
+        "contains": ["state=awaiting_human", "status=awaiting_human"]
+      },
+      "severity": "needs_confirmation",
+      "title": "有关键事实等待作者确认",
+      "reason": "当前 STAGING 中有不能由系统代替作者决定的长期事实。",
+      "impact": "确认完成前事务不会发布到 HEAD，也不能开始下一章。",
+      "next_action": "运行 `/canon-ledger-confirm`，只根据当前 workflow 的 cases 和 stage digest 做决定。",
+      "command": "/canon-ledger-confirm",
+      "auto_handle": false
+    },
+    {
+      "code": "author_axiom_rewrite_required",
+      "match": {
+        "codes": [
+          "author_axiom:rewrite_required",
+          "canon_v3_author_axiom_rewrite_required",
+          "canon_v3_author_axiom_finalize_rewrite_required"
+        ],
+        "contains": []
+      },
+      "severity": "must_handle",
+      "title": "需要修改作者硬设定草案",
+      "reason": "作者已确认当前 author-axiom 草案中的硬设定不能按现有内容发布。",
+      "impact": "当前 author-axiom STAGING 不能发布；它不会改变 HEAD，也不要求改写章节正文。",
+      "next_action": "按当前 workflow 修改受管硬设定草案，并通过 `/canon-ledger-plan` 重新创建绑定当前 HEAD 的 author-axiom proposal。",
+      "command": "/canon-ledger-plan",
+      "auto_handle": false
+    },
+    {
+      "code": "rewrite_required",
+      "match": {
+        "codes": [
+          "rewrite_required",
+          "human_review_rewrite_required",
+          "canon_v3_finalize_rewrite_required"
+        ],
+        "contains": ["state=rewrite_required", "status=rewrite_required"]
+      },
+      "severity": "must_handle",
+      "title": "需要修改当前章正文",
+      "reason": "作者已经确认正文里存在必须修正的长期事实问题。",
+      "impact": "当前 STAGING 不能发布，也不能直接进入下一章。",
+      "next_action": "按当前 workflow 指向的章节重新运行 `/canon-ledger-write`；修改正文后必须重新绑定、检查和创建 v3 proposal。",
+      "command": "/canon-ledger-write",
+      "auto_handle": false
+    },
+    {
+      "code": "author_axiom_recompile_required",
+      "match": {
+        "codes": [
+          "author_axiom:recompile_required",
+          "canon_v3_author_axiom_recompile_required"
+        ],
+        "contains": []
+      },
+      "severity": "must_handle",
+      "title": "需要按当前 HEAD 重新准备作者硬设定",
+      "reason": "author-axiom 草案或事务所绑定的 HEAD/STAGING 版本已经变化。",
+      "impact": "旧硬设定提议和旧确认不能继续使用，但不要求改写章节正文。",
+      "next_action": "刷新 workflow 后运行 `/canon-ledger-plan`，重新绑定草案并创建 author-axiom proposal。",
+      "command": "/canon-ledger-plan",
+      "auto_handle": false
+    },
+    {
+      "code": "recompile_required",
+      "match": {
+        "codes": [
+          "recompile_required",
+          "canon_v3_recompile_required",
+          "canon_v3_unpublished_v1_stage_not_authoritative",
+          "canon_v3_current_commit_stage_proof_mismatch"
+        ],
+        "contains": ["state=recompile_required", "status=recompile_required"]
+      },
+      "severity": "must_handle",
+      "title": "需要按当前版本重新准备事实",
+      "reason": "正文、HEAD、STAGING 协议或事实提议所依赖的版本已经变化。",
+      "impact": "旧提议和旧确认不能继续使用，当前事务不能发布。",
+      "next_action": "重新读取 workflow，并按其 `primary_action` 对当前章重新绑定、提取、扫描和 prepare；作者硬设定事务则返回 `/canon-ledger-plan`。",
+      "command": "canon_ledger.py canon-v3 status",
+      "auto_handle": false
+    },
+    {
+      "code": "ready_to_finalize",
+      "match": {
+        "codes": ["ready_to_finalize"],
+        "contains": ["state=ready_to_finalize", "status=ready_to_finalize"]
+      },
+      "severity": "needs_confirmation",
+      "title": "当前事实事务可以发布",
+      "reason": "当前 STAGING 的必需确认已经完成，并生成了只对这个版本有效的 finalize token。",
+      "impact": "事务仍未进入 HEAD；发布前不能把它当成已完成，也不能开始下一章。",
+      "next_action": "运行 `/canon-ledger-confirm`，使用当前 transaction hash、stage digest 和 finalize token 做 exact finalize。",
+      "command": "/canon-ledger-confirm",
+      "auto_handle": false
+    },
+    {
+      "code": "projection_rebuild_required",
+      "match": {
+        "codes": [
+          "projection_rebuild_required",
+          "canon_v3_projection_rebuild_required",
+          "canon_v3_head_projection_unavailable",
+          "canon_v3_projection_workflow_binding_mismatch"
+        ],
+        "contains": [
+          "state=projection_rebuild_required",
+          "canon projection is missing, stale",
+          "projection/workflow binding mismatch"
+        ]
+      },
+      "severity": "must_handle",
+      "title": "当前正史事实视图需要重建",
+      "reason": "CURRENT/HEAD 仍有效，但 Canon v3 projection 缺失、过期或绑定到另一个 HEAD/generation。",
+      "impact": "重建完成前不能进行事实查询、组装下一章上下文，也不能回退旧 state、index、memory 或 RAG。",
+      "next_action": "按当前 HEAD 重建 Canon v3 projection，然后重新读取 status 确认 `projection_fresh=true`。",
+      "command": "canon_ledger.py canon-v3 rebuild-projection",
+      "auto_handle": true
+    },
+    {
+      "code": "canon_v3_authority_invalid",
+      "match": {
+        "codes": [
+          "invalid",
+          "canon_v3_current_invalid",
+          "canon_v3_staging_invalid",
+          "canon_v3_staging_invalid_json",
+          "canon_v3_missing_object",
+          "canon_v3_object_hash_mismatch"
+        ],
+        "contains": [
+          "current manifest or reachable immutable object invalid",
+          "staging authority or exact version binding invalid",
+          "canon_v3_manifest_",
+          "canon_v3_object_"
+        ]
+      },
+      "severity": "must_handle",
+      "title": "v3 权威记录无法通过完整性检查",
+      "reason": "CURRENT、manifest、可达不可变对象或唯一 STAGING 的结构、哈希或相互绑定不一致。",
+      "impact": "系统不能可靠确定活动 HEAD 或待确认事务，必须保持只读。",
+      "next_action": "运行深度 doctor，记录首个稳定 reason code 和受影响对象；不要改写 CURRENT 或从旧索引恢复事实。",
+      "command": "canon_ledger.py doctor --deep",
+      "auto_handle": false
+    },
+    {
       "code": "mainline_ready=false",
       "match": {
         "codes": ["mainline_ready=false"],
         "contains": ["mainline_ready=false"]
       },
       "severity": "must_handle",
-      "title": "这本书的写作档案还没就绪",
-      "reason": "系统还没有拿到继续写作所需的 Story System 主链资料。",
-      "impact": "继续写章可能会用旧资料或缺少本章写作要求。",
-      "next_action": "先运行 `/canon-ledger-init` 创建项目档案；如果已经初始化过，再运行 `/canon-ledger-doctor` 查缺项。",
-      "command": "/canon-ledger-doctor",
+      "title": "兼容就绪摘要显示未就绪",
+      "reason": "旧报告没有拿到完整写作资料，但它不能替代 Canon v3 workflow 判断原因。",
+      "impact": "在读取 v3 状态前不能据此开始写作或执行旧初始化动作。",
+      "next_action": "读取 exact `canon-v3 status`，只执行返回的 `primary_action`；需要细查时再运行 `/canon-ledger-doctor`。",
+      "command": "canon_ledger.py canon-v3 status",
       "auto_handle": false
     },
     {
       "code": "write-gate failed",
       "match": {
-        "codes": ["write-gate failed", "prewrite_validator_blocking", "phase_not_ready_for_precommit"],
+        "codes": [
+          "write-gate failed",
+          "prewrite_validator_blocking",
+          "phase_not_ready_for_precommit"
+        ],
         "contains": ["write-gate failed"]
       },
       "severity": "must_handle",
       "title": "写作自检没有通过",
-      "reason": "系统在写前、提交前或提交后检查时发现阻断问题。",
+      "reason": "当前 v3 workflow、正文绑定或写作产物存在阻断。",
       "impact": "当前章节不能可靠进入下一步。",
-      "next_action": "按报告里的影响和修复建议处理后，重新运行同一条写作命令。",
-      "command": "/canon-ledger-doctor",
+      "next_action": "重新读取 `canon-v3 status`，执行同一份 snapshot 的 `primary_action`；不要根据旧 gate 摘要猜恢复路径。",
+      "command": "canon_ledger.py canon-v3 status",
       "auto_handle": false
     },
     {
@@ -36,11 +258,11 @@
         "contains": ["chapter-commit rejected"]
       },
       "severity": "must_handle",
-      "title": "本章事实没有通过提交",
-      "reason": "本章仍有未覆盖节点、待确认歧义或阻断审查问题。",
-      "impact": "本章不会被当作已正式写入故事主链，后续章节不能直接依赖它。",
-      "next_action": "先修复 missed_nodes、pending 或 blocking 问题，再重新提交本章事实。",
-      "command": "/canon-ledger-doctor",
+      "title": "检测到旧版本章提交失败记录",
+      "reason": "这是退役 v2 流程的兼容错误，不能通过重跑 chapter-commit 恢复当前正史。",
+      "impact": "它不能证明 v3 HEAD 已发布，也不能作为后续章节的事实依据。",
+      "next_action": "读取 exact `canon-v3 status`，按当前 workflow 的 `primary_action` 进入 write、confirm、migrate 或 doctor。",
+      "command": "canon_ledger.py canon-v3 status",
       "auto_handle": false
     },
     {
@@ -50,11 +272,11 @@
         "contains": ["schema error", "missing field", "字段"]
       },
       "severity": "must_handle",
-      "title": "中间结果格式不完整",
-      "reason": "某个检查或资料整理结果缺少必要字段。",
-      "impact": "系统无法确认本章事实是否完整，不能继续提交。",
-      "next_action": "重新运行产生该中间结果的步骤；如果仍失败，运行 `/canon-ledger-doctor` 并附日志反馈。",
-      "command": "/canon-ledger-doctor",
+      "title": "当前步骤的中间结果格式不完整",
+      "reason": "某个检查、资料整理或 v3 请求缺少必要字段。",
+      "impact": "系统不能把该结果绑定到当前 workflow，因而不能继续确认或发布。",
+      "next_action": "先刷新 `canon-v3 status`，再重新运行产生该结果的当前主 Skill；如果仍失败，运行深度 doctor。",
+      "command": "canon_ledger.py canon-v3 status",
       "auto_handle": false
     },
     {
@@ -64,11 +286,11 @@
         "contains": ["artifact missing", "missing artifact"]
       },
       "severity": "must_handle",
-      "title": "缺少中间结果文件",
-      "reason": "写作检查、目标完成情况或故事事实提取结果没有生成。",
-      "impact": "系统无法安全保存本章事实。",
-      "next_action": "重新运行同一条主命令，让系统从缺失步骤继续。",
-      "command": "/canon-ledger-doctor",
+      "title": "缺少当前步骤的中间结果",
+      "reason": "写作检查、目标完成情况或事实候选没有生成。",
+      "impact": "系统无法构造绑定当前 HEAD 和正文的 v3 proposal。",
+      "next_action": "先刷新 workflow，再重新运行同一条 plan/write/review 主命令，让系统从缺失步骤继续。",
+      "command": "canon_ledger.py canon-v3 status",
       "auto_handle": false
     },
     {
@@ -78,12 +300,12 @@
         "contains": ["projection failed"]
       },
       "severity": "must_handle",
-      "title": "故事资料更新失败",
-      "reason": "本章事实已生成，但同步到状态、摘要、长期记忆或检索库时失败。",
-      "impact": "后续查询可能读不到本章最新变化。",
-      "next_action": "修复失败原因后补跑资料更新；也可以先运行 `/canon-ledger-doctor` 查看具体卡点。",
-      "command": "/canon-ledger-doctor",
-      "auto_handle": true
+      "title": "检测到旧版资料更新失败",
+      "reason": "兼容 projection 日志记录了失败；当前事实可用性不能由它决定。",
+      "impact": "它可能影响旧诊断或可选检索，但不能覆盖 Canon v3 projection freshness。",
+      "next_action": "读取 `canon-v3 status`；只有状态要求重建时才执行 v3 `rebuild-projection`，不要运行任何 v2 projection 补跑命令。",
+      "command": "canon_ledger.py canon-v3 status",
+      "auto_handle": false
     },
     {
       "code": "projection pending",
@@ -92,12 +314,12 @@
         "contains": ["projection pending"]
       },
       "severity": "needs_confirmation",
-      "title": "故事资料还没更新完成",
-      "reason": "本章事实同步到各处的状态仍在等待或缺少记录。",
-      "impact": "后续查询可能暂时不完整。",
-      "next_action": "等待或补跑资料更新；如果反复出现，运行 `/canon-ledger-doctor`。",
-      "command": "/canon-ledger-doctor",
-      "auto_handle": true
+      "title": "检测到旧版资料更新未完成",
+      "reason": "兼容 projection 记录仍是等待状态，但它不代表当前 v3 workflow。",
+      "impact": "旧诊断可能不完整；事实查询仍只能使用绑定当前 HEAD 的 v3 projection。",
+      "next_action": "读取 `canon-v3 status` 并只执行其中的 `primary_action`；不要补跑退役 projection 队列。",
+      "command": "canon_ledger.py canon-v3 status",
+      "auto_handle": false
     },
     {
       "code": "rag degraded",
@@ -106,11 +328,11 @@
         "contains": ["rag fallback"]
       },
       "severity": "auto_handled",
-      "title": "检索临时降级",
-      "reason": "向量检索不可用或响应失败，系统改用较简单的读取方式。",
-      "impact": "当前流程可以继续，但召回资料可能不如平时完整。",
-      "next_action": "本次无需处理；如果经常出现，检查 RAG API key 和网络配置。",
-      "command": "/canon-ledger-doctor",
+      "title": "可选检索能力已降级",
+      "reason": "向量检索不可用或响应失败；它只是非权威增强。",
+      "impact": "不能用该降级路径回答 Canon 事实；写作能否继续仍完全由 fresh v3 workflow/projection 决定。",
+      "next_action": "本次只需确认 `canon-v3 status` 仍为 ready；反复出现时再检查可选 RAG 配置。",
+      "command": "canon_ledger.py canon-v3 status",
       "auto_handle": true
     }
   ],
@@ -118,9 +340,9 @@
     "severity": "must_handle",
     "title": "遇到未登记的问题",
     "reason": "这里遇到一个系统还没有登记过的问题。",
-    "impact": "当前不会把它当成已完成。",
-    "next_action": "请先运行 `/canon-ledger-doctor`，或反馈时附上 `.canon-ledger/logs/run_last.log`。",
-    "command": "/canon-ledger-doctor",
+    "impact": "当前不会把它当成已完成，也不会回退旧事实来源。",
+    "next_action": "先读取 `canon-v3 status`；若状态或完整性仍不清楚，运行 `/canon-ledger-doctor --deep` 并附首个稳定 reason code。",
+    "command": "canon_ledger.py canon-v3 status",
     "auto_handle": false
   }
 }

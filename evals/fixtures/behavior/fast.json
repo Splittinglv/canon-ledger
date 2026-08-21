@@ -11,8 +11,8 @@
       "id": "skill_init_contract",
       "type": "skill_contract",
       "skill": "canon-ledger-init",
-      "description": "初始化技能只能建立经过确认的 Canon v3 起点。",
-      "required": ["canon-v3 initialize", "state=ready", "文风写入 `设定集/文风提示词.md`"]
+      "description": "初始化技能只能对 clean target 建立经过确认的 Canon v3 起点。",
+      "required": ["clean target", "author_axiom_snapshot", "genesis_admissions", "bootstrap_mode=canon_v3", "/canon-ledger-learn"]
     },
     {
       "id": "skill_plan_contract",

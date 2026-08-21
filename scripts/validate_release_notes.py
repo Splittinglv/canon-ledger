@@ -56,7 +56,7 @@ def _infer_previous_tag(root: Path, version: str) -> str:
         return ""
     try:
         completed = subprocess.run(
-            ["git", "-C", str(root), "tag", "--list", "v*"],
+            ["git", "-C", str(root), "tag", "--merged", "HEAD", "--list", "v*"],
             check=False,
             capture_output=True,
             text=True,
@@ -77,13 +77,24 @@ def _infer_previous_tag(root: Path, version: str) -> str:
     return sorted(candidates)[-1][1]
 
 
-def _git_release_issues(root: Path, version: str) -> list[dict[str, str]]:
+def _git_release_issues(
+    root: Path,
+    version: str,
+    previous_tag: str,
+) -> list[dict[str, str]]:
     """在 Git 工作区执行发版校验时，同时验证版本标签历史。"""
     if not (root / ".git").exists():
         return []
     try:
         tags = subprocess.run(
             ["git", "-C", str(root), "tag", "--list", "v*"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        merged_tags = subprocess.run(
+            ["git", "-C", str(root), "tag", "--merged", "HEAD", "--list", "v*"],
             check=False,
             capture_output=True,
             text=True,
@@ -112,7 +123,12 @@ def _git_release_issues(root: Path, version: str) -> list[dict[str, str]]:
                 repair="在完整 Git checkout 中重新执行发版校验。",
             )
         ]
-    if tags.returncode != 0 or head.returncode != 0 or dirty.returncode != 0:
+    if (
+        tags.returncode != 0
+        or merged_tags.returncode != 0
+        or head.returncode != 0
+        or dirty.returncode != 0
+    ):
         return [
             _issue(
                 "git.unavailable",
@@ -126,6 +142,11 @@ def _git_release_issues(root: Path, version: str) -> list[dict[str, str]]:
     semantic_tags = [
         tag.strip()
         for tag in tags.stdout.splitlines()
+        if _parse_version_tag(tag.strip()) is not None
+    ]
+    reachable_semantic_tags = [
+        tag.strip()
+        for tag in merged_tags.stdout.splitlines()
         if _parse_version_tag(tag.strip()) is not None
     ]
     if not semantic_tags:
@@ -154,6 +175,75 @@ def _git_release_issues(root: Path, version: str) -> list[dict[str, str]]:
                     repair="将目标版本递增到已有最高正式版本之上。",
                 )
             )
+    if previous_tag:
+        previous_version = _parse_version_tag(previous_tag)
+        if not previous_tag.startswith("v") or previous_version is None:
+            issues.append(
+                _issue(
+                    "git.previous_tag_invalid",
+                    message=(
+                        "上一个正式 tag 必须使用 vX.Y.Z 格式，"
+                        f"当前为：{previous_tag}"
+                    ),
+                    path=str(root),
+                    repair="传入真实存在的 vX.Y.Z tag。",
+                )
+            )
+        elif previous_tag not in semantic_tags:
+            issues.append(
+                _issue(
+                    "git.previous_tag_missing",
+                    message=f"上一个正式 tag 不存在：{previous_tag}",
+                    path=str(root),
+                    repair=(
+                        "先创建并推送真实的上一正式版本 tag，"
+                        "再校验本次发布。"
+                    ),
+                )
+            )
+        elif previous_tag not in reachable_semantic_tags:
+            issues.append(
+                _issue(
+                    "git.previous_tag_not_ancestor",
+                    message=f"上一个正式 tag {previous_tag} 不是当前 HEAD 的祖先",
+                    path=str(root),
+                    repair=(
+                        "选择当前 HEAD 可达的上一正式版本 tag，"
+                        "或先修正发布分支历史。"
+                    ),
+                )
+            )
+        elif current_version is not None and previous_version >= current_version:
+            issues.append(
+                _issue(
+                    "git.previous_tag_not_lower",
+                    message=f"上一个正式 tag {previous_tag} 不低于目标版本 v{version}",
+                    path=str(root),
+                    repair="选择低于目标版本的上一正式版本 tag。",
+                )
+            )
+        elif current_version is not None:
+            reachable_lower_tags = [
+                (parsed, tag)
+                for tag in reachable_semantic_tags
+                if (parsed := _parse_version_tag(tag)) is not None
+                and parsed < current_version
+            ]
+            if reachable_lower_tags:
+                highest_reachable_version, highest_reachable_tag = max(reachable_lower_tags)
+                if previous_version < highest_reachable_version:
+                    issues.append(
+                        _issue(
+                            "git.previous_tag_skips_reachable",
+                            message=(
+                                f"上一个正式 tag {previous_tag} 跳过了当前 HEAD "
+                                "可达的更高版本 "
+                                f"{highest_reachable_tag}"
+                            ),
+                            path=str(root),
+                            repair=f"将发版范围起点改为 {highest_reachable_tag}。",
+                        )
+                    )
     current_tag = f"v{version}"
     if current_tag in semantic_tags:
         target = subprocess.run(
@@ -218,12 +308,12 @@ def validate_release_notes(
                     repair="恢复根级 .cursor-plugin/plugin.json。",
                 )
             )
-    previous = previous_tag or _infer_previous_tag(repo_root, target_version)
+    previous = (previous_tag or _infer_previous_tag(repo_root, target_version)).strip()
 
     if not VERSION_RE.fullmatch(target_version):
         issues.append(_issue("version.invalid", message=f"invalid version: {target_version}", repair="使用 X.Y.Z 版本号。"))
     else:
-        issues.extend(_git_release_issues(repo_root, target_version))
+        issues.extend(_git_release_issues(repo_root, target_version, previous))
 
     release_path = repo_root / "releases" / f"v{target_version}.md"
     release_text, release_error = _load_text(release_path)

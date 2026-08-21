@@ -113,6 +113,76 @@ def test_init_generates_conditional_protagonist_group_and_heroine(tmp_path, monk
     assert (project_root / "设定集" / "女主卡.md").is_file()
 
 
+def test_init_genesis_excludes_motivation_archetype_and_story_roles(tmp_path, monkeypatch):
+    import init_project as init_project_module
+
+    monkeypatch.setattr(init_project_module, "is_git_available", lambda: False)
+    project_root = tmp_path / "book"
+
+    init_project_module.init_project(
+        str(project_root),
+        title="雾港来信",
+        genre="悬疑",
+        protagonist_name="林舟",
+        protagonist_desire="查明姐姐失踪真相",
+        protagonist_flaw="过度相信旧友",
+        protagonist_archetype="孤狼侦探",
+        protagonist_structure="双主角",
+        heroine_config="单女主",
+        heroine_names="苏云",
+        heroine_role="情感线",
+        co_protagonists="江雪",
+        co_protagonist_roles="调查搭档",
+        antagonist_tiers="终局:商会会长",
+        antagonist_level="终局",
+        factions="巡夜司与商会",
+        target_chapters=50,
+    )
+
+    master = json.loads(
+        (project_root / ".story-system" / "MASTER_SETTING.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "setting_canon" not in master
+    assert master["initial_canon"]["protagonist"] == {"name": "林舟"}
+    assert master["initial_canon"]["characters"] == {
+        "co_protagonists": "江雪",
+        "heroine_names": "苏云",
+    }
+    assert master["initial_canon"]["world"]["factions"] == "巡夜司与商会"
+
+    projection = json.loads(
+        (
+            project_root
+            / ".story-system"
+            / "v3"
+            / "projections"
+            / "canon.json"
+        ).read_text(encoding="utf-8")
+    )
+    serialized_projection = json.dumps(projection, ensure_ascii=False)
+    assert "巡夜司与商会" in serialized_projection
+    assert "林舟" in serialized_projection
+    assert "苏云" in serialized_projection
+    for soft_value in (
+        "查明姐姐失踪真相",
+        "过度相信旧友",
+        "孤狼侦探",
+        "情感线",
+        "调查搭档",
+        "终局:商会会长",
+    ):
+        assert soft_value not in serialized_projection
+
+    # 软设计仍保留给作者和写作模型使用，只是不自动成为 Canon。
+    protagonist_card = (project_root / "设定集" / "主角卡.md").read_text(
+        encoding="utf-8"
+    )
+    assert "查明姐姐失踪真相" in protagonist_card
+    assert "过度相信旧友" in protagonist_card
+
+
 def test_init_persists_canonical_genre_without_injecting_templates(tmp_path, monkeypatch):
     import init_project as init_project_module
 

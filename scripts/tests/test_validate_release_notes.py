@@ -186,6 +186,23 @@ def _init_release_git(root: Path) -> None:
     ).returncode == 0
 
 
+def _run_git(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr.decode("utf-8", errors="replace")
+    return completed
+
+
+def _commit_marker(root: Path, name: str, message: str) -> None:
+    (root / name).write_text(f"{message}\n", encoding="utf-8")
+    _run_git(root, "add", name)
+    _run_git(root, "commit", "-m", message)
+
+
 def test_validate_release_notes_rejects_git_repository_without_release_tags(tmp_path):
     _write_release_files(tmp_path)
     _init_release_git(tmp_path)
@@ -247,3 +264,96 @@ def test_validate_release_notes_rejects_version_lower_than_highest_tag(tmp_path)
         item["code"] == "git.version_not_monotonic"
         for item in report["issues"]
     )
+
+
+def test_validate_release_notes_accepts_existing_latest_previous_tag_before_untagged_target(
+    tmp_path,
+):
+    _write_release_files(tmp_path)
+    _init_release_git(tmp_path)
+    _run_git(tmp_path, "tag", "v1.2.2")
+    _commit_marker(tmp_path, "发布改动.txt", "准备未打标签的新版本")
+
+    target_tag = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", "refs/tags/v1.2.3"],
+        cwd=tmp_path,
+        capture_output=True,
+        check=False,
+    )
+    report = validate_release_notes(
+        tmp_path, version="1.2.3", previous_tag="v1.2.2"
+    )
+
+    assert target_tag.returncode != 0
+    assert report["ok"] is True
+
+
+def test_validate_release_notes_rejects_missing_previous_tag(tmp_path):
+    _write_release_files(tmp_path)
+    _init_release_git(tmp_path)
+    _run_git(tmp_path, "tag", "v1.2.1")
+
+    report = validate_release_notes(
+        tmp_path, version="1.2.3", previous_tag="v1.2.2"
+    )
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "git.previous_tag_missing"
+        for item in report["issues"]
+    )
+
+
+def test_validate_release_notes_rejects_previous_tag_outside_head_history(tmp_path):
+    _write_release_files(tmp_path)
+    _init_release_git(tmp_path)
+    _run_git(tmp_path, "checkout", "-b", "side-release")
+    _commit_marker(tmp_path, "旁支版本.txt", "建立旁支版本")
+    _run_git(tmp_path, "tag", "v1.2.2")
+    _run_git(tmp_path, "checkout", "main")
+    _commit_marker(tmp_path, "主线版本.txt", "继续主线开发")
+
+    report = validate_release_notes(
+        tmp_path, version="1.2.3", previous_tag="v1.2.2"
+    )
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "git.previous_tag_not_ancestor"
+        for item in report["issues"]
+    )
+
+
+def test_validate_release_notes_rejects_skipping_higher_reachable_tag(tmp_path):
+    _write_release_files(tmp_path, previous_tag="v1.2.1")
+    _init_release_git(tmp_path)
+    _run_git(tmp_path, "tag", "v1.2.1")
+    _commit_marker(tmp_path, "版本122.txt", "准备 1.2.2")
+    _run_git(tmp_path, "tag", "v1.2.2")
+    _commit_marker(tmp_path, "版本123.txt", "准备 1.2.3")
+
+    report = validate_release_notes(
+        tmp_path, version="1.2.3", previous_tag="v1.2.1"
+    )
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "git.previous_tag_skips_reachable"
+        for item in report["issues"]
+    )
+
+
+def test_validate_release_notes_infers_latest_reachable_tag_only(tmp_path):
+    _write_release_files(tmp_path, previous_tag="v1.2.1")
+    _init_release_git(tmp_path)
+    _run_git(tmp_path, "tag", "v1.2.1")
+    _run_git(tmp_path, "checkout", "-b", "side-release")
+    _commit_marker(tmp_path, "旁支版本122.txt", "在旁支准备 1.2.2")
+    _run_git(tmp_path, "tag", "v1.2.2")
+    _run_git(tmp_path, "checkout", "main")
+    _commit_marker(tmp_path, "主线版本123.txt", "在主线准备 1.2.3")
+
+    report = validate_release_notes(tmp_path, version="1.2.3")
+
+    assert report["ok"] is True
+    assert report["previous_tag"] == "v1.2.1"

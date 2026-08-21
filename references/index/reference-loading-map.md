@@ -10,7 +10,7 @@
 | review | `references/review-schema.md` | staged 或 historical audit always |
 | review | `skills/canon-ledger-review/references/common-mistakes.md` | 需要区分 confirmed conflict、ambiguity 与忽略项时 |
 | query | `skills/canon-ledger-query/references/system-data-flow.md` | always |
-| query | `tag-specification.md` | 用户明确询问手动标签时；标签只产候选 |
+| query | `skills/canon-ledger-query/references/tag-specification.md` | 用户明确询问手动标签时；标签只产候选 |
 
 命名 CSV 可以在 init/plan/write 中按需检索，但只提供名称候选，不获得 Canon 权威。写法、节奏、爽点、调性和 Anti-AI 资料不由事实 Skill 默认加载。
 

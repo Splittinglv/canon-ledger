@@ -19,9 +19,9 @@ purpose: XML 标签格式参考
 
 | 标签 | 用途 | 必填属性 |
 |------|------|----------|
-| `<entity>` | 新建/自动更新实体（角色/地点/物品/势力/招式） | type, name |
-| `<entity-alias>` | 注册实体别名/称号 | id/ref, alias |
-| `<entity-update>` | 更新实体属性（支持 set/unset/add/remove/inc + 历史追踪） | id/ref, `<set>` 等 |
+| `<entity>` | 提示实体候选（角色/地点/物品/势力/招式） | type, name |
+| `<entity-alias>` | 提示实体别名/称号候选 | id/ref, alias |
+| `<entity-update>` | 提示属性变化候选（set/unset/add/remove/inc） | id/ref, `<set>` 等 |
 | `<skill>` | 金手指技能 | name, level, desc, cooldown |
 | `<foreshadow>` | 伏笔埋设 | content, tier |
 | `<relationship>` | 角色关系 | char1, char2, type |
@@ -30,9 +30,8 @@ purpose: XML 标签格式参考
 ## 属性详解
 
 ### tier（层级）
-- **核心**: 影响主线剧情，必须追踪
-- **支线**: 丰富剧情，应该追踪
-- **装饰**: 增加真实感，可选追踪
+- **核心/支线/装饰**: 只是作者自定义的重要度提示，不改变 compiler policy、
+  checkpoint 或事实证据要求，也不强制追踪软剧情目标。
 
 ### type（实体类型）
 角色 / 地点 / 物品 / 势力 / 招式
@@ -51,13 +50,13 @@ purpose: XML 标签格式参考
 
 标签字段只是候选内容，不能绕过证据、identity resolution、slot transition 或人工 checkpoint 直接更新实体。
 
-> **建议**: `<entity>` 强烈建议补充 `desc` 和 `tier`，否则后续检索和一致性检查会变差。
+`desc` 和 `tier` 都是可选提示；缺少它们不会降低事实证据要求或自动增加人工检查。
 
 ## 放置规则
 
 - **推荐**: 章节末尾统一放置（便于管理）
 - **允许**: 实体首次出现的段落末尾
-- **要求**: 标签独占一行，不夹在正文句子中
+- **格式约定**: 选择使用标签时让标签独占一行，不夹在正文句子中
 
 ### 隐藏写法（推荐）
 

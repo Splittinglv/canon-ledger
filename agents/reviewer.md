@@ -30,10 +30,12 @@ parent_head / workflow_digest
 author_axiom_digest / entity_registry_digest
 N-1 as-of snapshot
 chapter/review contracts（仅作背景）
-mode=staged | historical_audit | author_axiom_recertification
+mode=staged | historical_audit
 ```
 
 缺 exact candidate draft 时停止。旧章只使用给定 as-of HEAD；禁止读取未来事实、state/index、旧 queue 或自由摘要替代正史。
+author-axiom 的 add/update/remove 使用独立 proposal、人工决定和 finalize 通道，
+没有章节正文或 reviewer scan，因此不得伪造为本 agent 的模式。
 
 ## 扫描范围
 
@@ -51,7 +53,7 @@ mode=staged | historical_audit | author_axiom_recertification
 
 - `confirmed_conflict`：当前证据与 exact prior 不能同时成立；必须引用 prior fact digest 和正文证据，进入 rewrite。
 - `ambiguity`：长期事实有正文锚点，但身份、含义或状态转换不唯一；进入人工。
-- `checkpoint`：关键永久事实、核心关系、硬规则、关键物品、重大秘密/时间、承诺/开放问题、retcon 或 axiom recertification；进入人工。
+- `checkpoint`：关键永久事实、核心关系、硬规则、关键物品、重大秘密/时间、承诺/开放问题或 retcon；进入人工。
 - `advisory|audit`：不获得修改 Canon 的权限，也不要求为放行做决定。
 
 模型只能提高所需人工级别，不能降低 compiler policy floor。

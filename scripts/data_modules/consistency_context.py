@@ -108,12 +108,13 @@ _CRAFT_KEY_RE = re.compile(
 )
 _DROP = object()
 
-# 初始化只允许这些结构化事实进入默认上下文。这里刻意没有文风、文笔、
-# 节奏、爽点、目标读者等创作控制字段；作者若需要它们，仍由模型或用户
-# 在写作时自行提供，不会被插件提升为长期 canon。
+# 初始化只允许明确身份与会约束后文的结构化硬事实进入默认上下文。
+# 人物动机、人设类型、剧情定位、文风、节奏和目标读者都属于设计输入；
+# 它们可以保留在策划文件中，但只有作者随后通过 author-axiom 人工确认，
+# 才能成为长期 Canon。
 _INITIAL_CANON_FIELDS = {
     "project": frozenset({"title", "genre"}),
-    "protagonist": frozenset({"name", "desire", "flaw", "archetype"}),
+    "protagonist": frozenset({"name"}),
     "world": frozenset(
         {
             "scale",
@@ -133,14 +134,8 @@ _INITIAL_CANON_FIELDS = {
     ),
     "characters": frozenset(
         {
-            "protagonist_structure",
-            "heroine_config",
             "heroine_names",
-            "heroine_role",
             "co_protagonists",
-            "co_protagonist_roles",
-            "antagonist_tiers",
-            "antagonist_level",
         }
     ),
 }

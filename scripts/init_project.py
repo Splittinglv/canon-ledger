@@ -367,8 +367,9 @@ def init_project(
     atomic_write_json(state_path, state, use_lock=True, backup=False)
 
     # 首章不能依赖后续 Story System 调用才获得初始化设定。把作者明确填写
-    # 的事实写入闭合 schema；创作风格、文笔、节奏、爽点等字段故意不在
-    # initial_canon 中。后续 story-system 重建 MASTER_SETTING 时会保留它。
+    # 的身份与硬世界/规则事实写入闭合 schema。人物动机、人设类型、剧情
+    # 定位、文风和节奏只保留在策划文件；若作者要把它们硬化，必须在初始化
+    # 后通过 managed author-axiom 人工确认。
     initial_canon = {
         "project": {
             "title": title,
@@ -376,9 +377,6 @@ def init_project(
         },
         "protagonist": {
             "name": protagonist_name,
-            "desire": protagonist_desire,
-            "flaw": protagonist_flaw,
-            "archetype": protagonist_archetype,
         },
         "world": {
             "scale": world_scale,
@@ -399,14 +397,8 @@ def init_project(
             "irreversible_cost": gf_irreversible_cost,
         },
         "characters": {
-            "protagonist_structure": protagonist_structure,
-            "heroine_config": heroine_config,
             "heroine_names": heroine_names,
-            "heroine_role": heroine_role,
             "co_protagonists": co_protagonists,
-            "co_protagonist_roles": co_protagonist_roles,
-            "antagonist_tiers": antagonist_tiers,
-            "antagonist_level": antagonist_level,
         },
     }
     # 与默认上下文使用同一净化器，避免初始化和运行时形成两套边界。
@@ -693,12 +685,9 @@ def init_project(
         )
     _write_text_if_missing(project_path / "设定集" / "文风提示词.md", style_prompt.rstrip() + "\n")
 
-    # 初始化完成时就把作者明确填写的结构化设定绑定到 MASTER_SETTING。
-    # 文风提示词不属于事实快照；未填写模板由同步器排除。后续手改设定
-    # 而未刷新合同时，load-context 会因哈希不一致而 fail closed。
-    from data_modules.story_contracts import synchronize_setting_canon
-
-    synchronize_setting_canon(project_path)
+    # 生成的设定 Markdown 是可继续编辑的策划材料，不在初始化时整份提升为
+    # Canon。初始硬事实已经进入上面的 closed initial_canon；后续新增、修改
+    # 或删除硬设定统一走 managed author-axiom 的逐项人工确认。
 
     subagent_models = output_subagent_models.strip() if output_subagent_models else ""
     if not subagent_models:

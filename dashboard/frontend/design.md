@@ -1,7 +1,6 @@
 # 叙典 CanonLedger 仪表盘设计规范
 
-> Dashboard 前端设计规范，所有页面必须遵守。
-> 原型预览：`docs/archive/architecture/dashboard-prototype.html`
+> Dashboard 前端设计规范，以当前 `src/` 实现和 Canon v3 workflow API 为准。
 
 ## 视觉风格：复古像素 / 8-bit 游戏
 
@@ -21,8 +20,8 @@
 | `--accent-blue` | `#26a8ff` | 主强调（数值、active 态） |
 | `--accent-purple` | `#7f5af0` | 次强调（Strand、badge） |
 | `--accent-green` | `#2ec27e` | 成功（审查通过、已回收） |
-| `--accent-amber` | `#f5a524` | 警告（紧急伏笔、中等分数） |
-| `--accent-red` | `#d7263d` | 危险（blocking、超期） |
+| `--accent-amber` | `#f5a524` | 警告（紧急伏笔、待人工） |
+| `--accent-red` | `#d7263d` | 危险（事实冲突、无效状态、超期） |
 | `--accent-cyan` | `#00b8d4` | 信息（badge） |
 | `--border-main` | `#2a220f` | 主边框 |
 | `--border-soft` | `#8f7f5c` | 次级边框 |
@@ -121,10 +120,13 @@
 
 | 图表 | 类型 | 数据 | 交互 |
 |------|------|------|------|
-| 审查得分趋势 | 折线图 (line) | 每章 overall_score | 翻页（每页 50 章）+ 均值 markLine |
+| 审查问题趋势 | 分组柱状图 | 每章事实问题数 / 已确认冲突数 | 翻页（每页 50 章） |
 | 字数分布 | 柱状图 (bar) | 按卷汇总字数 | 标签显示万字 |
-| Strand 整体分布 | 环形图 (pie) | quest/fire/constellation 计数 | 百分比标签 |
 | 紧急伏笔 Top 5 | 表格 | 内容、状态、埋设章、目标章、紧急度 | — |
+
+页首同时展示 authoritative workflow state、CURRENT/projection 是否一致和恢复动作。
+默认面板只展示长期事实一致性相关计数、伏笔、章节与字数；不展示钩子强度、
+节奏雷达、文风或审查得分。
 
 ### 角色图鉴页 (CharactersPage)
 
@@ -141,15 +143,6 @@
 - 节点：方形 (`symbol: 'rect'`)，主角加大 + 金色 (`#f5a524`)
 - 边：直线 + 标签，`curveness: 0.1`
 - 类别色：角色 `#26a8ff`、势力 `#7f5af0`、地点 `#2ec27e`
-
-### 总览页 (OverviewPage)
-
-| 图表 | 类型 | 数据 | 交互 |
-|------|------|------|------|
-| 审查问题趋势 | 柱状图 | 每章问题数 / 阻断数 | 翻页（每页 50 章） |
-| 字数分布 | 柱状图 | 按卷汇总字数 | — |
-
-默认面板只展示一致性相关计数：设定/审查问题、伏笔、章节与字数。不展示钩子强度、节奏雷达或审查得分。
 
 ### 伏笔追踪页 (ForeshadowingPage)
 
@@ -178,13 +171,13 @@
 
 ## 导航
 
-| 图标 | 标签 | 路由 |
-|------|------|------|
-| 📊 | 总览 | `/` |
-| 👤 | 角色图鉴 | `/characters` |
-| 🔖 | 伏笔追踪 | `/foreshadowing` |
-| 📁 | 文档浏览 | `/files` |
-| ⚙️ | 系统状态 | `/system` |
+| 本地图标组件 | 标签 | 路由 |
+|--------------|------|------|
+| `ChartBarIcon` | 总览 | `/` |
+| `UsersIcon` | 角色图鉴 | `/characters` |
+| `BookmarkIcon` | 伏笔追踪 | `/foreshadowing` |
+| `FolderIcon` | 文档浏览 | `/files` |
+| `SlidersIcon` | 系统状态 | `/system` |
 
 ## 大数据量适配
 
@@ -195,7 +188,8 @@
 
 ## 图标
 
-使用 [Pixelarticons](https://pixelarticons.com/)（`pixelarticons` npm 包）。
+使用 `src/icons.jsx` 中随仓库维护的本地 24×24 SVG React 组件；当前没有
+`pixelarticons` npm 依赖。新增图标应延续下列像素网格约束，并通过前端构建验证。
 
 - 24×24 网格，无抗锯齿，纯像素风
 - SVG `fill="currentColor"`，颜色继承父元素，天然适配色板
@@ -204,24 +198,24 @@
 
 ### 导航图标映射
 
-| 页面 | 图标名 | 组件 |
-|------|--------|------|
-| 总览 | `chart-bar` | `<ChartBar />` |
-| 角色图鉴 | `users` | `<Users />` |
-| 伏笔追踪 | `bookmark` | `<Bookmark />` |
-| 文档浏览 | `folder` | `<Folder />` |
-| 系统状态 | `sliders` | `<Sliders />` |
+| 页面 | 组件 |
+|------|------|
+| 总览 | `<ChartBarIcon />` |
+| 角色图鉴 | `<UsersIcon />` |
+| 伏笔追踪 | `<BookmarkIcon />` |
+| 文档浏览 | `<FolderIcon />` |
+| 系统状态 | `<SlidersIcon />` |
 
 ### 其他常用图标
 
-| 用途 | 图标名 |
-|------|--------|
-| 播放/暂停 | `play` / `pause` |
-| 翻页 | `chevron-left` / `chevron-right` |
-| 跳到最新 | `chevrons-right` |
-| 刷新/诊断 | `reload` |
-| 连接状态 | `wifi` / `wifi-off` |
-| 搜索/筛选 | `search` / `filter` |
+| 用途 | 本地组件 |
+|------|----------|
+| 播放/暂停 | `PlayIcon` / `PauseIcon` |
+| 翻页 | `ChevronLeftIcon` / `ChevronRightIcon` |
+| 跳到最新 | `ChevronsRightIcon` |
+| 刷新/诊断 | `ReloadIcon` |
+| 连接状态 | `WifiIcon` / `WifiOffIcon` |
+| 搜索 | `SearchIcon` |
 
 ## 不做的事
 
@@ -229,5 +223,5 @@
 - 不用渐变背景（进度条除外）
 - 不用 soft shadow
 - 不用 glassmorphism / neumorphism
-- 不用 emoji 做图标——用 Pixelarticons
+- 不用 emoji 做图标——使用随仓库维护的本地 SVG 组件
 - 不用 3D 图表（原 react-force-graph-3d 替换为 ECharts 2D graph）

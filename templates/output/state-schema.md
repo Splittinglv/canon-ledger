@@ -1,74 +1,38 @@
-# state.json 结构说明
+# state.json 兼容投影说明
 
-> 该文件为运行态精简状态，避免体量膨胀。实体等大数据存于 index.db。
->
-> 以下示例与 `update_state.py` 当前校验字段保持一致。
+> `state.json` 是 Canon v2 遗留的兼容读模型，不是 Canon v3 权威来源。当前写作、查询、审核和发布不得直接修改它，也不得在 HEAD 不可用时回退读取它。
 
-```json
-{
-  "project_info": {
-    "title": "",
-    "genre": "",
-    "genre_label": "",
-    "genre_tags": {
-      "route": [],
-      "trope": [],
-      "format": [],
-      "templates": []
-    },
-    "target_words": 0,
-    "target_chapters": 0
-  },
-  "progress": {
-    "current_chapter": 0,
-    "total_words": 0,
-    "last_updated": "",
-    "volumes_completed": [],
-    "current_volume": 1,
-    "volumes_planned": [
-      {"volume": 1, "chapters_range": "1-100", "planned_at": "2026-02-01"}
-    ]
-  },
-  "protagonist_state": {
-    "name": "",
-    "power": {"realm": "", "layer": 0, "bottleneck": ""},
-    "location": {"current": "", "last_chapter": 0},
-    "golden_finger": {"name": "", "level": 0, "cooldown": 0}
-  },
-  "relationships": {},
-  "world_settings": {
-    "power_system": [],
-    "factions": [],
-    "locations": []
-  },
-  "review_checkpoints": [
-    {"chapters": "1-5", "report": "审查报告/第1-5章审查报告.md", "reviewed_at": "2026-02-26 20:00:00"}
-  ],
-  "strand_tracker": {
-    "last_quest_chapter": 0,
-    "last_fire_chapter": 0,
-    "last_constellation_chapter": 0,
-    "current_dominant": "quest",
-    "chapters_since_switch": 0,
-    "history": []
-  },
-  "plot_threads": {
-    "active_threads": [],
-    "foreshadowing": []
-  },
-  "disambiguation_warnings": [],
-  "disambiguation_pending": [],
-  "chapter_meta": {
-    "0001": {
-      "hook": {"type": "危机钩", "content": "...", "strength": "strong"},
-      "pattern": {
-        "opening": "冲突开场",
-        "hook": "危机钩",
-        "emotion_rhythm": "低→高",
-        "info_density": "medium"
-      },
-      "ending": {"time": "夜晚", "location": "宗门大殿", "emotion": "紧张"}
-    }
-  }
-}
+## 当前权威关系
+
+```text
+.story-system/v3/CURRENT
+  -> immutable manifest / commits / decisions
+  -> rebuild-projection
+  -> state.json（如兼容组件需要）
 ```
+
+活动状态、目标章、是否可继续和恢复动作统一读取
+`canon-v3 status` 返回的 `canon-v3/workflow-snapshot/v2`。事实查询统一读取与
+CURRENT 同一 HEAD 绑定的 Canon v3 projection/API。
+
+## 兼容字段
+
+旧工具可能仍展示下列顶层字段：
+
+- `project_info`：书名、题材与目标规模等项目元信息；
+- `progress`：旧版章节/字数投影；
+- `protagonist_state`、`relationships`、`world_settings`：从历史事实派生的兼容视图；
+- `plot_threads`、`chapter_meta`、`strand_tracker`：旧版规划或展示数据；
+- `review_checkpoints`、`disambiguation_*`：历史审查数据，不是当前人工队列。
+
+这些字段可能缺失、滞后或被删除重建。它们不能证明某事实已经生效，也不能覆盖
+active author axioms、STAGING 或 HEAD。
+
+## 维护规则
+
+- 不通过 `update_state.py`、fact 型 `update-state` 或文件编辑写入当前事实。
+- 投影落后时执行 `canon-v3 rebuild-projection`，不要 replay/retry 旧写链。
+- 诊断时同时记录 CURRENT HEAD、projection binding 和 workflow digest；只看到
+  `state.json` 内容不能判定项目健康。
+- 需要作者改变长期硬设定时，使用 managed author-axiom
+  prepare/decide/finalize；人物动机、文风和剧情偏好不写入事实投影。
