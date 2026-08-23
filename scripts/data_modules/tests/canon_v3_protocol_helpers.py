@@ -46,9 +46,9 @@ def decision_request(
     for raw in decisions:
         item = dict(raw)
         case = cases[str(item["case_key"])]
-        bound.append(
-            {
-                **item,
+        binding = case.get("decision_binding")
+        if not isinstance(binding, Mapping):
+            binding = {
                 "target_digest": case["target_digest"],
                 "material_digest": case["review_material"][
                     "material_digest"
@@ -56,6 +56,11 @@ def decision_request(
                 "expected_decision_head_hash": case.get(
                     "decision_head_hash"
                 ),
+            }
+        bound.append(
+            {
+                **item,
+                **dict(binding),
             }
         )
     return {

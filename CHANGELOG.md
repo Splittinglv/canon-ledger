@@ -1,5 +1,30 @@
 # 更新日志
 
+## v8.1.0 - 长期事实边界、恢复与公开协议全面收口
+
+发版范围：`v8.0.0..v8.1.0`。
+
+### 给作者看的变化
+
+- 新项目和新 cutover 只把身份、时间、状态、关系、知识、在场、持有和硬规则等客观长期事实收入 Canon。文风、文笔、动机、性格、人设、成长弧和章纲履约只是作者/模型偏好，不进强制检查。
+- 新书初始化只接受不存在或严格空的目标，先在同级隔离目录完整构建再发布；已有 v3、legacy、malformed、非空或 symlink 目标都不会被 init 覆盖。
+- 作者可明确放弃当前未发布事务：插件按 exact transaction kind/stage digest 归档 STAGING，保留不可变证据并要求重新 prepare，不再靠直接删文件解锁。
+- 规划合同有了 planning-only 刷新入口：只写卷/章/审查三份派生 JSON，章纲节点不变成事实 blocker；新增永久硬设定仍独立走 author-axiom 人工发布。
+- 存量 v2 或 active author-axiom 含软偏好时项目保持只读；只有 clean analysis 或逐项人工 supersession 完成后才恢复写作，软内容不能经 `world_rule` 包装进入 Canon。
+- 历史章默认只读审计。新发布的 exact 正文字节会在 HEAD 切换前内容寻址归档；历史导出固定 commit、decisions、当时设定与身份注册，不从引文或模型记忆猜旧正文。
+- Dashboard、Doctor、Hook、CLI 和 9 个 Skill 统一显示同一 HEAD-bound workflow。缺少大纲、规划合同或 legacy index 只是兼容告警，不再把健康正史误报成不可写。
+
+### 给维护者
+
+- 新增统一有序人工 Action Registry 和 typed public case/decision binding，章节、author-axiom、legacy recertification 不再各自猜动作与字段。
+- 新增 candidate draft/reviewer/author-axiom proposal 运行时 JSON Schema 与 validator；Reviewer v3 精确绑定 `candidate_id → candidate_digest`，章节 proposal 只由 runtime assembler 计算 digest 并组装。
+- 迁移发布 `legacy-genesis/v3 + legacy-fact-snapshot/v3`。已知软字段只留 exclusion receipt；存量 v2 保留原字节解释并附带只读 fact-boundary analysis。有下游引用的 genesis supersession 在 prepare/finalize 都被拒绝，要求 clean-target fork。
+- status/query/Doctor/Dashboard 读取不再创建 staging/publish lock。公开 as-of/history/query 共用 HEAD-bound 净化视图并携带活动 author axioms；legacy state/index/RAG/memory/entity adapters 即使带旧 opt-in 也全部拒绝。
+- CLI 与 Hook 共用 exact command policy；backup/archive、legacy story-system 持久化和所有退役 writer 不能再借可信脚本路径绕过 v3。Canon Rule 明确覆盖 `正文/**/*.md`。
+- 新增 exact/idempotent `archive-staging`、HEAD-reachable historical export、planning contract batch digest 和 finalize-before-CAS revision archive。
+- Dashboard 退役 legacy index analytics 主导航，事实页统一绑定 HEAD/generation/workflow/projection digest；服务继续仅 GET，不提供人工决定按钮。
+- 新增跨平台 `run_acceptance.py`、current-authority 收集审计、Rule/Skill/Agent/command-policy 语义包校验和真实 CLI 行为链。冻结 v2 规格仍显式 deselect，不为清零数字重开退役 writer。
+
 ## v8.0.0 - 正史写入统一为可验证、可确认的 Canon v3 事务链
 
 发版范围：`v7.2.0..v8.0.0`。

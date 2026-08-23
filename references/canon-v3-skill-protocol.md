@@ -60,7 +60,7 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_le
 |---|---|
 | `migration_required` + `bootstrap_mode=new_project` | 仅对已识别、无 CURRENT 且无 accepted legacy prefix 的 clean skeleton 执行 `canon-v3 initialize`；统一 init 工具已成功时不重复调用 |
 | `migration_required` + `bootstrap_mode=legacy_cutover` | `canon-v3 migrate` |
-| `migration_required` + `bootstrap_mode=legacy_repair` | 只执行 snapshot 的 `canon-v3 audit-cutover`，按稳定 reason code 由作者恢复冻结来源或显式重建后缀，再重读 status；不得再次调用 migrate、猜测新边界或原地 initialize |
+| `migration_required` + `bootstrap_mode=legacy_repair` | 只执行 snapshot 的 `canon-v3 audit-cutover`，按稳定 reason code 恢复冻结来源，再重读 status；有意修改且无法恢复时在 clean target fork/rebuild，不得原地重写后缀、再次调用 migrate、猜测新边界或 initialize |
 | `migration_required` + `bootstrap_mode=recertification` | `repair-cutover --dry-run`，再由 `/canon-ledger-confirm` 逐项确认并 apply |
 | `ready` | 仅允许 `allowed_write_chapters` 中的目标章进入 plan/write/staged review |
 | `ready_to_finalize` | 只允许对当前 STAGING 做 exact finalize |
@@ -71,6 +71,9 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_le
 | `invalid` | 只允许 doctor、只读诊断和 style-only 操作 |
 
 只有 `state=ready && can_write_next=true && projection_fresh=true` 才能建议开始下一章。成功建立 CURRENT 后 `bootstrap_mode=canon_v3`；`new_project` 只表示尚待 initialize 的无 HEAD 状态，不是初始化成功标志。
+当 recertification 被已有 chapter/author-axiom STAGING 占用时，status 可返回
+`primary_action.id=archive_conflicting_staging` 以及 exact kind/digest。这不是自动授权；
+只有作者明确放弃未发布事务后，`confirm` 才执行 archive，然后重读 status。
 
 ## 有版本的人工操作
 
@@ -112,6 +115,13 @@ CURRENT CAS 发布；但 manifest 只追加 author-axiom commit，章节列表�
 `latest_chapter` 与 `allowed_write_chapters` 不变。响应丢失只用原 finalize
 request 做 exact retry。
 
+作者明确要求放弃当前 chapter/author-axiom STAGING 时，统一路由
+`/canon-ledger-confirm` 处理。必须从最新 status 逐值复制
+`transaction_kind + stage_digest`，展示“未发布指针将归档、对象保留、之后必须
+重新 prepare”后，只调用 `canon-v3 archive-staging` 并传入 exact
+`--transaction-kind` 与 `--expected-stage-digest`。摘要变化时拒绝，exact retry 幂等。禁止直接删文件或
+使用兼容别名 `cancel`。
+
 legacy v1 genesis 的 recertification 不伪造章节或 axiom STAGING。`status` 必须返回
 `transaction_kind=legacy_recertification`、`head_hash`、
 `recertification_plan_digest`、`recertification_publish_token` 和全部逐项 cases。
@@ -131,7 +141,9 @@ canon-v3/legacy-recertification-publish-request/v1
 `repair-cutover --apply --input-file <request>`。它在统一 staging lock 下重读 legacy
 来源、重新编译 detached suffix，并对 CURRENT 做 CAS；partial、stale 或并发变化一律不发布。
 响应丢失只允许原请求 exact retry。任何 chapter/author-axiom STAGING 存在时，
-recertification 审计与 apply 都必须报告冲突，不能出现第二个权威事务。
+recertification 审计与 apply 都必须报告冲突，不能出现第个权威事务。
+snapshot 可返回 exact `archive_conflicting_staging` primary action，但仍需作者明确放弃
+该未发布事务后才执行；归档后重读 status，再开始 detached recertification。
 
 ## 负裁决与语义谱系
 
@@ -152,9 +164,18 @@ exact chapter binding + N-1 HEAD + active author axioms
 ```
 
 - 每个 source 必须被 `support_map` 使用；不得加入未参与证明的 source。
-- reviewer 必须收到 exact candidate draft；不得自行重写候选。
+- reviewer 必须收到 exact candidate draft 及其 validator 返回的
+  `candidate_id -> candidate_digest` map；必须逐项回显，不得自行重写或重新配对候选。
 - scan attestation 必须绑定 chapter SHA、parent HEAD、candidate set、entity registry 和 active author-axiom digest。
 - 模型不能写 state/entity/timeline delta、人工队列或正史。
+
+章节 Agent 必须先读 `agent-schema candidate-draft|reviewer-output`，分别通过
+`validate-agent-output`，再由 runtime `assemble-proposal` 计算 digests、逐项比较 reviewer
+map 与 draft map 并生成最终 strict proposal。审核后互换 candidate ID 必须失败。
+author-axiom 则使用 data-agent `mode=author_axiom_proposal`、
+`agent-schema/validate-agent-output author-axiom-proposal` 与唯一文件
+`.canon-ledger/tmp/canon_v3_author_axiom_proposal.json`。两条路径都不允许 Agent 手算
+candidate/record/effect/transaction digest 或根据文档猜 strict schema。
 
 ## 设定、规划与文风
 
@@ -168,14 +189,33 @@ exact chapter binding + N-1 HEAD + active author axioms
   删除，active authority 也不回读 live 文件。
 - add/update/remove 都生成 exact 人工 case；旧 active record 未提及会形成
   remove case，不能静默删除。同语义更换 source 不会绕过负裁决谱系。
+- runtime 同时检查 axiom key、closed category 与实际 value；文风、文笔、动机、人格、
+  人设、成长弧等软内容即使用 `world_rule` 或无害 key 包装也必须拒绝。存量软 record
+  会让 workflow 保持只读，清理 proposal 只能精确保留其它硬 records 并逐项人工 remove。
 - 未重新认证的设定不得进入事实查询或写作上下文。
 - `设定集/文风提示词.md` 永远属于 style-only；修改它不得改变 HEAD、workflow、migration digest、projection 或人工 case。
 
+大纲落盘后只能通过 `canon-v3 planning refresh-contracts --chapter N`刷新卷/章/审查
+三份 planning-only 合同。先 dry-run 核对 source/input/head 和共同
+`planning_batch_digest`；实际刷新不能同步 MASTER/设定集、创建 STAGING 或将章纲
+节点放入事实 blocker。
+
+历史章审查只使用 `historical-export --chapter N --revision R`。export 必须是当前
+HEAD 祖先可达的 exact commit/transaction/decisions 与当时 axiom/registry，不读
+STAGING、Git、legacy index 或未来事实。只读 audit 不生成人工决定或改 HEAD。
+
 ## Legacy 边界
 
-生产 Skill 禁止调用：`chapter-commit`、`chapter-commit --from-last-commit`、旧 `human-review resolve`、旧 `review-pipeline` 写队列、事实型 `update-state`，以及 state/index/memory/rag/entity 的事实写命令。
+生产 Skill 禁止调用：`chapter-commit`、`chapter-commit --from-last-commit`、旧 `human-review resolve`、旧 `review-pipeline` 写队列、事实型 `update-state`，以及全部 state/index/memory/rag/entity adapters。这些 adapters 即使执行查询也可能建库或写 observation。
 
-legacy 数据只允许迁移编译器读取或以 `legacy_read_only` 标签查询，不能成为写作上下文或发布依据。
+legacy 数据只允许迁移编译器以及纯读 `audit-cutover` / `repair-cutover --dry-run` 读取；退役参数 `--legacy-read-only` 不再开放 adapter 查询。legacy 不能成为写作上下文或发布依据。
+
+新 cutover 只把客观长期事实收入 `legacy-genesis/v3 + legacy-fact-snapshot/v3`；
+已知文风/动机/性格/人设/成长弧只留 exclusion receipt，不进 active Canon。旧 v2
+按原字节语义校验，`audit-cutover|repair-cutover --dry-run` 附带只读
+`fact_boundary_analysis`。`ready_to_supersede` fragment 必须合并进保留全部当前
+author-axiom records 的完整 proposal；`manual_fork_required` 或人工分类未完成时保持只读。
+只有 `clean` 才能继续写作；其它 state 不得通过 query/context 消费污染投影。
 
 ## 报告与恢复
 

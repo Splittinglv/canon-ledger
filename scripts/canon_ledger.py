@@ -5,7 +5,7 @@
 用法示例：
   python "<SCRIPTS_DIR>/canon_ledger.py" preflight
   python "<SCRIPTS_DIR>/canon_ledger.py" where
-  python "<SCRIPTS_DIR>/canon_ledger.py" index stats
+  python "<SCRIPTS_DIR>/canon_ledger.py" canon-v3 status
 
 该入口负责设置插件脚本路径，并把命令转发给 CanonLedger 数据模块。
 """

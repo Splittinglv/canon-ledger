@@ -1,227 +1,106 @@
-# 叙典 CanonLedger 仪表盘设计规范
+# 叙典 CanonLedger Dashboard 设计规范
 
-> Dashboard 前端设计规范，以当前 `src/` 实现和 Canon v3 workflow API 为准。
+Dashboard 是 Canon v3 的只读观察面，不是第二个工作流引擎，也不是人工裁决入口。
 
-## 视觉风格：复古像素 / 8-bit 游戏
+## 权威数据边界
 
-像 RPG 状态面板遇上写作仪表盘。有趣、nerd、像素级精确。
+- `/api/canon-v3/workflow` 直接展示公开 WorkflowSnapshot，不在前端推断状态。
+- 所有事实页面只接受 fresh Canon projection/history，并展示 exact HEAD、generation 和 binding。
+- projection stale、migration 或 invalid 时展示结构化错误与 `primary_action`，不能转换为空列表。
+- legacy `index.db`、旧 review metrics、旧合同树和 Story Runtime 不能驱动主导航。
+- 退役端点保留结构化 410，仅用于让旧客户端发现迁移方向。
+- Dashboard 只发 GET；不提供 decide、finalize、cancel 或其他 Canon 写操作。
 
-## 色板
+## 信息架构
+
+### 侧栏
+
+侧栏持续展示：
+
+- exact workflow state；
+- HEAD 短哈希与 generation；
+- `can_write_next`；
+- SSE 连接状态。
+
+### 总览
+
+总览必须直接展示：
+
+- exact workflow state 和协议版本；
+- HEAD、generation、workflow digest、authority view digest；
+- 目标章、最新 Canon 章、`can_write_next`、`can_finalize`；
+- 当前 STAGING、transaction kind、transaction hash；
+- 人工 cases、case 状态和 exact `allowed_actions`；
+- 唯一 `primary_action` 的 ID、说明和命令。
+
+`primary_action` 仅供阅读和复制。用户应回到对应 CanonLedger Skill 执行。
+
+### 角色图鉴
+
+人物、状态和关系来自一个 HEAD-bound `/api/canon-v3/characters` 响应。页面展示 binding，并保留实体列表、状态历史和章节关系时间轴。读取失败时明确显示结构化 Canon 错误。
+
+### 开放问题
+
+开放问题页调用 `/api/canon-v3/obligations`，只展示 Canon `obligations` 和 `lifecycle_history` 中的 open-loop：
+
+- 活跃问题；
+- 提出章；
+- 已回收问题、回收章和回收事实；
+- fact digest 与 HEAD binding。
+
+不从 `project_info.plot_threads`、大纲、目标章或 legacy index 推导紧急度。
+
+### 文档浏览
+
+文档浏览只读展示正文、大纲和设定集文件。这里的内容不是 Canon 事实视图，不能用来替代 HEAD-bound API。
+
+### 系统状态
+
+系统页展示：
+
+- WorkflowSnapshot 的公开协议字段；
+- Canon projection 是否 fresh；
+- 当前 HEAD 可达的 v3 commit 历史；
+- commit 响应与 workflow 的 HEAD/generation 是否完全一致。
+
+系统页不展示旧五路 projection、Mainline/Fallback、旧合同树或 legacy RAG/index 统计。
+
+## 错误展示
+
+事实接口错误使用 `canon-v3/dashboard-error/v1`。前端至少显示：
+
+- `code`；
+- exact workflow state；
+- `primary_action`；
+- 是否可用于写作。
+
+409 表示当前无法形成 fresh HEAD-bound 事实视图；410 表示 legacy Dashboard 端点已退役。两者都不能静默显示为“没有数据”。
+
+## 视觉规范
+
+整体使用复古像素状态面板风格：
 
 | 变量 | 色值 | 用途 |
-|------|------|------|
-| `--bg-main` | `#fff7e8` | 页面背景（带 14px 网格线） |
-| `--bg-panel` | `#fffdf6` | 表格/面板内背景 |
+|---|---|---|
+| `--bg-main` | `#fff7e8` | 页面背景 |
 | `--bg-card` | `#fffaf0` | 卡片背景 |
-| `--bg-card-2` | `#fff3d5` | 表头、次级卡片 |
 | `--text-main` | `#2a220f` | 主文字 |
-| `--text-sub` | `#5d5035` | 次要文字 |
-| `--text-mute` | `#8f7f5c` | 标签、占位 |
-| `--accent-blue` | `#26a8ff` | 主强调（数值、active 态） |
-| `--accent-purple` | `#7f5af0` | 次强调（Strand、badge） |
-| `--accent-green` | `#2ec27e` | 成功（审查通过、已回收） |
-| `--accent-amber` | `#f5a524` | 警告（紧急伏笔、待人工） |
-| `--accent-red` | `#d7263d` | 危险（事实冲突、无效状态、超期） |
-| `--accent-cyan` | `#00b8d4` | 信息（badge） |
-| `--border-main` | `#2a220f` | 主边框 |
-| `--border-soft` | `#8f7f5c` | 次级边框 |
+| `--accent-blue` | `#26a8ff` | 当前/信息 |
+| `--accent-green` | `#2ec27e` | ready/fresh/accepted |
+| `--accent-amber` | `#f5a524` | awaiting human/required |
+| `--accent-red` | `#d7263d` | stale/invalid/rewrite |
 
-### ECharts 系列色序
+- 卡片使用 3px 硬边框和像素阴影，不使用圆角。
+- digest/命令使用等宽字体并允许断行。
+- 状态不能只靠颜色表达，必须同时展示 exact 文本。
+- 桌面端侧栏 240px；1180px 以下双列降为单列；820px 以下导航改为横向滚动。
 
-```
-['#26a8ff', '#f5a524', '#7f5af0', '#2ec27e', '#d7263d', '#00b8d4', '#ff5c8a']
-```
+## 测试要求
 
-### Strand 专用色
-
-| Strand | 色值 | CSS 类 |
-|--------|------|--------|
-| Quest | `#26a8ff` | `.strand-quest` |
-| Fire | `#ff5c8a` | `.strand-fire` |
-| Constellation | `#7f5af0` | `.strand-constellation` |
-
-### 伏笔状态色
-
-| 状态 | 色值 | Badge |
-|------|------|-------|
-| 超期 (overdue) | `#d7263d` | `.badge-red` |
-| 紧急 (urgent) | `#f5a524` | `.badge-amber` |
-| 活跃 (active) | `#26a8ff` | `.badge-blue` |
-| 已回收 (resolved) | `#2ec27e` | `.badge-green` |
-
-## 字体
-
-- **标题/Logo**：`Press Start 2P`，11px，字间距 0.08em
-- **正文/数据**：`Noto Sans SC`，14px，font-weight 500-700
-- **数字**：tabular-nums（等宽数字）
-- **图例/小标签**：`Noto Sans SC` 13px，font-weight 600
-
-## 边框与阴影
-
-- 卡片：`3px solid #2a220f`，阴影 `6px 6px 0 #2a220f`
-- 次级容器：`2px solid #8f7f5c`，阴影 `3px 3px 0 #8f7f5c`
-- 无圆角（0px）——像素风不用圆角
-- 所有边框硬直线
-
-## 组件规范
-
-**Badge**：`2px solid #2a220f`，padding `3px 8px`，配色见 `.badge-*` 类。
-
-**表格**：`.table-wrap` 包裹，表头 `--bg-card-2` 底色，行 hover `#fff4d8`，支持分页。
-
-**进度条**：`12px` 高，`2px` 硬边框，填充渐变 `#26a8ff → #7f5af0`。
-
-**按钮/导航**：`2px solid` 边框，hover 时微移 `-1px, -1px`。active 态蓝底。
-
-**统计卡**：`.stat-card` 内含 `.stat-label`（mute 色 13px）、`.stat-value`（accent-blue 28px）、`.stat-sub`（sub 色 13px）。
-
-**翻页器 (Pager)**：`← 前 N` / `页码信息` / `下一页 →` / `跳到最新 →`，按钮用 `.page-btn` 样式。
-
-**筛选按钮组**：`.filter-group` flex 排列，`.filter-btn` 2px 边框，active 态蓝底蓝边。
-
-## ECharts 像素风主题
-
-注册为 `pixel` 主题，所有图表统一使用 `echarts.init(el, 'pixel')`。
-
-### 主题配置要点
-
-```js
-{
-  color: ['#26a8ff','#f5a524','#7f5af0','#2ec27e','#d7263d','#00b8d4','#ff5c8a'],
-  backgroundColor: 'transparent',
-  tooltip: {
-    backgroundColor: '#fffaf0',
-    borderColor: '#2a220f',
-    borderWidth: 2,
-    extraCssText: 'border-radius:0;box-shadow:3px 3px 0 #2a220f;'
-  },
-  // 坐标轴
-  axisLine:  { lineStyle: { color: '#8f7f5c', width: 2 } },
-  axisLabel: { color: '#8f7f5c', fontSize: 12 },
-  splitLine: { lineStyle: { color: '#e8dcc4', type: 'dashed' } }
-}
-```
-
-### 图表通用规则
-
-| 规则 | 说明 |
-|------|------|
-| 无圆角 | tooltip、bar、节点均不用 borderRadius |
-| 硬描边 | 所有 item `borderColor: '#2a220f', borderWidth: 2` |
-| 方形符号 | 折线图数据点 `symbol: 'rect', symbolSize: 8` |
-| 线宽 3px | 折线图 `lineStyle.width: 3`，不用 smooth |
-| bar 无圆角 | 柱状图默认方形 |
-| 面积填充 | 用 20% 透明度线性渐变到透明 |
-| markLine | 均值线/当前章节线用 `type: 'dashed'` 或 `solid`，颜色匹配语义 |
-
-## 各页图表规格
-
-### 总览页 (OverviewPage)
-
-| 图表 | 类型 | 数据 | 交互 |
-|------|------|------|------|
-| 审查问题趋势 | 分组柱状图 | 每章事实问题数 / 已确认冲突数 | 翻页（每页 50 章） |
-| 字数分布 | 柱状图 (bar) | 按卷汇总字数 | 标签显示万字 |
-| 紧急伏笔 Top 5 | 表格 | 内容、状态、埋设章、目标章、紧急度 | — |
-
-页首同时展示 authoritative workflow state、CURRENT/projection 是否一致和恢复动作。
-默认面板只展示长期事实一致性相关计数、伏笔、章节与字数；不展示钩子强度、
-节奏雷达、文风或审查得分。
-
-### 角色图鉴页 (CharactersPage)
-
-| 图表 | 类型 | 数据 | 交互 |
-|------|------|------|------|
-| 关系图谱 | graph (力导向) | entities + relationships | **章节时间轴滑块** + 播放/暂停 |
-
-**关系图时间轴规格：**
-- 滑块 (`<input type="range">`) 控制当前章节，范围 1 ~ 最新章
-- 节点按 `first_appearance <= 当前章` 过滤显示
-- 边按 `chapter <= 当前章` 过滤，标签支持随章节演化（如"初识"→"宿敌"）
-- 播放按钮：每 120ms 步进 5 章，自动推进
-- 右侧 badge 实时显示当前章节号 + 可见节点数
-- 节点：方形 (`symbol: 'rect'`)，主角加大 + 金色 (`#f5a524`)
-- 边：直线 + 标签，`curveness: 0.1`
-- 类别色：角色 `#26a8ff`、势力 `#7f5af0`、地点 `#2ec27e`
-
-### 伏笔追踪页 (ForeshadowingPage)
-
-| 图表 | 类型 | 数据 | 交互 |
-|------|------|------|------|
-| 伏笔时间线 | 自定义 bar (custom series) | 埋设章→目标章 | 当前章蓝线 (`z:10` 置顶)，按状态着色 |
-
-**甘特图规格：**
-- Y 轴：伏笔名称（反转，紧急在上）
-- X 轴：章节范围，`axisLabel: '第N章'`
-- Bar 颜色：overdue `#d7263d`、urgent `#f5a524`、active `#26a8ff`、resolved `#2ec27e`
-- 当前章节竖线：`markLine` + `z: 10`（确保在 bar 上层），`label.position: 'end'`
-- 默认只显示 活跃+紧急，已回收折叠
-- 横轴范围自动适配（不铺满 1-最大章）
-
-### 系统状态页 (SystemPage)
-
-纯统计卡 + 表格，无图表。
-
-## 布局
-
-- 侧边栏 240px（金色渐变 `#ffe8b8 → #ffe19f`），`3px` 右边框
-- 主区域可滚动，padding 22px
-- 统计卡网格 `repeat(auto-fill, minmax(220px, 1fr))`
-- 图表卡片全宽，高度 320px（默认）/ 420px（关系图等 `.tall`）/ 380px（甘特 `.gantt`）
-
-## 导航
-
-| 本地图标组件 | 标签 | 路由 |
-|--------------|------|------|
-| `ChartBarIcon` | 总览 | `/` |
-| `UsersIcon` | 角色图鉴 | `/characters` |
-| `BookmarkIcon` | 伏笔追踪 | `/foreshadowing` |
-| `FolderIcon` | 文档浏览 | `/files` |
-| `SlidersIcon` | 系统状态 | `/system` |
-
-## 大数据量适配
-
-- 所有时序图表默认显示最近 50 章窗口，支持翻页 + "跳到最新"
-- 字数按卷分组，不一次性铺开所有章节
-- 甘特图默认只显示活跃+紧急，已回收可展开
-- 关系图时间轴播放时步进 5 章/120ms，不逐章渲染
-
-## 图标
-
-使用 `src/icons.jsx` 中随仓库维护的本地 24×24 SVG React 组件；当前没有
-`pixelarticons` npm 依赖。新增图标应延续下列像素网格约束，并通过前端构建验证。
-
-- 24×24 网格，无抗锯齿，纯像素风
-- SVG `fill="currentColor"`，颜色继承父元素，天然适配色板
-- React 组件导入，tree-shakeable
-- 尺寸用 24px 的整数倍（24/48）保持像素对齐
-
-### 导航图标映射
-
-| 页面 | 组件 |
-|------|------|
-| 总览 | `<ChartBarIcon />` |
-| 角色图鉴 | `<UsersIcon />` |
-| 伏笔追踪 | `<BookmarkIcon />` |
-| 文档浏览 | `<FolderIcon />` |
-| 系统状态 | `<SlidersIcon />` |
-
-### 其他常用图标
-
-| 用途 | 本地组件 |
-|------|----------|
-| 播放/暂停 | `PlayIcon` / `PauseIcon` |
-| 翻页 | `ChevronLeftIcon` / `ChevronRightIcon` |
-| 跳到最新 | `ChevronsRightIcon` |
-| 刷新/诊断 | `ReloadIcon` |
-| 连接状态 | `WifiIcon` / `WifiOffIcon` |
-| 搜索 | `SearchIcon` |
-
-## 不做的事
-
-- 不用圆角
-- 不用渐变背景（进度条除外）
-- 不用 soft shadow
-- 不用 glassmorphism / neumorphism
-- 不用 emoji 做图标——使用随仓库维护的本地 SVG 组件
-- 不用 3D 图表（原 react-force-graph-3d 替换为 ECharts 2D graph）
+- API 测试验证所有事实响应共享 exact HEAD/generation/workflow/projection binding。
+- stale projection 必须返回结构化 409，即使 legacy index 存在也不能泄漏旧事实。
+- legacy analytics 必须返回结构化 410。
+- Dashboard 路由不得出现 POST/PUT/PATCH/DELETE。
+- GET 前后项目文件集合和内容哈希不变。
+- 前端单测验证 open-loop 只来自 Canon obligations/lifecycle。
+- `npm test` 与 `npm run build` 都必须通过，打包后的 `dist/` 与源码同步。

@@ -636,14 +636,22 @@ def _file_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -> list[dic
         checks.append(
             _check(
                 f"file.dir.{rel}",
-                status=CHECK_OK if exists else CHECK_ERROR,
-                severity="info" if exists else "blocker",
-                message=f"required directory {rel}",
+                status=CHECK_OK if exists else CHECK_WARNING,
+                severity="info" if exists else "warning",
+                message=f"planning/compatibility directory {rel}",
                 path=str(path),
                 expected="directory exists",
                 actual="exists" if exists else "missing",
-                impact="" if exists else "项目骨架不完整，后续写作/备份/报告可能写入失败。",
-                repair="" if exists else "重新运行 /canon-ledger-init，或手动创建该目录后再运行 doctor。",
+                impact=(
+                    ""
+                    if exists
+                    else "规划、草稿或兼容报告可能缺少默认落盘位置；不改变 Canon v3 HEAD 的事实权威。"
+                ),
+                repair=(
+                    ""
+                    if exists
+                    else "需要该规划材料时再用 /canon-ledger-plan 或手动创建；不要因此阻断事实写作。"
+                ),
             )
         )
     for rel in INIT_REQUIRED_FILES:
@@ -652,14 +660,22 @@ def _file_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -> list[dic
         checks.append(
             _check(
                 f"file.required.{rel}",
-                status=CHECK_OK if exists else CHECK_ERROR,
-                severity="info" if exists else "blocker",
-                message=f"required file {rel}",
+                status=CHECK_OK if exists else CHECK_WARNING,
+                severity="info" if exists else "warning",
+                message=f"planning/compatibility file {rel}",
                 path=str(path),
                 expected="file exists",
                 actual="exists" if exists else "missing",
-                impact="" if exists else "项目初始化产物缺失，当前阶段判断和后续流程会不可靠。",
-                repair="" if exists else "使用 /canon-ledger-init 补齐项目骨架，或按 init_project.py 模板补齐文件。",
+                impact=(
+                    ""
+                    if exists
+                    else "默认规划上下文或兼容工具可能降级；已发布的 HEAD、事实查询和人工决定不受影响。"
+                ),
+                repair=(
+                    ""
+                    if exists
+                    else "仅在需要该规划材料时补建；事实可写性只服从 canon-v3 workflow。"
+                ),
             )
         )
 
@@ -669,14 +685,22 @@ def _file_checks(project_root: Path, snapshot: ProjectPhaseSnapshot) -> list[dic
             checks.append(
                 _check(
                     f"file.contract.{name}",
-                    status=CHECK_OK if exists else CHECK_ERROR,
-                    severity="info" if exists else "blocker",
-                    message=f"story contract {name}",
+                    status=CHECK_OK if exists else CHECK_WARNING,
+                    severity="info" if exists else "warning",
+                    message=f"optional planning contract {name}",
                     path=str(path),
                     expected="file exists",
                     actual="exists" if exists else "missing",
-                    impact="" if exists else "写章上下文缺少当前主链合同，无法可靠绑定设定、时间线和章纲目标。",
-                    repair="" if exists else "运行 canon_ledger.py story-system ... --persist --emit-runtime-contracts --chapter N。",
+                    impact=(
+                        ""
+                        if exists
+                        else "模型缺少可选的卷/章规划提示；这不是事实一致性门禁，也不要求人工确认。"
+                    ),
+                    repair=(
+                        ""
+                        if exists
+                        else "需要规划提示时运行 /canon-ledger-plan；否则可继续按 Canon v3 HEAD 写作。"
+                    ),
                 )
             )
     return checks
@@ -706,14 +730,22 @@ def _json_checks(project_root: Path) -> list[dict[str, Any]]:
         checks.append(
             _check(
                 f"json.{_rel(project_root, path)}",
-                status=CHECK_OK if not error else CHECK_ERROR,
-                severity="info" if not error else "blocker",
-                message=f"{_rel(project_root, path)} json parse",
+                status=CHECK_OK if not error else CHECK_WARNING,
+                severity="info" if not error else "warning",
+                message=f"legacy/planning {_rel(project_root, path)} json parse",
                 path=str(path),
                 expected="valid JSON object",
                 actual="ok" if not error else error,
-                impact="" if not error else "JSON 无法读取会导致 CLI、dashboard 或状态推导失败。",
-                repair="" if not error else "用 UTF-8 修复 JSON 格式；必要时从 git/backup 恢复。",
+                impact=(
+                    ""
+                    if not error
+                    else "兼容规划工具可能降级；Canon v3 事实权威不会回退到该文件。"
+                ),
+                repair=(
+                    ""
+                    if not error
+                    else "需要兼容规划视图时再修复 UTF-8 JSON；不得用它覆盖 HEAD。"
+                ),
             )
         )
         if path.name == "state.json" and not error:
@@ -721,14 +753,22 @@ def _json_checks(project_root: Path) -> list[dict[str, Any]]:
                 checks.append(
                     _check(
                         f"json.state.{key}",
-                        status=CHECK_OK if isinstance(payload.get(key), dict) else CHECK_ERROR,
-                        severity="info" if isinstance(payload.get(key), dict) else "blocker",
-                        message=f"state.json contains {key}",
+                        status=CHECK_OK if isinstance(payload.get(key), dict) else CHECK_WARNING,
+                        severity="info" if isinstance(payload.get(key), dict) else "warning",
+                        message=f"legacy state.json contains {key}",
                         path=str(path),
                         expected="object field",
                         actual=type(payload.get(key)).__name__,
-                        impact="" if isinstance(payload.get(key), dict) else "当前项目状态投影不符合 CanonLedger 7 schema。",
-                        repair="" if isinstance(payload.get(key), dict) else "从当前项目备份恢复 state.json，或新建 CanonLedger 项目。",
+                        impact=(
+                            ""
+                            if isinstance(payload.get(key), dict)
+                            else "legacy 规划投影不完整；不影响 Canon v3 HEAD-bound 事实查询。"
+                        ),
+                        repair=(
+                            ""
+                            if isinstance(payload.get(key), dict)
+                            else "仅在需要 legacy 规划视图时修复；不要重建或覆盖现有 Canon v3 HEAD。"
+                        ),
                     )
                 )
     return checks

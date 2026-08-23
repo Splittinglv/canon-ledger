@@ -5,21 +5,25 @@
 
 目标：
 - 生成可运行的项目结构（canon-ledger-project）
-- 创建/更新 .canon-ledger/state.json（当前状态读模型）
+- 在不存在或严格为空的目标中创建 .canon-ledger/state.json（当前状态读模型）
 - 生成基础设定集与大纲模板文件（供 /canon-ledger-plan 与 /canon-ledger-write 使用）
 
 说明：
 - 该脚本是命令 /canon-ledger-init 的“唯一允许的文件生成入口”（与命令文档保持一致）。
 - 生成的内容以“模板骨架”为主，便于 AI/作者后续补全；但保证所有关键文件存在。
+- 项目先在同级临时目录完整构建，成功后才发布；不会把 init 当作升级或修复入口。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -39,6 +43,251 @@ if sys.platform == "win32":
 
 
 _ASCII_LETTER_RE = re.compile(r"[A-Za-z]")
+
+
+_RUNTIME_LOCK_GITIGNORE = """# Runtime lock files are process-local and never project history.
+.canon-ledger/*.lock
+.canon-ledger/**/*.lock
+.story-system/*.lock
+.story-system/**/*.lock
+"""
+
+_RUNTIME_LOCK_GIT_PATHSPECS = (
+    ":(exclude,glob).canon-ledger/*.lock",
+    ":(exclude,glob).canon-ledger/**/*.lock",
+    ":(exclude,glob).story-system/*.lock",
+    ":(exclude,glob).story-system/**/*.lock",
+)
+
+
+class _InitTargetSnapshot:
+    """Read-only target identity captured before detached construction starts."""
+
+    def __init__(self, *, existed: bool, device: int | None = None, inode: int | None = None):
+        self.existed = existed
+        self.device = device
+        self.inode = inode
+
+
+def _lexical_absolute_path(raw_path: str) -> Path:
+    """Pin the real parent while preserving the final leaf for symlink checks.
+
+    macOS exposes ordinary temporary paths through system symlinks such as
+    ``/var -> /private/var`` and ``/tmp -> /private/tmp``.  Resolving the parent
+    once gives the transaction a stable destination without following a
+    symlink placed at the target leaf itself.
+    """
+    expanded = Path(raw_path).expanduser()
+    if not expanded.is_absolute():
+        expanded = Path.cwd() / expanded
+    lexical = Path(os.path.abspath(os.fspath(expanded)))
+    return lexical.parent.resolve(strict=False) / lexical.name
+
+
+def _assert_no_symlink_components(path: Path) -> None:
+    """Reject a symlink in any existing component of an initialization target."""
+    parts = path.parts
+    if not parts:
+        raise SystemExit("init_target_malformed: 初始化目标路径无效。")
+    current = Path(parts[0])
+    for part in parts[1:]:
+        current = current / part
+        try:
+            mode = current.lstat().st_mode
+        except FileNotFoundError:
+            # Descendants cannot exist once an ancestor is absent.
+            break
+        except OSError as exc:
+            raise SystemExit(
+                f"init_target_malformed: 无法安全检查初始化目标路径：{current}（{exc}）"
+            ) from exc
+        if stat.S_ISLNK(mode):
+            raise SystemExit(
+                f"init_target_symlink: 初始化目标及其父路径不能是符号链接：{current}"
+            )
+
+
+def _preflight_init_target(project_path: Path) -> _InitTargetSnapshot:
+    """Validate a clean target without creating or modifying any filesystem entry."""
+    if ".cursor" in project_path.parts:
+        raise SystemExit("init_target_forbidden: 不能在 .cursor 内初始化小说项目，请选择其他目录。")
+    _assert_no_symlink_components(project_path)
+
+    if not project_path.exists():
+        return _InitTargetSnapshot(existed=False)
+    if not project_path.is_dir():
+        raise SystemExit(f"init_target_malformed: 初始化目标不是目录，拒绝覆盖：{project_path}")
+
+    try:
+        entries = list(project_path.iterdir())
+        target_stat = project_path.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise SystemExit(
+            f"init_target_malformed: 无法安全读取初始化目标：{project_path}（{exc}）"
+        ) from exc
+
+    if entries:
+        v3_root = project_path / ".story-system" / "v3"
+        current_pointer = v3_root / "CURRENT"
+        if (
+            current_pointer.is_file()
+            and not current_pointer.is_symlink()
+            and not v3_root.is_symlink()
+        ):
+            raise SystemExit(
+                "init_target_already_initialized: 目标目录已经包含 Canon v3 项目；"
+                "init 只允许不存在或严格为空的目录，"
+                "请使用 status/repair 等已有项目入口。"
+            )
+        if v3_root.exists() or v3_root.is_symlink():
+            raise SystemExit(
+                "init_target_malformed: 目标目录包含不完整或不安全的 Canon v3 数据；"
+                "init 不会覆盖或猜测修复。"
+            )
+        legacy_markers = (
+            project_path / ".canon-ledger" / "state.json",
+            project_path / ".story-system" / "MASTER_SETTING.json",
+            project_path / ".canon-ledger" / "index.db",
+        )
+        if any(marker.exists() or marker.is_symlink() for marker in legacy_markers):
+            raise SystemExit(
+                "init_target_legacy: 目标目录包含 legacy 项目数据；init 不会迁移或覆盖已有项目，"
+                "请使用显式 migrate/repair 流程。"
+            )
+        if (project_path / ".canon-ledger").exists() or (project_path / ".story-system").exists():
+            raise SystemExit(
+                "init_target_malformed: 目标目录包含不完整或无法识别的运行时数据；"
+                "init 拒绝修补 malformed 项目。"
+            )
+        raise SystemExit(
+            "init_target_not_empty: 目标目录非空；init 不会覆盖或提交已有文件，"
+            "请选择不存在或严格为空的目录。"
+        )
+
+    return _InitTargetSnapshot(
+        existed=True,
+        device=int(target_stat.st_dev),
+        inode=int(target_stat.st_ino),
+    )
+
+
+def _make_staging_parent(project_path: Path) -> list[Path]:
+    """Create missing parents for a sibling staging directory and return them deepest-first."""
+    missing: list[Path] = []
+    cursor = project_path.parent
+    while not cursor.exists():
+        if cursor.is_symlink():
+            raise SystemExit(f"init_target_symlink: 初始化目标父路径不能是符号链接：{cursor}")
+        missing.append(cursor)
+        if cursor.parent == cursor:
+            break
+        cursor = cursor.parent
+    project_path.parent.mkdir(parents=True, exist_ok=True)
+    _assert_no_symlink_components(project_path.parent)
+    return missing
+
+
+def _cleanup_created_parents(paths: list[Path]) -> None:
+    for path in paths:
+        try:
+            path.rmdir()
+        except OSError:
+            pass
+
+
+def _target_still_matches_preflight(project_path: Path, snapshot: _InitTargetSnapshot) -> bool:
+    try:
+        _assert_no_symlink_components(project_path)
+    except SystemExit:
+        return False
+    if not snapshot.existed:
+        return not project_path.exists() and not project_path.is_symlink()
+    try:
+        current = project_path.stat(follow_symlinks=False)
+        return (
+            project_path.is_dir()
+            and int(current.st_dev) == snapshot.device
+            and int(current.st_ino) == snapshot.inode
+            and not any(project_path.iterdir())
+        )
+    except OSError:
+        return False
+
+
+def _publish_staged_project(
+    staging_path: Path,
+    project_path: Path,
+    snapshot: _InitTargetSnapshot,
+) -> None:
+    """Publish a fully built sibling tree without ever merging into an existing project."""
+    if not _target_still_matches_preflight(project_path, snapshot):
+        raise SystemExit(
+            "init_target_changed: 初始化期间目标目录发生变化；为避免覆盖已有内容，已放弃发布。"
+        )
+
+    if not snapshot.existed:
+        os.replace(staging_path, project_path)
+        return
+
+    if os.name != "nt":
+        # POSIX rename atomically replaces an existing empty directory.
+        os.replace(staging_path, project_path)
+        return
+
+    # Windows cannot replace an existing directory directly. Keep the empty
+    # original available for rollback around the two bounded renames.
+    empty_backup = Path(
+        tempfile.mkdtemp(prefix=".canon-ledger-empty-target-", dir=project_path.parent)
+    )
+    empty_backup.rmdir()
+    os.replace(project_path, empty_backup)
+    try:
+        os.replace(staging_path, project_path)
+    except BaseException:
+        os.replace(empty_backup, project_path)
+        raise
+    try:
+        empty_backup.rmdir()
+    except OSError:
+        # Publication already succeeded; a stale empty rollback directory is
+        # preferable to reporting a false initialization failure.
+        pass
+
+
+def _remove_generated_runtime_locks(project_path: Path) -> None:
+    """Remove released construction locks before publishing a new project."""
+    for runtime_root in (project_path / ".canon-ledger", project_path / ".story-system"):
+        if not runtime_root.is_dir():
+            continue
+        for lock_path in runtime_root.rglob("*.lock"):
+            if lock_path.is_file() and not lock_path.is_symlink():
+                lock_path.unlink()
+
+
+def _assert_staged_tree_is_portable(staging_path: Path) -> None:
+    """Fail closed if detached construction leaked its temporary absolute path."""
+    staging_bytes = os.fsencode(str(staging_path.resolve()))
+    for path in staging_path.rglob("*"):
+        relative = path.relative_to(staging_path)
+        if relative.parts and relative.parts[0] == ".git":
+            continue
+        if path.is_symlink():
+            raise SystemExit(
+                f"init_staging_symlink: 初始化产物不能包含符号链接：{relative.as_posix()}"
+            )
+        if not path.is_file():
+            continue
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise SystemExit(
+                f"init_staging_unreadable: 无法验证初始化产物：{relative.as_posix()}（{exc}）"
+            ) from exc
+        if staging_bytes in raw:
+            raise SystemExit(
+                "init_staging_path_leak: 初始化产物包含临时构建路径，已拒绝发布："
+                f"{relative.as_posix()}"
+            )
 
 
 def _validate_initial_genre_source(genre: str) -> str:
@@ -232,7 +481,7 @@ def _inject_volume_rows(template_text: str, target_chapters: int, *, chapters_pe
     return "\n".join(lines[:insert_idx] + rows + lines[insert_idx:])
 
 
-def init_project(
+def _build_project_tree(
     project_dir: str,
     title: str,
     genre: str,
@@ -271,12 +520,17 @@ def init_project(
     cultivation_subtiers: str = "",
 ) -> None:
     project_path = Path(project_dir).expanduser().resolve()
-    if ".cursor" in project_path.parts:
-        raise SystemExit("不能在 .cursor 内初始化小说项目，请选择其他目录。")
+    if (
+        not project_path.is_dir()
+        or project_path.is_symlink()
+        or any(project_path.iterdir())
+    ):
+        raise SystemExit(
+            "init_staging_not_empty: 内部初始化构建目录必须是已存在的严格空目录。"
+        )
     genre = _validate_initial_genre_source(genre)
     genre_resolution = resolve_genre_input(genre)
     canonical_genre = genre_resolution.canonical_genre or genre
-    project_path.mkdir(parents=True, exist_ok=True)
 
     # 当前项目目录结构
     directories = [
@@ -291,22 +545,11 @@ def init_project(
     for dir_path in directories:
         (project_path / dir_path).mkdir(parents=True, exist_ok=True)
 
-    # state.json（创建或更新当前项目）
+    # state.json（仅在隔离构建树中创建新项目）
     state_path = project_path / ".canon-ledger" / "state.json"
-    if state_path.exists():
-        try:
-            state: Dict[str, Any] = json.loads(state_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            corrupt_path = state_path.with_name(f"state.corrupt_{timestamp}.json")
-            shutil.copy2(state_path, corrupt_path)
-            print(f"⚠️ 原 state.json 已损坏，已另存为 {corrupt_path} 供手工抢救")
-            state = {}
-    else:
-        state = {}
-
+    state: Dict[str, Any] = {}
     state = _ensure_state_schema(state)
-    created_at = state.get("project_info", {}).get("created_at") or datetime.now().strftime("%Y-%m-%d")
+    created_at = datetime.now().strftime("%Y-%m-%d")
 
     state["project_info"].update(
         {
@@ -747,6 +990,7 @@ def init_project(
     from data_modules.canon_v3.service import CanonV3Service
 
     CanonV3Service(project_path).initialize_new_project()
+    _remove_generated_runtime_locks(project_path)
 
     # Git 初始化（仅当项目目录内尚无 .git 且 Git 可用）
     git_dir = project_path / ".git"
@@ -762,7 +1006,7 @@ def init_project(
                 gitignore_file = project_path / ".gitignore"
                 if not gitignore_file.exists():
                     gitignore_file.write_text(
-                        """# Python
+                        f"""# Python
 __pycache__/
 *.py[cod]
 *.so
@@ -784,13 +1028,18 @@ __pycache__/
 # Don't ignore .canon-ledger (we need to track state.json)
 # But ignore cache files
 .canon-ledger/context_cache.json
-.canon-ledger/*.lock
 .canon-ledger/*.bak
+{_RUNTIME_LOCK_GITIGNORE}
 """,
                         encoding="utf-8",
                     )
 
-                subprocess.run(["git", "add", "."], cwd=project_path, check=True, capture_output=True)
+                subprocess.run(
+                    ["git", "add", "--all", "--", ".", *_RUNTIME_LOCK_GIT_PATHSPECS],
+                    cwd=project_path,
+                    check=True,
+                    capture_output=True,
+                )
                 # 安全修复：清理 title 防止命令注入
                 safe_title = sanitize_commit_message(title)
                 subprocess.run(
@@ -803,7 +1052,108 @@ __pycache__/
             except subprocess.CalledProcessError as e:
                 print(f"Git init failed (non-fatal): {e}")
 
-    # 记录工作区默认项目指针（非阻断）
+
+def init_project(
+    project_dir: str,
+    title: str,
+    genre: str,
+    *,
+    protagonist_name: str = "",
+    target_words: int = 2_000_000,
+    target_chapters: int = 600,
+    golden_finger_name: str = "",
+    golden_finger_type: str = "",
+    golden_finger_style: str = "",
+    core_selling_points: str = "",
+    protagonist_structure: str = "",
+    heroine_config: str = "",
+    heroine_names: str = "",
+    heroine_role: str = "",
+    co_protagonists: str = "",
+    co_protagonist_roles: str = "",
+    antagonist_tiers: str = "",
+    world_scale: str = "",
+    factions: str = "",
+    power_system_type: str = "",
+    social_class: str = "",
+    resource_distribution: str = "",
+    gf_visibility: str = "",
+    gf_irreversible_cost: str = "",
+    protagonist_desire: str = "",
+    protagonist_flaw: str = "",
+    protagonist_archetype: str = "",
+    antagonist_level: str = "",
+    target_reader: str = "",
+    platform: str = "",
+    currency_system: str = "",
+    currency_exchange: str = "",
+    sect_hierarchy: str = "",
+    cultivation_chain: str = "",
+    cultivation_subtiers: str = "",
+) -> None:
+    """Create a new project through a detached, clean-target-only transaction."""
+    project_path = _lexical_absolute_path(project_dir)
+    # Validate all read-only inputs before the first directory is created.
+    _validate_initial_genre_source(genre)
+    snapshot = _preflight_init_target(project_path)
+
+    staging_path: Path | None = None
+    created_parents: list[Path] = []
+    try:
+        created_parents = _make_staging_parent(project_path)
+        staging_path = Path(
+            tempfile.mkdtemp(
+                prefix=".canon-ledger-init-",
+                dir=project_path.parent,
+            )
+        )
+        _build_project_tree(
+            str(staging_path),
+            title,
+            genre,
+            protagonist_name=protagonist_name,
+            target_words=target_words,
+            target_chapters=target_chapters,
+            golden_finger_name=golden_finger_name,
+            golden_finger_type=golden_finger_type,
+            golden_finger_style=golden_finger_style,
+            core_selling_points=core_selling_points,
+            protagonist_structure=protagonist_structure,
+            heroine_config=heroine_config,
+            heroine_names=heroine_names,
+            heroine_role=heroine_role,
+            co_protagonists=co_protagonists,
+            co_protagonist_roles=co_protagonist_roles,
+            antagonist_tiers=antagonist_tiers,
+            world_scale=world_scale,
+            factions=factions,
+            power_system_type=power_system_type,
+            social_class=social_class,
+            resource_distribution=resource_distribution,
+            gf_visibility=gf_visibility,
+            gf_irreversible_cost=gf_irreversible_cost,
+            protagonist_desire=protagonist_desire,
+            protagonist_flaw=protagonist_flaw,
+            protagonist_archetype=protagonist_archetype,
+            antagonist_level=antagonist_level,
+            target_reader=target_reader,
+            platform=platform,
+            currency_system=currency_system,
+            currency_exchange=currency_exchange,
+            sect_hierarchy=sect_hierarchy,
+            cultivation_chain=cultivation_chain,
+            cultivation_subtiers=cultivation_subtiers,
+        )
+        _assert_staged_tree_is_portable(staging_path)
+        _publish_staged_project(staging_path, project_path, snapshot)
+        staging_path = None
+    finally:
+        if staging_path is not None and staging_path.exists():
+            shutil.rmtree(staging_path, ignore_errors=True)
+        _cleanup_created_parents(created_parents)
+
+    # Workspace/global pointers are deliberately outside the construction
+    # transaction and are updated only after the project tree is published.
     try:
         pointer_file = write_current_project_pointer(project_path)
         if pointer_file is not None:

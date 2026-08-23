@@ -1,6 +1,6 @@
 ---
 name: canon-ledger-confirm
-description: 处理当前 Canon v3 事务的必审事实或迁移案例，并把作者选择精确绑定到其看到的 STAGING、证据和既有正史版本。
+description: 处理当前 Canon v3 事务的必审事实或迁移案例；也在作者明确要求放弃未发布 STAGING 时按 exact digest 归档。
 ---
 
 # Canon v3 人工确认
@@ -11,7 +11,8 @@ description: 处理当前 Canon v3 事务的必审事实或迁移案例，并把
 STAGING，或 legacy recertification detached plan。作者看到版本 A，只能操作版本 A；
 任何内容变化都要求刷新，不能把旧选择转接到新事务。
 
-开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)，执行其中的环境引导和状态规则。
+开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)
+和 [`../../references/index/reference-loading-map.md`](../../references/index/reference-loading-map.md)，执行其中的环境引导、状态与 reference 路由规则。
 
 ## 红线
 
@@ -24,6 +25,8 @@ STAGING，或 legacy recertification detached plan。作者看到版本 A，只�
 - `migration_required` 只有在 snapshot 明确给出
   `transaction_kind=legacy_recertification`、exact plan/token 与 cases 时才能继续；
   其他 migration 状态只执行 primary action。
+- 放弃/取消不等于删除；禁止直接 unlink STAGING、删不可变对象或使用兼容别名
+  `cancel`。只有作者明确要求放弃当前未发布事务时才可进入 exact archive 分支。
 
 ## 1. 读取当前版本
 
@@ -77,7 +80,25 @@ status.cases[i].decision_head_hash
 
 值必须逐值复制；首次决定的 `null` 也必须保留为 JSON `null`。这里不能使用活动 Canon `head_hash` 或 `parent_head`。
 
-## 2. 向作者展示
+## 2. 作者明确放弃 STAGING
+
+只对本轮明确的“放弃/取消当前未发布事务”请求执行。立即重读 status，
+要求 `transaction_kind=chapter|author_axiom` 且 `stage_digest` 为当前 64 位值。向作者
+简要确认：该未发布指针会移入非权威归档，不会进入 HEAD，之后必须重新
+prepare；transaction 和 decisions 不删除。然后只调用：
+
+```bash
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 archive-staging \
+  --transaction-kind "${TRANSACTION_KIND}" \
+  --expected-stage-digest "${STAGE_DIGEST}"
+```
+
+不从旧回复或本地文件填 digest。若 status 在执行前改变，请求会拒绝；重新展示
+新事务，不自动放弃它。成功后重读 status，报告 `archive_path`、新 primary action
+和 `requires_reprepare=true`，然后结束本轮；不继续执行旧 decide/finalize。
+
+## 3. 向作者展示
 
 每项只展示有助于裁决的内容：
 
@@ -90,7 +111,7 @@ status.cases[i].decision_head_hash
 
 每批不超过 5 项。额外人工确认可以接受，但不得把文风、剧情偏好、人物动机或无锚点猜测加入问题。
 
-## 3. Legacy recertification：一次性 exact publish request
+## 4. Legacy recertification：一次性 exact publish request
 
 仅当 `transaction_kind=legacy_recertification` 时执行本节。先运行
 `canon-v3 repair-cutover --dry-run`，确认返回的 current head、plan digest、publish
@@ -131,7 +152,7 @@ case，也必须先向作者展示空 plan 摘要并取得显式发布同意，�
 `rebuild-projection`。响应丢失时只重放同一个 request。完成本分支后不要再执行普通
 DecisionRequest 或 finalize。
 
-## 4. STAGING：写入 exact DecisionRequest
+## 5. STAGING：写入 exact DecisionRequest
 
 `transaction_kind=author_axiom` 时只允许 `approve|omit|rewrite`，使用
 `canon-v3/author-axiom-decision-request/v2`；章节使用
@@ -181,7 +202,7 @@ author-axiom 则把同形 payload 写入
 
 服务返回版本冲突时，丢弃本地请求，重新读取 status 并重新展示；不得修改 digest 或自动重试。
 
-## 5. 按 STAGING 决定恢复
+## 6. 按 STAGING 决定恢复
 
 - `awaiting_human`：使用返回的新 `stage_digest` 继续下一批。
 - `recompile_required`：把 exact correction 写回候选集合，重新 binding、全候选扫描和 prepare；旧 stage 不发布。
@@ -190,7 +211,7 @@ author-axiom 则把同形 payload 写入
 
 OMIT/CORRECT/REWRITE 都形成语义谱系。若同一事实换证据再次出现，只能生成重新考虑 case，不能自动复活。
 
-## 6. STAGING exact finalize
+## 7. STAGING exact finalize
 
 `transaction_kind=author_axiom` 时，finalize 文件使用
 `canon-v3/author-axiom-finalize-request/v2` 并保存为

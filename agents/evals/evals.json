@@ -4,10 +4,11 @@
     {
       "id": 1,
       "prompt": "对 exact candidate draft 做完整事实扫描；输入同时提供 chapter SHA、parent HEAD、active author axiom 和 entity registry digest。",
-      "expected_output": "严格 reviewer-output/v2 JSON，只含 observations、scan attestations 和 extraction completeness。",
+      "expected_output": "严格 reviewer-output/v3 JSON，逐项回显 exact candidate_id→candidate_digest map，只含 observations、scan attestations 和 extraction completeness。",
       "files": [],
       "expectations": [
         "不自行提取或修改 candidate",
+        "candidate_digest_map 与 candidate draft validator 返回值逐项完全相同",
         "complete attestation 绑定 chapter、HEAD、axiom、registry 和全部 candidate digests",
         "五维精确覆盖 setting/timeline/continuity/character/logic",
         "不输出 issues、manual_checks、blocking_count、评分或 pass/fail"

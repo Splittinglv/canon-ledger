@@ -56,6 +56,7 @@ V3_RELATIVE_ROOT = Path(".story-system") / "v3"
 CURRENT_FILE = "CURRENT"
 LOCK_FILE = ".publish.lock"
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+_STABLE_READ_ATTEMPTS = 3
 
 
 class CanonRepositoryError(RuntimeError):
@@ -368,6 +369,7 @@ class CanonV3Repository:
         if schema not in {
             "canon-v3/legacy-genesis/v1",
             "canon-v3/legacy-genesis/v2",
+            "canon-v3/legacy-genesis/v3",
         }:
             raise CanonRepositoryError("canon_v3_genesis_metadata_schema_invalid")
         legacy_v1 = schema == "canon-v3/legacy-genesis/v1"
@@ -394,11 +396,17 @@ class CanonV3Repository:
             raise CanonRepositoryError("canon_v3_legacy_genesis_shape_invalid")
         if content_hash(snapshot) != str(raw.get("legacy_snapshot_sha256") or ""):
             raise CanonRepositoryError("canon_v3_legacy_snapshot_hash_invalid")
-        expected_snapshot_schema = (
-            "canon-v3/legacy-fact-snapshot/v1"
-            if legacy_v1
-            else "canon-v3/legacy-fact-snapshot/v2"
-        )
+        expected_snapshot_schema = {
+            "canon-v3/legacy-genesis/v1": (
+                "canon-v3/legacy-fact-snapshot/v1"
+            ),
+            "canon-v3/legacy-genesis/v2": (
+                "canon-v3/legacy-fact-snapshot/v2"
+            ),
+            "canon-v3/legacy-genesis/v3": (
+                "canon-v3/legacy-fact-snapshot/v3"
+            ),
+        }[schema]
         if snapshot.get("schema_version") != expected_snapshot_schema:
             raise CanonRepositoryError("canon_v3_legacy_snapshot_schema_invalid")
         if int(snapshot.get("cutover_chapter") or 0) != cutover:
@@ -472,14 +480,33 @@ class CanonV3Repository:
         # before a public initialize may publish CURRENT.
         if not legacy_v1:
             try:
-                from .migration import _fact_snapshot
+                if schema == "canon-v3/legacy-genesis/v2":
+                    from .migration import _fact_snapshot_v2
 
-                verified_snapshot = _fact_snapshot(self.project_root, cutover)
+                    verified_snapshot = _fact_snapshot_v2(
+                        self.project_root, cutover
+                    )
+                else:
+                    from .migration import _fact_snapshot
+
+                    verified_snapshot = _fact_snapshot(
+                        self.project_root, cutover
+                    )
             except Exception as exc:
                 raise CanonRepositoryError(
                     "canon_v3_legacy_snapshot_recompute_failed"
                 ) from exc
-            if snapshot != verified_snapshot:
+            if schema == "canon-v3/legacy-genesis/v3":
+                from .migration import legacy_snapshot_active_provenance
+
+                provenance_matches = legacy_snapshot_active_provenance(
+                    snapshot
+                ) == legacy_snapshot_active_provenance(verified_snapshot)
+            else:
+                # v2 predates advisory exclusion receipts.  Preserve its exact
+                # source interpretation byte-for-byte for existing CURRENTs.
+                provenance_matches = snapshot == verified_snapshot
+            if not provenance_matches:
                 raise CanonRepositoryError(
                     "canon_v3_legacy_snapshot_provenance_mismatch"
                 )
@@ -612,7 +639,10 @@ class CanonV3Repository:
         if (
             genesis_metadata is None
             or genesis_metadata.get("schema_version")
-            != "canon-v3/legacy-genesis/v2"
+            not in {
+                "canon-v3/legacy-genesis/v2",
+                "canon-v3/legacy-genesis/v3",
+            }
         ):
             raise CanonRepositoryError(
                 "canon_v3_public_initialize_requires_verified_fact_snapshot"
@@ -984,16 +1014,37 @@ class CanonV3Repository:
         return _validate_hash(value, label="current_head")
 
     def current_head(self, *, validate: bool = True) -> str | None:
-        head = self._read_current_hash_unvalidated()
-        if head is not None and validate:
-            self.read_manifest(head, validate_references=True)
+        if not validate:
+            return self._read_current_hash_unvalidated()
+        head, _manifest = self.current_snapshot()
         return head
 
+    def current_snapshot(self) -> tuple[str | None, dict[str, Any] | None]:
+        """Read CURRENT and its manifest without creating a publication lock.
+
+        Writers publish CURRENT with an atomic replace after all immutable
+        objects are durable.  A reader therefore only needs to prove that the
+        pointer did not change while its reachable manifest was validated.
+        Retrying a bounded number of times gives status/query callers one
+        coherent generation without creating ``.publish.lock`` as a read side
+        effect.
+        """
+
+        for _attempt in range(_STABLE_READ_ATTEMPTS):
+            before = self._read_current_hash_unvalidated()
+            manifest = (
+                self.read_manifest(before, validate_references=True)
+                if before is not None
+                else None
+            )
+            after = self._read_current_hash_unvalidated()
+            if before == after:
+                return before, manifest
+        raise CanonIntegrityError("canon_v3_current_changed_during_read")
+
     def current_manifest(self) -> dict[str, Any] | None:
-        head = self.current_head(validate=False)
-        if head is None:
-            return None
-        return self.read_manifest(head, validate_references=True)
+        _head, manifest = self.current_snapshot()
+        return manifest
 
     def _write_current_unlocked(self, manifest_hash: str) -> None:
         normalized = _validate_hash(manifest_hash, label="manifest_hash")
@@ -2079,10 +2130,10 @@ class CanonV3Repository:
         )
 
     def projection_binding(self) -> ProjectionBinding:
-        head = self.current_head(validate=False)
+        head, manifest = self.current_snapshot()
         if head is None:
             return ProjectionBinding(generation=0, head_hash=None)
-        manifest = self.read_manifest(head, validate_references=True)
+        assert manifest is not None
         return ProjectionBinding(
             generation=int(manifest.get("generation") or 0),
             head_hash=head,

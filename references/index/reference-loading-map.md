@@ -5,12 +5,17 @@
 | Skill | 额外 reference | 何时读取 |
 |---|---|---|
 | init | `skills/canon-ledger-init/references/system-data-flow.md` | always |
+| init | `skills/canon-ledger-init/references/init-collection-schema.md` | 收集项目基线时 always |
 | init | worldbuilding 下人物/势力/力量/规则资料 | 仅用户需要相应初始化设计时；输出先是候选，不直接入 Canon |
 | plan | `references/outlining/plot-signal-vs-spoiler.md` | 拆章时；只影响软计划 |
 | review | `references/review-schema.md` | staged 或 historical audit always |
 | review | `skills/canon-ledger-review/references/common-mistakes.md` | 需要区分 confirmed conflict、ambiguity 与忽略项时 |
 | query | `skills/canon-ledger-query/references/system-data-flow.md` | always |
 | query | `skills/canon-ledger-query/references/tag-specification.md` | 用户明确询问手动标签时；标签只产候选 |
+| write | runtime `canon-v3 agent-schema candidate-draft|reviewer-output` | 正文完成后、调用 data-agent/reviewer 前 always |
+| write | runtime `canon-v3 validate-agent-output` 与 `assemble-proposal` | 任何非空候选进入 prepare 前 always |
+| plan | runtime `canon-v3 agent-schema author-axiom-proposal` | 规划产生长期硬设定 draft 后 always |
+| plan | runtime `canon-v3 validate-agent-output author-axiom-proposal` | 任何 author-axiom proposal 进入 prepare 前 always |
 
 命名 CSV 可以在 init/plan/write 中按需检索，但只提供名称候选，不获得 Canon 权威。写法、节奏、爽点、调性和 Anti-AI 资料不由事实 Skill 默认加载。
 

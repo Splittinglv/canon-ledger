@@ -5,7 +5,8 @@ description: 查询活动 Canon HEAD 中的角色、关系、规则、时间线�
 
 # 查询故事事实
 
-开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)。查询是只读操作，不改变 STAGING、HEAD 或 projection。
+开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)
+和 [`../../references/index/reference-loading-map.md`](../../references/index/reference-loading-map.md)。查询是只读操作，不改变 STAGING、HEAD 或 projection。
 
 ## 1. 固定查询版本
 
@@ -39,7 +40,7 @@ latest_chapter
 
 | 数据层 | 公开 facade | 约束 |
 |---|---|---|
-| `active_canon` | `canon-v3 history`；active hard settings 用 `canon-v3 author-axioms`；Dashboard 已启动时可用 `/api/canon-v3/facts`、`/api/canon-v3/entities`、`/api/canon-v3/relationships`、`/api/canon-v3/state-changes` | 只在 fresh projection 下返回；响应须绑定当前 `head_hash/generation`；author axioms 只来自不可变 commit |
+| `active_canon` | `canon-v3 query snapshot|entity-state|relationships`；active hard settings 用 `canon-v3 author-axioms`；Dashboard 已启动时可用 `/api/canon-v3/entities`、`/api/canon-v3/relationships`、`/api/canon-v3/state-changes` 等 v3 API | 只在 fresh projection 下返回；每个响应携带 `authority=canon_v3`、`head_hash/generation/as_of_chapter/projection_digest`；author axioms 只来自不可变 commit |
 | `staged_proposal` | `canon-v3 status` 的当前 `cases[].review_material` | 仅在用户明确问当前审核草案时展示；不是 active facts |
 | `legacy_read_only` | migration/recertification 状态下的 `canon-v3 audit-cutover` | 仅返回审计实际暴露的旧前缀/准入材料；不能回答的字段直接说明“公开 facade 未提供” |
 | `style` | `style-memory show` | 只返回作者文风提示词，不得与事实结果合并 |
@@ -49,7 +50,11 @@ latest_chapter
 
 ```bash
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
-  --project-root "${PROJECT_ROOT}" canon-v3 history
+  --project-root "${PROJECT_ROOT}" canon-v3 query snapshot --as-of-chapter {N}
+
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 query entity-state \
+  --entity "{entity}" --as-of-chapter {N}
 
 "${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
   --project-root "${PROJECT_ROOT}" canon-v3 author-axioms
@@ -76,7 +81,9 @@ legacy 审计只有在 workflow 指向 cutover/recertification 时才调用。�
 | 时间线 | occurrence timeline as of 指定章节 |
 | 综合写作上下文 | `memory-contract load-context --chapter N`，内部截至 N-1 |
 
-这些领域视图当前统一由 `canon-v3 history` 或 Dashboard 的 HEAD-bound 事实接口承载；不得承诺另一个尚不存在的 as-of CLI。需要精确旧章视图但公开响应没有对应 revision 时，停止并说明能力缺口。
+这些领域视图统一由 `canon-v3 query` 或 Dashboard 的 HEAD-bound 事实接口承载。
+需要精确历史 revision、但公开 export 返回 `source_unavailable` 时停止并说明能力缺口，
+不能读取当前正文或旧 index 猜测。
 
 ## 5. 时间与旧章
 

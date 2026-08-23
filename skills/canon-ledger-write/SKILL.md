@@ -5,7 +5,8 @@ description: 按唯一 Canon v3 事务链完成指定章节：读取 HEAD、自�
 
 # Canon v3 写章
 
-开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)。本 Skill 只强制长期事实一致性；文风由本轮要求、`设定集/文风提示词.md` 和模型决定。
+开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)
+和 [`../../references/index/reference-loading-map.md`](../../references/index/reference-loading-map.md)。本 Skill 只强制长期事实一致性；文风由本轮要求、`设定集/文风提示词.md` 和模型决定。
 
 ## 完成条件
 
@@ -34,6 +35,9 @@ chapter 已进入活动 manifest
 - 只有 ready 且目标章位于 `allowed_write_chapters` 才继续。
 
 规划合同就绪不能覆盖 Canon blocker。未重新认证的长期设定也不能进入本章上下文。
+若卷/章/审查规划合同含 `meta.planning_batch_digest`，三份值必须完全相同才作为本章
+软计划输入。不一致表示刷新中断：忽略三份派生合同，从原大纲继续或运行
+`/canon-ledger-plan` 重新刷新；这个 planning warning 不得伪装成 Canon blocker。
 
 ## 2. 写作上下文与文风
 
@@ -70,16 +74,37 @@ context-agent 必须只消费活动 HEAD；state/index、STAGING 提议和 legac
 ```
 
 从此正文任一字节、HEAD 或 active author axiom 变化都会使 proposal、scan 和决定失效。
+导出结果中的 `author_axioms` 必须与 `canon_binding.head_hash`、顶层
+`author_axiom_digest` 绑定，并包含每条活动 axiom 的 `axiom_key/category/value` 与可直接
+用于 FactCandidate 的 `source_type=author_axiom` source。该公共视图不得含 draft
+`start/end/quote`，也不得出现 STAGING proposal 或 legacy cache 的值；只有 digest 而无
+`records` 不是完整 reviewer/data-agent 输入。
 
 ## 4. 唯一 Proposal 链
 
 严格依次调用：
 
 1. `data-agent phase=extract`：只输出 exact FactCandidates。
-2. `reviewer`：读取同一 candidate draft 与 N-1 snapshot，完整扫描五个事实维度。
+2. `reviewer`：读取同一 candidate draft、validator 返回的 exact
+   `candidate_id -> candidate_digest` map 与 N-1 snapshot（包括其中的活动
+   `author_axioms.records`），逐项回显该 map 并完整扫描五个事实维度。
 3. `data-agent phase=assemble`：验证 binding、sources、support map 和 attestations，写 `.canon-ledger/tmp/canon_v3_proposal.json`。
 
 每个 source 必须实际参与 support map。模型不得写 delta、人工队列或正史。正文明确的长期事实漏提时，重跑 extract；无锚点低概率猜测忽略。
+
+Agent 不能手算 candidate digest 或手拼 proposal。必须依次使用公共 helper：
+
+```text
+canon-v3 agent-schema candidate-draft
+canon-v3 validate-agent-output candidate-draft
+canon-v3 agent-schema reviewer-output
+canon-v3 validate-agent-output reviewer-output
+canon-v3 assemble-proposal
+```
+
+任一 helper 报 schema、binding、digest、source/support 或 scan 不闭合时停止，修正对应
+Agent artifact 后重跑；reviewer map 与 draft 不完全相同（包括审核后互换 candidate ID）
+必须停止，禁止绕过 validator 直接调用 prepare。
 
 ## 5. 带版本 Prepare
 

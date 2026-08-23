@@ -1,6 +1,6 @@
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react'
 import { useDashboardContext } from '../App.jsx'
-import { fetchCanonCharacters } from '../api.js'
+import { fetchCanonCharacters, formatApiError } from '../api.js'
 import Badge from '../components/Badge.jsx'
 import ChartWrapper from '../components/ChartWrapper.jsx'
 import DataTable from '../components/DataTable.jsx'
@@ -273,7 +273,7 @@ export default function CharactersPage() {
                     setSelected(current => current || entityRows[0])
                 }
             })
-            .catch(() => {
+            .catch(error => {
                 if (cancelled) return
                 setEntities([])
                 setRelationships([])
@@ -281,7 +281,7 @@ export default function CharactersPage() {
                 setChanges([])
                 setCanonBinding(null)
                 setCanonLatestChapter(0)
-                setCanonError('Canon 正史视图尚未就绪，请先完成初始化、迁移或投影重建。')
+                setCanonError(`HEAD-bound 人物事实未就绪：${formatApiError(error)}`)
             })
 
         return () => {

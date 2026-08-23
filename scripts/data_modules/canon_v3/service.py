@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import os
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Iterable, Literal, Mapping
 
@@ -37,6 +39,10 @@ from .evidence import (
     source_digest,
 )
 from .projection import fact_record_index, projection_is_fresh, rebuild_projection
+from .public_protocol import (
+    chapter_action_profile,
+    serialize_public_human_case,
+)
 from .repository import (
     CanonChapterSequenceError,
     CanonHeadConflict,
@@ -89,8 +95,11 @@ DECISION_ENVELOPE_SCHEMA = "canon-v3/decision-envelope/v2"
 DECISION_REQUEST_SCHEMA = "canon-v3/decision-request/v2"
 FINALIZE_REQUEST_SCHEMA = "canon-v3/finalize-request/v2"
 FINALIZE_TOKEN_SCHEMA = "canon-v3/finalize-token/v2"
+ARCHIVE_STAGING_REQUEST_SCHEMA = "canon-v3/archive-staging-request/v1"
+ARCHIVE_STAGING_RESULT_SCHEMA = "canon-v3/archive-staging-result/v1"
 WORKFLOW_SCHEMA = "canon-v3/workflow-snapshot/v2"
 STAGING_RELATIVE_PATH = Path(".story-system/v3/STAGING.json")
+STAGING_ARCHIVE_RELATIVE_ROOT = Path(".story-system/v3/staging-archive")
 REQUIRED_SCAN_DIMENSIONS = frozenset(
     {"setting", "timeline", "continuity", "character", "logic"}
 )
@@ -126,6 +135,10 @@ class ScanAttestationError(CanonV3ServiceError):
 
 
 class FinalizeBlockedError(CanonV3ServiceError):
+    pass
+
+
+class StagingArchiveConflict(CanonV3ServiceError):
     pass
 
 
@@ -301,6 +314,16 @@ class FinalizeRequestV2(BaseModel):
     finalize_token: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class ArchiveStagingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[ARCHIVE_STAGING_REQUEST_SCHEMA] = (
+        ARCHIVE_STAGING_REQUEST_SCHEMA
+    )
+    transaction_kind: Literal["chapter", "author_axiom"]
+    expected_stage_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 def _json_payload(model: BaseModel) -> dict[str, Any]:
     return model.model_dump(mode="json")
 
@@ -310,7 +333,6 @@ class CanonV3Service:
         self.project_root = Path(project_root).expanduser().resolve()
         self.repository = CanonV3Repository(self.project_root)
         self.staging_path = self.project_root / STAGING_RELATIVE_PATH
-        self.staging_path.parent.mkdir(parents=True, exist_ok=True)
         self.staging_lock = FileLock(str(self.staging_path) + ".lock", timeout=10)
 
     def _legacy_commits_exist(self) -> bool:
@@ -341,6 +363,28 @@ class CanonV3Service:
             raise MigrationRequiredError(
                 "canon_v3_legacy_genesis_v1_recertification_required"
             )
+        if metadata.get("schema_version") == "canon-v3/legacy-genesis/v2":
+            from .migration import (
+                LegacyMigrationError,
+                analyze_legacy_fact_boundary,
+            )
+
+            try:
+                boundary = analyze_legacy_fact_boundary(
+                    self.project_root, head_hash=head
+                )
+            except LegacyMigrationError as exc:
+                raise MigrationRequiredError(
+                    "canon_v3_legacy_fact_boundary_analysis_failed:"
+                    + str(exc)
+                ) from exc
+            boundary_state = str(boundary.get("state") or "invalid")
+            if boundary_state != "clean":
+                raise MigrationRequiredError(
+                    "canon_v3_legacy_fact_boundary_"
+                    f"{boundary_state}:"
+                    f"analysis_digest={boundary.get('analysis_digest')}"
+                )
         snapshot = metadata.get("legacy_snapshot")
         facts = snapshot.get("facts") if isinstance(snapshot, dict) else None
         omitted = (
@@ -352,6 +396,30 @@ class CanonV3Service:
             raise MigrationRequiredError(
                 "canon_v3_genesis_contains_unresolved_omitted_facts:"
                 + ",".join(sorted(str(item) for item in omitted))
+            )
+        from .author_axiom import AuthorAxiomChannel
+        from .fact_boundary import (
+            FactBoundaryClass,
+            classify_author_axiom_leaf,
+        )
+
+        active_records = AuthorAxiomChannel(
+            self.project_root, repository=self.repository
+        ).active_records(head)
+        non_fact_keys = sorted(
+            record.axiom_key
+            for record in active_records
+            if classify_author_axiom_leaf(
+                axiom_key=record.axiom_key,
+                category=record.category,
+                value=record.source.value,
+            )
+            is not FactBoundaryClass.HARD_FACT
+        )
+        if non_fact_keys:
+            raise MigrationRequiredError(
+                "canon_v3_active_author_axiom_non_fact_records:"
+                + ",".join(non_fact_keys)
             )
         if metadata.get("source") != "v2_accepted_commits":
             return None
@@ -374,6 +442,55 @@ class CanonV3Service:
         """Expose the one reviewable v1 repair transaction on every surface."""
 
         message = str(error)
+        if "canon_v3_active_author_axiom_non_fact_records:" in message:
+            keys = sorted(
+                set(
+                    message.split(
+                        "canon_v3_active_author_axiom_non_fact_records:", 1
+                    )[1].split(":", 1)[0].split(",")
+                )
+                - {""}
+            )
+            return {
+                "cases": [],
+                "counts": {"non_fact_author_axioms": len(keys)},
+                "recovery_action": "supersede_active_soft_author_axioms",
+                "non_fact_author_axiom_keys": keys,
+            }
+        if "canon_v3_legacy_fact_boundary_" in message:
+            from .migration import analyze_legacy_fact_boundary
+
+            analysis = analyze_legacy_fact_boundary(self.project_root)
+            state = str(analysis.get("state") or "invalid")
+            recovery_by_state = {
+                "ready_to_supersede": "supersede_legacy_soft_facts",
+                "human_classification_required": (
+                    "classify_legacy_fact_boundary"
+                ),
+                "manual_fork_required": "fork_legacy_fact_boundary",
+            }
+            recovery = recovery_by_state.get(
+                state, "audit_legacy_fact_boundary"
+            )
+            return {
+                "cases": [],
+                "counts": {
+                    "known_soft": len(
+                        analysis.get("known_soft_admission_digests") or ()
+                    ),
+                    "ambiguous": len(
+                        analysis.get("ambiguous_admission_digests") or ()
+                    ),
+                    "dependencies": len(
+                        (analysis.get("dependency_report") or {}).get(
+                            "dependencies"
+                        )
+                        or ()
+                    ),
+                },
+                "recovery_action": recovery,
+                "fact_boundary_analysis": analysis,
+            }
         if "legacy_genesis_v1_recertification_required" not in message:
             return {
                 "cases": [],
@@ -384,6 +501,27 @@ class CanonV3Service:
 
         report = audit_cutover(self.project_root)
         conflicts = list(report.get("conflicting_staging_kinds") or ())
+        conflicting_stage_digest: str | None = None
+        conflicting_transaction_hash: str | None = None
+        conflicting_transaction_kind: str | None = None
+        if len(conflicts) == 1 and conflicts[0] in {"chapter", "author_axiom"}:
+            conflicting_transaction_kind = str(conflicts[0])
+            active_path = self._active_stage_path(conflicting_transaction_kind)
+            try:
+                stage_raw = active_path.read_bytes()
+                (
+                    conflicting_stage_digest,
+                    conflicting_transaction_hash,
+                ) = self._stage_identity_from_bytes(
+                    conflicting_transaction_kind,
+                    stage_raw,
+                )
+            except (OSError, StagingArchiveConflict):
+                # audit_cutover already records the conflicting file.  A
+                # malformed pointer cannot be safely archived by an exact
+                # action and remains a Doctor/manual-integrity path.
+                conflicting_stage_digest = None
+                conflicting_transaction_hash = None
         cases = [] if conflicts else list(report.get("cases") or ())
         recovery = (
             "resolve_recertification_staging_conflict"
@@ -407,6 +545,9 @@ class CanonV3Service:
                 "required_case_count"
             ),
             "conflicting_staging_kinds": conflicts,
+            "conflicting_transaction_kind": conflicting_transaction_kind,
+            "conflicting_stage_digest": conflicting_stage_digest,
+            "conflicting_transaction_hash": conflicting_transaction_hash,
             "recertification_reason_codes": list(
                 report.get("reason_codes") or ()
             ),
@@ -437,6 +578,9 @@ class CanonV3Service:
 
     def _active_author_axiom_digest(self, head: str | None) -> str:
         """Return only HEAD-reachable immutable axiom authority."""
+
+        if head is None:
+            return EMPTY_AUTHOR_AXIOM_DIGEST
 
         from .author_axiom import AuthorAxiomChannel
 
@@ -659,6 +803,207 @@ class CanonV3Service:
             return StagingPointer.model_validate(raw)
         except Exception as exc:
             raise PreparedTransactionInvalid("canon_v3_staging_invalid") from exc
+
+    @staticmethod
+    def _stage_identity_from_bytes(
+        transaction_kind: str,
+        raw: bytes,
+    ) -> tuple[str, str]:
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise StagingArchiveConflict(
+                "canon_v3_archive_staging_invalid_json"
+            ) from exc
+        try:
+            if transaction_kind == "chapter":
+                pointer = StagingPointer.model_validate(payload)
+            elif transaction_kind == "author_axiom":
+                from .author_axiom import AuthorAxiomStagingPointer
+
+                pointer = AuthorAxiomStagingPointer.model_validate(payload)
+            else:  # pragma: no cover - closed by ArchiveStagingRequest.
+                raise StagingArchiveConflict(
+                    "canon_v3_archive_staging_kind_invalid"
+                )
+        except StagingArchiveConflict:
+            raise
+        except Exception as exc:
+            raise StagingArchiveConflict(
+                "canon_v3_archive_staging_pointer_invalid"
+            ) from exc
+        digest = pointer.stage_digest or canonical_digest(
+            pointer.digest_payload()
+        )
+        return str(digest), str(pointer.transaction_hash)
+
+    def _active_stage_path(self, transaction_kind: str) -> Path:
+        if transaction_kind == "chapter":
+            return self.staging_path
+        if transaction_kind == "author_axiom":
+            from .staging_authority import AUTHOR_AXIOM_STAGING_RELATIVE_PATH
+
+            return self.project_root / AUTHOR_AXIOM_STAGING_RELATIVE_PATH
+        raise StagingArchiveConflict("canon_v3_archive_staging_kind_invalid")
+
+    def _archive_stage_path(
+        self,
+        transaction_kind: str,
+        stage_digest: str,
+    ) -> Path:
+        return (
+            self.project_root
+            / STAGING_ARCHIVE_RELATIVE_ROOT
+            / transaction_kind
+            / f"{stage_digest}.json"
+        )
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        try:
+            descriptor = os.open(path, os.O_RDONLY)
+        except OSError:  # pragma: no cover - platform/filesystem specific.
+            return
+        try:
+            os.fsync(descriptor)
+        except OSError:  # pragma: no cover
+            pass
+        finally:
+            os.close(descriptor)
+
+    def archive_staging(
+        self,
+        raw_request: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Archive exactly one observed unpublished pointer.
+
+        Immutable transaction/decision objects are deliberately retained.  A
+        digest mismatch never removes the newer active pointer, while an exact
+        retry after a successful move returns the same archive identity.
+        """
+
+        try:
+            request = ArchiveStagingRequest.model_validate(raw_request)
+        except Exception as exc:
+            raise StagingArchiveConflict(
+                "canon_v3_archive_staging_request_invalid"
+            ) from exc
+        active_path = self._active_stage_path(request.transaction_kind)
+        archive_path = self._archive_stage_path(
+            request.transaction_kind,
+            request.expected_stage_digest,
+        )
+        for candidate_parent in (active_path.parent, archive_path.parent):
+            try:
+                candidate_parent.resolve(strict=False).relative_to(
+                    self.project_root
+                )
+            except (OSError, ValueError) as exc:
+                raise StagingArchiveConflict(
+                    "canon_v3_archive_staging_path_escape"
+                ) from exc
+        # An invalid request against a project with no such current or archived
+        # pointer remains side-effect free; do not create the shared lock merely
+        # to report that nothing matched.
+        if not active_path.exists() and not archive_path.exists():
+            raise StagingArchiveConflict(
+                "canon_v3_archive_staging_not_found"
+            )
+
+        with self.staging_lock:
+            from .staging_authority import authoritative_staging_kinds
+
+            kinds = authoritative_staging_kinds(self.project_root)
+            if len(kinds) > 1:
+                raise StagingArchiveConflict(
+                    "canon_v3_multiple_authoritative_staging:"
+                    + ",".join(kinds)
+                )
+
+            if active_path.exists():
+                if active_path.is_symlink() or not active_path.is_file():
+                    raise StagingArchiveConflict(
+                        "canon_v3_archive_staging_path_invalid"
+                    )
+                try:
+                    active_raw = active_path.read_bytes()
+                except OSError as exc:
+                    raise StagingArchiveConflict(
+                        "canon_v3_archive_staging_unreadable"
+                    ) from exc
+                actual_digest, transaction_hash = (
+                    self._stage_identity_from_bytes(
+                        request.transaction_kind,
+                        active_raw,
+                    )
+                )
+                if actual_digest != request.expected_stage_digest:
+                    raise StagingArchiveConflict(
+                        "canon_v3_archive_staging_digest_conflict:"
+                        f"expected={request.expected_stage_digest},"
+                        f"actual={actual_digest}"
+                    )
+                archive_path.parent.mkdir(parents=True, exist_ok=True)
+                if archive_path.exists():
+                    try:
+                        archived_raw = archive_path.read_bytes()
+                    except OSError as exc:
+                        raise StagingArchiveConflict(
+                            "canon_v3_archive_staging_archive_unreadable"
+                        ) from exc
+                    if archived_raw != active_raw:
+                        raise StagingArchiveConflict(
+                            "canon_v3_archive_staging_archive_collision"
+                        )
+                os.replace(active_path, archive_path)
+                self._fsync_directory(active_path.parent)
+                self._fsync_directory(archive_path.parent)
+                created = True
+            else:
+                if archive_path.is_symlink() or not archive_path.is_file():
+                    raise StagingArchiveConflict(
+                        "canon_v3_archive_staging_archive_invalid"
+                    )
+                try:
+                    archived_raw = archive_path.read_bytes()
+                except OSError as exc:
+                    raise StagingArchiveConflict(
+                        "canon_v3_archive_staging_archive_unreadable"
+                    ) from exc
+                actual_digest, transaction_hash = (
+                    self._stage_identity_from_bytes(
+                        request.transaction_kind,
+                        archived_raw,
+                    )
+                )
+                if actual_digest != request.expected_stage_digest:
+                    raise StagingArchiveConflict(
+                        "canon_v3_archive_staging_archive_digest_mismatch"
+                    )
+                created = False
+
+        result = {
+            "schema_version": ARCHIVE_STAGING_RESULT_SCHEMA,
+            "transaction_kind": request.transaction_kind,
+            "transaction_hash": transaction_hash,
+            "stage_digest": request.expected_stage_digest,
+            "archive_path": archive_path.relative_to(
+                self.project_root
+            ).as_posix(),
+            "created": created,
+            "idempotent_replay": not created,
+            "requires_reprepare": True,
+        }
+        result["workflow"] = self.workflow_snapshot()
+        return result
+
+    def cancel_staging(
+        self,
+        raw_request: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Compatibility alias; cancellation is always an auditable archive."""
+
+        return self.archive_staging(raw_request)
 
     def _write_staging_unlocked(self, pointer: StagingPointer) -> None:
         atomic_write_json(
@@ -1616,22 +1961,35 @@ class CanonV3Service:
             }
             material["material_digest"] = canonical_digest(material)
             decision_head = (decision_heads or {}).get(case.case_key)
+            decision_head_hash = (
+                decision_head.decision_hash
+                if decision_head is not None
+                else None
+            )
             payloads.append(
-                {
-                    **case_to_dict(case),
-                    "stage_digest": stage_digest,
-                    "decision_head_hash": (
-                        decision_head.decision_hash
-                        if decision_head is not None
-                        else None
+                serialize_public_human_case(
+                    {
+                        **case_to_dict(case),
+                        "stage_digest": stage_digest,
+                        "decision_head_hash": decision_head_hash,
+                        "semantic_claim_digest": semantic_claim_digest(
+                            candidate
+                        ),
+                        "lineage_key": lineage_key(
+                            envelope.chapter_binding.sha256,
+                            candidate,
+                        ),
+                        "review_material": material,
+                    },
+                    profile=chapter_action_profile(
+                        kind=case.kind.value,
+                        level=case.level.value,
+                        requires_rewrite=case.requires_rewrite,
                     ),
-                    "semantic_claim_digest": semantic_claim_digest(candidate),
-                    "lineage_key": lineage_key(
-                        envelope.chapter_binding.sha256,
-                        candidate,
-                    ),
-                    "review_material": material,
-                }
+                    target_digest=case.target_digest,
+                    material_digest=material["material_digest"],
+                    expected_decision_head_hash=decision_head_hash,
+                )
             )
         return payloads
 
@@ -2429,6 +2787,19 @@ class CanonV3Service:
             envelope.chapter,
             envelope.chapter_binding,
         )
+        from .historical_audit import (
+            HistoricalAuditExportError,
+            archive_bound_manuscript,
+        )
+        try:
+            revision_archive = archive_bound_manuscript(
+                self.project_root,
+                envelope.chapter_binding,
+            )
+        except HistoricalAuditExportError as exc:
+            raise FinalizeBlockedError(
+                "canon_v3_revision_archive_failed:" + exc.code
+            ) from exc
         reduction = self._validated_reduction(pointer, envelope)
         if request.finalize_token != self._finalize_token(
             pointer, envelope, reduction
@@ -2461,6 +2832,7 @@ class CanonV3Service:
             "commit_hash": commit_hash,
             "head_hash": head,
             "decision_hashes": list(pointer.decision_hashes),
+            "revision_archive": revision_archive,
             "projection_binding": projection["binding"],
         }
 
@@ -2517,6 +2889,24 @@ class CanonV3Service:
                 raise FinalizeBlockedError(
                     "canon_v3_finalize_token_precondition_failed"
                 )
+            require_chapter_binding(
+                self.project_root,
+                envelope.chapter,
+                envelope.chapter_binding,
+            )
+            from .historical_audit import (
+                HistoricalAuditExportError,
+                archive_bound_manuscript,
+            )
+            try:
+                revision_archive = archive_bound_manuscript(
+                    self.project_root,
+                    envelope.chapter_binding,
+                )
+            except HistoricalAuditExportError as exc:
+                raise FinalizeBlockedError(
+                    "canon_v3_revision_archive_failed:" + exc.code
+                ) from exc
             if actual_head != parent:
                 if self._transaction_is_current_commit(pointer.transaction_hash):
                     active = {
@@ -2557,14 +2947,10 @@ class CanonV3Service:
                         "created": False,
                         "transaction_hash": pointer.transaction_hash,
                         "head_hash": self.repository.current_head(validate=True),
+                        "revision_archive": revision_archive,
                         "projection_binding": projection["binding"],
                     }
                 raise CanonHeadConflict(expected=parent, actual=actual_head)
-            require_chapter_binding(
-                self.project_root,
-                envelope.chapter,
-                envelope.chapter_binding,
-            )
             active = {
                 record.candidate_digest for record in reduction.active_candidates
             }
@@ -2593,6 +2979,7 @@ class CanonV3Service:
                 "commit_hash": result.commit_hash,
                 "head_hash": result.head_hash,
                 "decision_hashes": list(result.decision_hashes),
+                "revision_archive": revision_archive,
                 "projection_binding": projection["binding"],
             }
 
@@ -2624,6 +3011,26 @@ class CanonV3Service:
 
     def author_axiom_status(self) -> dict[str, Any]:
         from .author_axiom import AuthorAxiomChannel
+        from .staging_authority import AUTHOR_AXIOM_STAGING_RELATIVE_PATH
+
+        head = self.repository.current_head(validate=True)
+        if (
+            head is None
+            and not (
+                self.project_root / AUTHOR_AXIOM_STAGING_RELATIVE_PATH
+            ).exists()
+        ):
+            return {
+                "schema_version": WORKFLOW_SCHEMA,
+                "state": "ready",
+                "head_hash": None,
+                "author_axiom_digest": EMPTY_AUTHOR_AXIOM_DIGEST,
+                "transaction_hash": None,
+                "stage_digest": None,
+                "finalize_token": None,
+                "cases": [],
+                "can_finalize": False,
+            }
 
         return AuthorAxiomChannel(
             self.project_root, repository=self.repository
@@ -2631,6 +3038,18 @@ class CanonV3Service:
 
     def active_author_axioms(self) -> dict[str, Any]:
         from .author_axiom import AuthorAxiomChannel
+
+        if self.repository.current_head(validate=True) is None:
+            return {
+                "schema_version": "canon-v3/active-author-axioms/v1",
+                "head_hash": None,
+                "author_axiom_digest": EMPTY_AUTHOR_AXIOM_DIGEST,
+                "genesis_admissions": [],
+                "superseded_genesis_admission_digests": [],
+                "records": [],
+                "record_digests": {},
+                "candidate_sources": {},
+            }
 
         return AuthorAxiomChannel(
             self.project_root, repository=self.repository
@@ -2712,7 +3131,10 @@ class CanonV3Service:
 
     def _workflow_snapshot_core(self) -> dict[str, Any]:
         try:
-            with self.staging_lock:
+            # CURRENT/STAGING/projection are atomically replaced.  The outer
+            # stable-token loop in ``workflow_snapshot`` detects a concurrent
+            # change without creating the shared staging lock on a read path.
+            with nullcontext():
                 pointer = self._read_staging_unlocked()
                 if pointer is None:
                     return self._snapshot_without_stage()
@@ -2982,7 +3404,44 @@ class CanonV3Service:
                 "error": str(exc),
             }
 
+    @staticmethod
+    def _optional_file_bytes(path: Path) -> bytes | None:
+        try:
+            return path.read_bytes()
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise PreparedTransactionInvalid(
+                "canon_v3_authority_input_unreadable:" + path.name
+            ) from exc
+
+    def _authority_read_token(self) -> tuple[bytes | None, ...]:
+        from .projection import projection_path
+        from .staging_authority import AUTHOR_AXIOM_STAGING_RELATIVE_PATH
+
+        return (
+            self._optional_file_bytes(self.repository.current_path),
+            self._optional_file_bytes(self.staging_path),
+            self._optional_file_bytes(
+                self.project_root / AUTHOR_AXIOM_STAGING_RELATIVE_PATH
+            ),
+            self._optional_file_bytes(projection_path(self.project_root)),
+        )
+
     def workflow_snapshot(self) -> dict[str, Any]:
+        """Return one stable, side-effect-free public authority snapshot."""
+
+        for _attempt in range(3):
+            before = self._authority_read_token()
+            result = self._workflow_snapshot_once()
+            after = self._authority_read_token()
+            if before == after:
+                return result
+        raise PreparedTransactionInvalid(
+            "canon_v3_authority_changed_during_read"
+        )
+
+    def _workflow_snapshot_once(self) -> dict[str, Any]:
         """Return workflow state plus the one authoritative chapter sequence."""
 
         snapshot = self._workflow_snapshot_core()
@@ -3066,9 +3525,29 @@ class CanonV3Service:
             entity_registry_digest = "0" * 64
         result["entity_registry_digest"] = entity_registry_digest
         try:
-            axiom_workflow = self.author_axiom_status()
+            # No author-axiom transaction can exist before a v3 HEAD.  Avoid
+            # constructing the legacy channel in this bootstrap read because
+            # older channel constructors create the v3 directory eagerly.
+            axiom_workflow = (
+                self.author_axiom_status()
+                if isinstance(head, str) and head
+                else {
+                    "state": "ready",
+                    "head_hash": None,
+                    "author_axiom_digest": EMPTY_AUTHOR_AXIOM_DIGEST,
+                    "transaction_hash": None,
+                    "stage_digest": None,
+                    "finalize_token": None,
+                    "cases": [],
+                    "can_finalize": False,
+                }
+            )
             result["author_axiom_workflow"] = axiom_workflow
-            if axiom_workflow.get("transaction_hash"):
+            if (
+                axiom_workflow.get("transaction_hash")
+                and result.get("authoritative_transaction")
+                != "legacy_recertification"
+            ):
                 # There is exactly one project-wide authoritative staging
                 # transaction.  Surface the axiom case/tokens through the same
                 # workflow fields so confirm cannot choose the wrong channel.
@@ -3118,8 +3597,11 @@ class CanonV3Service:
 
 
 __all__ = [
+    "ARCHIVE_STAGING_REQUEST_SCHEMA",
+    "ARCHIVE_STAGING_RESULT_SCHEMA",
     "ActiveTransactionError",
     "ActiveCanonBindingError",
+    "ArchiveStagingRequest",
     "CanonV3Service",
     "CanonV3ServiceError",
     "ChapterProposalBatch",
@@ -3145,4 +3627,5 @@ __all__ = [
     "STAGING_SCHEMA_V1",
     "StagingPointer",
     "ScanAttestationError",
+    "StagingArchiveConflict",
 ]

@@ -24,6 +24,11 @@ from pydantic import (
     model_validator,
 )
 
+from .public_protocol import (
+    ordered_allowed_actions,
+    requirement_action_profile,
+)
+
 
 SCHEMA_VERSION = "canon-v3/domain-2"
 COMPILER_VERSION = "canon-v3/compiler-2"
@@ -595,19 +600,25 @@ class ReviewRequirement(StrictModel):
         ):
             if any(not re.fullmatch(SHA256_PATTERN, digest) for digest in digests):
                 raise ValueError(f"{label} must contain SHA-256 hex digests")
-        if self.mode == RequirementMode.REWRITE:
-            if self.level != ReviewLevel.HUMAN_REQUIRED:
-                raise ValueError("rewrite requirements must be human_required")
-            if self.allowed_actions != (ReviewAction.REWRITE,):
-                raise ValueError("rewrite requirements only allow rewrite")
-        elif self.checkpoint:
-            if self.level != ReviewLevel.HUMAN_REQUIRED:
-                raise ValueError("checkpoints must be human_required")
-            if self.allowed_actions != (
-                ReviewAction.APPROVE,
-                ReviewAction.REWRITE,
-            ):
-                raise ValueError("checkpoints only allow approve or rewrite")
+        if self.mode == RequirementMode.REWRITE and (
+            self.level != ReviewLevel.HUMAN_REQUIRED
+        ):
+            raise ValueError("rewrite requirements must be human_required")
+        if self.checkpoint and self.level != ReviewLevel.HUMAN_REQUIRED:
+            raise ValueError("checkpoints must be human_required")
+        profile = requirement_action_profile(
+            mode=self.mode.value,
+            checkpoint=self.checkpoint,
+            level=self.level.value,
+        )
+        expected_actions = tuple(
+            ReviewAction(action)
+            for action in ordered_allowed_actions(profile)
+        )
+        if self.allowed_actions != expected_actions:
+            raise ValueError(
+                "review requirement actions do not match public action registry"
+            )
         return self
 
 

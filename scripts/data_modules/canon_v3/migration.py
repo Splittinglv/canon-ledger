@@ -35,7 +35,23 @@ from ..human_review import (
     human_decision_receipt_sha256,
     verified_event_content_sha256,
 )
+from ..story_contracts import (
+    _build_legacy_setting_canon_v1,
+    _fact_boundary_setting_verification,
+)
+from .fact_boundary import (
+    FACT_BOUNDARY_POLICY_VERSION,
+    FactBoundaryClass,
+    classify_setting_leaf,
+)
 from .projection import projection_is_fresh, rebuild_projection
+from .public_protocol import (
+    HumanActionProfile,
+    PublicHumanProtocolError,
+    ordered_allowed_actions,
+    require_allowed_action,
+    serialize_public_human_case,
+)
 from .repository import (
     CanonIntegrityError,
     CanonRepositoryError,
@@ -45,12 +61,15 @@ from .repository import (
     content_hash,
 )
 from .review import ReviewAction, decision_from_dict
+from .source_verifier import resolve_json_pointer
 
 
 LEGACY_GENESIS_SCHEMA_V1 = "canon-v3/legacy-genesis/v1"
-LEGACY_GENESIS_SCHEMA = "canon-v3/legacy-genesis/v2"
+LEGACY_GENESIS_SCHEMA_V2 = "canon-v3/legacy-genesis/v2"
+LEGACY_GENESIS_SCHEMA = "canon-v3/legacy-genesis/v3"
 LEGACY_COMMIT_REF_SCHEMA = "canon-v3/legacy-v2-commit-ref/v2"
-LEGACY_SNAPSHOT_SCHEMA = "canon-v3/legacy-fact-snapshot/v2"
+LEGACY_SNAPSHOT_SCHEMA_V2 = "canon-v3/legacy-fact-snapshot/v2"
+LEGACY_SNAPSHOT_SCHEMA = "canon-v3/legacy-fact-snapshot/v3"
 LEGACY_ADMISSION_SCHEMA = "canon-v3/legacy-fact-admission/v2"
 LEGACY_STATUS_SCHEMA = "canon-v3/legacy-prefix-status/v2"
 LEGACY_MIGRATION_RESULT_SCHEMA = "canon-v3/legacy-migration-result/v2"
@@ -74,6 +93,19 @@ LEGACY_RECERTIFICATION_RESULT_SCHEMA = (
 )
 LEGACY_RECERTIFIED_SUFFIX_TRANSACTION_SCHEMA = (
     RECERTIFIED_SUFFIX_TRANSACTION_SCHEMA
+)
+LEGACY_FACT_BOUNDARY_AUDIT_SCHEMA = "canon-v3/legacy-fact-boundary-audit/v1"
+LEGACY_FACT_BOUNDARY_EXCLUSION_SCHEMA = (
+    "canon-v3/legacy-fact-boundary-exclusion/v1"
+)
+LEGACY_FACT_BOUNDARY_REVIEW_SCHEMA = (
+    "canon-v3/legacy-fact-boundary-review-material/v1"
+)
+LEGACY_FACT_BOUNDARY_ANALYSIS_SCHEMA = (
+    "canon-v3/legacy-fact-boundary-analysis/v1"
+)
+LEGACY_FACT_BOUNDARY_DEPENDENCIES_SCHEMA = (
+    "canon-v3/legacy-fact-boundary-dependencies/v1"
 )
 
 _NEGATIVE_REVIEW_ACTIONS = frozenset(
@@ -119,9 +151,19 @@ _LONG_TERM_EVENT_TYPES = frozenset(
 class LegacyMigrationError(RuntimeError):
     """A v2 prefix cannot be proved safe enough to become the v3 base."""
 
-    def __init__(self, code: str, *details: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *details: str,
+        review_material: Mapping[str, Any] | None = None,
+    ) -> None:
         self.code = str(code)
         self.details = tuple(str(item) for item in details if str(item))
+        self.review_material = (
+            copy.deepcopy(dict(review_material))
+            if review_material is not None
+            else None
+        )
         suffix = f":{':'.join(self.details)}" if self.details else ""
         super().__init__(f"{self.code}{suffix}")
 
@@ -140,7 +182,12 @@ class _LegacyMaterial:
         recertification: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         metadata = {
-            "schema_version": LEGACY_GENESIS_SCHEMA,
+            "schema_version": (
+                LEGACY_GENESIS_SCHEMA_V2
+                if self.snapshot.get("schema_version")
+                == LEGACY_SNAPSHOT_SCHEMA_V2
+                else LEGACY_GENESIS_SCHEMA
+            ),
             "source": self.source,
             "cutover_chapter": self.cutover_chapter,
             "v2_commits": [dict(item) for item in self.commits],
@@ -154,6 +201,23 @@ class _LegacyMaterial:
 
 def _root(project_root: str | Path) -> Path:
     return Path(project_root).expanduser().resolve()
+
+
+def legacy_snapshot_active_provenance(
+    snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the source-recomputable portion of one legacy snapshot.
+
+    v3 exclusion receipts freeze the advisory bytes seen at cutover for audit,
+    but later advisory-only edits must not stale active Canon.  Repository and
+    status validation therefore compare this projection while still verifying
+    the stored full-snapshot self hash.
+    """
+
+    result = copy.deepcopy(dict(snapshot))
+    if result.get("schema_version") == LEGACY_SNAPSHOT_SCHEMA:
+        result.pop("fact_boundary", None)
+    return result
 
 
 def _commit_paths(project_root: Path) -> list[tuple[int, Path]]:
@@ -607,6 +671,254 @@ _LEGACY_LIST_FACT_CHANNELS = (
 )
 _LEGACY_MAP_FACT_CHANNELS = ("information", "presence", "custody")
 _NAMESPACE_TYPE = {"actor": "角色", "item": "物品", "location": "地点"}
+
+
+def _boundary_initial_leaf(
+    section: str,
+    field: str,
+    value: Any,
+) -> dict[str, Any]:
+    return {
+        "id": f"setup-{section}-{field}",
+        "category": (
+            "world_rule"
+            if section == "world"
+            else "character_state"
+            if section == "protagonist"
+            else "story_fact"
+        ),
+        "subject": "initial_world" if section == "world" else section,
+        "field": str(field),
+        "value": copy.deepcopy(value),
+        "source": "legacy:initial_canon",
+        "section": str(section),
+        "source_chapter": 0,
+    }
+
+
+def _boundary_review_material(
+    ambiguous: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    rows = [copy.deepcopy(dict(item)) for item in ambiguous]
+    rows.sort(key=lambda item: str(item.get("source_location") or ""))
+    material = {
+        "schema_version": LEGACY_FACT_BOUNDARY_REVIEW_SCHEMA,
+        "policy_version": FACT_BOUNDARY_POLICY_VERSION,
+        "required_human_action": "classify_legacy_setting_leaf",
+        "allowed_resolutions": [
+            "rewrite_as_explicit_hard_fact_field",
+            "keep_in_advisory_source",
+        ],
+        "items": rows,
+    }
+    material["material_digest"] = content_hash(material)
+    return material
+
+
+def _apply_legacy_fact_boundary(
+    project_root: Path,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Remove known advisory leaves before admissions are constructed.
+
+    The returned snapshot keeps deterministic exclusion receipts, but neither
+    the original leaf nor any reducer copy remains in an active fact channel.
+    Unknown fields fail closed with complete review material; migration has no
+    safe partial-publish state in which to wait for that decision.
+    """
+
+    facts = copy.deepcopy(payload)
+    decisions: dict[str, FactBoundaryClass] = {}
+    source_rows: dict[str, dict[str, Any]] = {}
+    source_locations: dict[str, str] = {}
+    ambiguous: list[dict[str, Any]] = []
+
+    setting_canon = facts.get("setting_canon")
+    if isinstance(setting_canon, Mapping):
+        has_bound_setting = bool(
+            setting_canon.get("sources") or setting_canon.get("facts")
+        )
+        stored_setting_facts = setting_canon.get("facts") or []
+        if not isinstance(stored_setting_facts, list):
+            raise LegacyMigrationError("legacy_setting_canon_facts_invalid")
+        if has_bound_setting:
+            try:
+                source_bound_setting = _build_legacy_setting_canon_v1(
+                    project_root
+                )
+            except (OSError, ValueError) as exc:
+                raise LegacyMigrationError(
+                    "legacy_fact_boundary_setting_source_invalid", str(exc)
+                ) from exc
+            current_source_facts = source_bound_setting.get("facts") or []
+        else:
+            current_source_facts = []
+        if not isinstance(current_source_facts, list):
+            raise LegacyMigrationError("legacy_setting_canon_facts_invalid")
+        candidates: list[tuple[Mapping[str, Any], str, bool]] = []
+        stored_ids: set[str] = set()
+        for index, row in enumerate(stored_setting_facts):
+            if not isinstance(row, Mapping):
+                raise LegacyMigrationError(
+                    "legacy_setting_canon_fact_invalid", str(index)
+                )
+            fact_id = str(row.get("id") or "").strip()
+            if fact_id:
+                stored_ids.add(fact_id)
+            candidates.append(
+                (row, f"/setting_canon/facts/{index}", True)
+            )
+        for row in current_source_facts:
+            if not isinstance(row, Mapping):
+                raise LegacyMigrationError(
+                    "legacy_setting_canon_fact_invalid", "source"
+                )
+            fact_id = str(row.get("id") or "").strip()
+            if fact_id in stored_ids:
+                continue
+            candidates.append(
+                (
+                    row,
+                    "source:"
+                    + str(row.get("source") or "")
+                    + ":"
+                    + str(int(row.get("line") or 0)),
+                    False,
+                )
+            )
+        retained: list[dict[str, Any]] = []
+        for raw, source_location, was_active in candidates:
+            row = copy.deepcopy(dict(raw))
+            fact_id = str(row.get("id") or "").strip()
+            if not fact_id:
+                raise LegacyMigrationError(
+                    "legacy_setting_canon_fact_id_missing", source_location
+                )
+            classification = classify_setting_leaf(row)
+            decisions[fact_id] = classification
+            source_rows[fact_id] = row
+            source_locations[fact_id] = source_location
+            if (
+                classification is FactBoundaryClass.HARD_FACT
+                and was_active
+            ):
+                retained.append(row)
+            elif (
+                classification is FactBoundaryClass.AMBIGUOUS
+                and was_active
+            ):
+                ambiguous.append(
+                    {
+                        "source_location": source_locations[fact_id],
+                        "fact_content_sha256": content_hash(row),
+                        "fact": row,
+                    }
+                )
+        mutable_setting = copy.deepcopy(dict(setting_canon))
+        mutable_setting["facts"] = retained
+        facts["setting_canon"] = (
+            mutable_setting
+            if mutable_setting.get("sources") or retained
+            else {}
+        )
+    elif setting_canon not in (None, {}):
+        raise LegacyMigrationError("legacy_setting_canon_invalid")
+
+    initial_canon = facts.get("initial_canon")
+    if isinstance(initial_canon, Mapping):
+        retained_initial = copy.deepcopy(dict(initial_canon))
+        for section, raw_fields in sorted(initial_canon.items()):
+            if not isinstance(raw_fields, Mapping):
+                raise LegacyMigrationError(
+                    "legacy_initial_canon_section_invalid", str(section)
+                )
+            retained_fields = retained_initial.get(section)
+            if not isinstance(retained_fields, dict):
+                retained_fields = {}
+                retained_initial[str(section)] = retained_fields
+            for field, value in sorted(raw_fields.items()):
+                row = _boundary_initial_leaf(str(section), str(field), value)
+                fact_id = str(row["id"])
+                classification = classify_setting_leaf(row)
+                decisions[fact_id] = classification
+                source_rows[fact_id] = row
+                source_locations[fact_id] = (
+                    f"/initial_canon/{section}/{field}"
+                )
+                if classification is FactBoundaryClass.KNOWN_SOFT:
+                    retained_fields.pop(field, None)
+                elif classification is FactBoundaryClass.AMBIGUOUS:
+                    ambiguous.append(
+                        {
+                            "source_location": source_locations[fact_id],
+                            "fact_content_sha256": content_hash(row),
+                            "fact": row,
+                        }
+                    )
+            if not retained_fields:
+                retained_initial.pop(section, None)
+        facts["initial_canon"] = retained_initial
+    elif initial_canon not in (None, {}):
+        raise LegacyMigrationError("legacy_initial_canon_invalid")
+
+    if ambiguous:
+        material = _boundary_review_material(ambiguous)
+        raise LegacyMigrationError(
+            "legacy_fact_boundary_human_review_required",
+            f"material_digest={material['material_digest']}",
+            f"item_count={len(ambiguous)}",
+            review_material=material,
+        )
+
+    active_locations: dict[str, list[str]] = {
+        fact_id: [] for fact_id in decisions
+    }
+    active_digests: dict[str, set[str]] = {
+        fact_id: set() for fact_id in decisions
+    }
+    for channel in _LEGACY_LIST_FACT_CHANNELS:
+        raw_rows = facts.get(channel) or []
+        if not isinstance(raw_rows, list):
+            continue
+        retained_rows: list[Any] = []
+        for index, raw in enumerate(raw_rows):
+            fact_id = (
+                str(raw.get("id") or "").strip()
+                if isinstance(raw, Mapping)
+                else ""
+            )
+            classification = decisions.get(fact_id)
+            if classification is not FactBoundaryClass.KNOWN_SOFT:
+                retained_rows.append(raw)
+                continue
+            active_locations[fact_id].append(f"/{channel}/{index}")
+            active_digests[fact_id].add(content_hash(raw))
+        facts[channel] = retained_rows
+
+    exclusions: list[dict[str, Any]] = []
+    for fact_id in sorted(decisions):
+        if decisions[fact_id] is not FactBoundaryClass.KNOWN_SOFT:
+            continue
+        receipt = {
+            "schema_version": LEGACY_FACT_BOUNDARY_EXCLUSION_SCHEMA,
+            "policy_version": FACT_BOUNDARY_POLICY_VERSION,
+            "classification": FactBoundaryClass.KNOWN_SOFT.value,
+            "source_location": source_locations[fact_id],
+            "source_fact_content_sha256": content_hash(source_rows[fact_id]),
+            "source_fact": source_rows[fact_id],
+            "active_locations": sorted(active_locations[fact_id]),
+            "active_fact_content_sha256s": sorted(active_digests[fact_id]),
+        }
+        receipt["receipt_digest"] = content_hash(receipt)
+        exclusions.append(receipt)
+    boundary_audit = {
+        "schema_version": LEGACY_FACT_BOUNDARY_AUDIT_SCHEMA,
+        "policy_version": FACT_BOUNDARY_POLICY_VERSION,
+        "excluded_known_soft": exclusions,
+    }
+    boundary_audit["audit_digest"] = content_hash(boundary_audit)
+    facts["fact_boundary"] = boundary_audit
+    return facts
 
 
 def _identity_token(value: Any) -> str:
@@ -1327,18 +1639,24 @@ def _build_cutover_fact_admissions(
     return result
 
 
-def _fact_snapshot(project_root: Path, cutover_chapter: int) -> dict[str, Any]:
+def _fact_snapshot(
+    project_root: Path,
+    cutover_chapter: int,
+    *,
+    apply_fact_boundary: bool = True,
+) -> dict[str, Any]:
     # Migration/status must always re-read the frozen v2 prefix.  Once CURRENT
     # exists, the default history reader intentionally switches to v3; using
     # that derived view here would compare the genesis snapshot with itself
     # instead of detecting edits to the legacy source files.
     try:
-        history = load_canonical_history(
-            project_root,
-            cutover_chapter,
-            prefer_v3=False,
-            cutover_strict=True,
-        )
+        with _fact_boundary_setting_verification(apply_fact_boundary):
+            history = load_canonical_history(
+                project_root,
+                cutover_chapter,
+                prefer_v3=False,
+                cutover_strict=True,
+            )
     except ValueError as exc:
         code = str(exc)
         if code == "legacy_event_quote_not_in_bound_chapter":
@@ -1601,6 +1919,8 @@ def _fact_snapshot(project_root: Path, cutover_chapter: int) -> dict[str, Any]:
                 for chapter, event_id, event_type in unexpected_events
             ),
         )
+    if apply_fact_boundary:
+        payload = _apply_legacy_fact_boundary(project_root, payload)
     payload, identity_receipts = _normalize_cutover_identity_graph(payload)
     payload = _assign_cutover_slots(payload)
     payload["cutover_admissions"] = sorted(
@@ -1617,17 +1937,48 @@ def _fact_snapshot(project_root: Path, cutover_chapter: int) -> dict[str, Any]:
         payload["cutover_admissions"],
         identity_receipts,
     )
-    return {
-        "schema_version": LEGACY_SNAPSHOT_SCHEMA,
+    boundary_audit = (
+        payload.pop("fact_boundary", None)
+        if apply_fact_boundary
+        else None
+    )
+    snapshot = {
+        "schema_version": (
+            LEGACY_SNAPSHOT_SCHEMA
+            if apply_fact_boundary
+            else LEGACY_SNAPSHOT_SCHEMA_V2
+        ),
         "source_schema_version": str(payload.get("schema_version") or ""),
         "cutover_chapter": cutover_chapter,
         "facts": payload,
     }
+    if apply_fact_boundary:
+        if not isinstance(boundary_audit, Mapping):
+            raise LegacyMigrationError(
+                "legacy_fact_boundary_audit_missing"
+            )
+        snapshot["fact_boundary"] = copy.deepcopy(dict(boundary_audit))
+    return snapshot
+
+
+def _fact_snapshot_v2(
+    project_root: Path,
+    cutover_chapter: int,
+) -> dict[str, Any]:
+    """Recompute historical v8 snapshot bytes with the original v2 policy."""
+
+    return _fact_snapshot(
+        project_root,
+        cutover_chapter,
+        apply_fact_boundary=False,
+    )
 
 
 def _build_material(
     project_root: Path,
     cutover_chapter: int | None,
+    *,
+    apply_fact_boundary: bool = True,
 ) -> _LegacyMaterial:
     if cutover_chapter is None:
         discovered = _discover_default_cutover(project_root)
@@ -1646,9 +1997,10 @@ def _build_material(
     # the prefix again.  This catches ordinary concurrent v2 writes instead of
     # binding commit references from one revision to facts from another.
     first_refs = _accepted_commit_refs(project_root, chapter)
-    first_snapshot = _fact_snapshot(project_root, chapter)
+    snapshot_builder = _fact_snapshot if apply_fact_boundary else _fact_snapshot_v2
+    first_snapshot = snapshot_builder(project_root, chapter)
     second_refs = _accepted_commit_refs(project_root, chapter)
-    second_snapshot = _fact_snapshot(project_root, chapter)
+    second_snapshot = snapshot_builder(project_root, chapter)
     if first_refs != second_refs or first_snapshot != second_snapshot:
         raise LegacyMigrationError("legacy_sources_changed_during_migration")
 
@@ -1684,6 +2036,447 @@ def _genesis_manifest(
         if not isinstance(parent, str) or not parent:
             raise CanonIntegrityError("canon_v3_manifest_missing_parent")
         current_hash = parent
+
+
+def _active_superseded_genesis_admissions(
+    repository: CanonV3Repository,
+    head_hash: str,
+) -> frozenset[str]:
+    manifest = repository.read_manifest(head_hash, validate_references=True)
+    entries = repository._author_axiom_manifest_entries(manifest)  # noqa: SLF001
+    if not entries:
+        return frozenset()
+    commit = repository.read_author_axiom_commit(
+        str(entries[-1].get("commit_hash") or "")
+    )
+    return frozenset(
+        str(item)
+        for item in commit.get(
+            "superseded_legacy_admission_digests"
+        )
+        or ()
+    )
+
+
+def _legacy_admission_fact_record(
+    *,
+    facts: Mapping[str, Any],
+    snapshot_digest: str,
+    admission: Mapping[str, Any],
+) -> dict[str, Any]:
+    target_digest = str(admission.get("fact_content_sha256") or "")
+    matched: dict[str, Any] | None = None
+    locations: list[dict[str, str]] = []
+    for raw_location in admission.get("locations") or ():
+        location = str(raw_location)
+        try:
+            candidate = resolve_json_pointer(facts, location)
+        except Exception as exc:
+            raise LegacyMigrationError(
+                "legacy_fact_boundary_admission_location_invalid",
+                str(admission.get("admission_digest") or ""),
+                location,
+            ) from exc
+        if not isinstance(candidate, Mapping) or content_hash(candidate) != target_digest:
+            raise LegacyMigrationError(
+                "legacy_fact_boundary_admission_fact_mismatch",
+                str(admission.get("admission_digest") or ""),
+                location,
+            )
+        candidate_dict = copy.deepcopy(dict(candidate))
+        if matched is not None and matched != candidate_dict:
+            raise LegacyMigrationError(
+                "legacy_fact_boundary_admission_fact_collision",
+                str(admission.get("admission_digest") or ""),
+            )
+        matched = candidate_dict
+        channel = location.lstrip("/").split("/", 1)[0]
+        locations.append({"channel": channel, "path": location})
+    if matched is None:
+        raise LegacyMigrationError(
+            "legacy_fact_boundary_admission_fact_missing",
+            str(admission.get("admission_digest") or ""),
+        )
+    record = {
+        "record_type": "legacy_fact",
+        "legacy_snapshot_sha256": snapshot_digest,
+        "fact_content_sha256": target_digest,
+        "locations": sorted(
+            locations, key=lambda item: (item["channel"], item["path"])
+        ),
+        "fact": matched,
+        "admission_digest": str(admission.get("admission_digest") or ""),
+    }
+    record["fact_digest"] = content_hash(record)
+    return record
+
+
+def _digest_reference_paths(
+    value: Any,
+    targets: frozenset[str],
+    *,
+    pointer: str = "",
+) -> list[tuple[str, str]]:
+    matches: list[tuple[str, str]] = []
+    if isinstance(value, Mapping):
+        for key, nested in sorted(value.items(), key=lambda item: str(item[0])):
+            token = str(key).replace("~", "~0").replace("/", "~1")
+            matches.extend(
+                _digest_reference_paths(
+                    nested,
+                    targets,
+                    pointer=f"{pointer}/{token}",
+                )
+            )
+    elif isinstance(value, (list, tuple)):
+        for index, nested in enumerate(value):
+            matches.extend(
+                _digest_reference_paths(
+                    nested,
+                    targets,
+                    pointer=f"{pointer}/{index}",
+                )
+            )
+    elif isinstance(value, str) and value in targets:
+        matches.append((pointer or "/", value))
+    return matches
+
+
+def legacy_genesis_supersession_dependencies(
+    project_root: str | Path,
+    admission_digests: Iterable[str],
+    *,
+    head_hash: str | None = None,
+) -> dict[str, Any]:
+    """Return every active immutable object that depends on genesis facts.
+
+    Author-axiom prepare/finalize can reuse this report to reject an unsafe
+    supersession before ``CURRENT`` changes.  The function is strictly
+    read-only and scans the active manifest, transaction and decision objects.
+    """
+
+    requested = tuple(sorted({str(item) for item in admission_digests if str(item)}))
+    root = _root(project_root)
+    repository = CanonV3Repository(root)
+    resolved_head = head_hash or repository.current_head(validate=True)
+    if resolved_head is None:
+        raise LegacyMigrationError(
+            "legacy_fact_boundary_current_missing"
+        )
+    manifest = repository.read_manifest(
+        resolved_head, validate_references=True
+    )
+    genesis = _genesis_manifest(repository, resolved_head)
+    metadata = genesis.get("genesis_metadata")
+    snapshot = (
+        metadata.get("legacy_snapshot")
+        if isinstance(metadata, Mapping)
+        else None
+    )
+    facts = snapshot.get("facts") if isinstance(snapshot, Mapping) else None
+    if not isinstance(metadata, Mapping) or not isinstance(facts, Mapping):
+        raise LegacyMigrationError(
+            "legacy_fact_boundary_genesis_snapshot_missing"
+        )
+    snapshot_digest = str(metadata.get("legacy_snapshot_sha256") or "")
+    admissions = {
+        str(item.get("admission_digest") or ""): item
+        for item in facts.get("cutover_fact_admissions") or ()
+        if isinstance(item, Mapping)
+    }
+    missing = sorted(set(requested) - set(admissions))
+    if missing:
+        raise LegacyMigrationError(
+            "legacy_fact_boundary_admission_missing", *missing
+        )
+    superseded = _active_superseded_genesis_admissions(
+        repository, resolved_head
+    )
+    inactive = sorted(set(requested) & set(superseded))
+    if inactive:
+        raise LegacyMigrationError(
+            "legacy_fact_boundary_admission_already_superseded", *inactive
+        )
+    records = {
+        admission_digest: _legacy_admission_fact_record(
+            facts=facts,
+            snapshot_digest=snapshot_digest,
+            admission=admissions[admission_digest],
+        )
+        for admission_digest in requested
+    }
+    admission_by_fact_digest = {
+        str(record["fact_digest"]): admission_digest
+        for admission_digest, record in records.items()
+    }
+    target_fact_digests = frozenset(admission_by_fact_digest)
+    dependencies: list[dict[str, Any]] = []
+
+    def scan_object(
+        *,
+        kind: str,
+        object_hash: str,
+        payload: Mapping[str, Any],
+        chapter: int,
+        revision: int,
+    ) -> None:
+        for pointer, fact_digest in _digest_reference_paths(
+            payload, target_fact_digests
+        ):
+            dependencies.append(
+                {
+                    "admission_digest": admission_by_fact_digest[fact_digest],
+                    "fact_digest": fact_digest,
+                    "object_kind": kind,
+                    "object_hash": object_hash,
+                    "chapter": chapter,
+                    "revision": revision,
+                    "json_pointer": pointer,
+                }
+            )
+
+    for entry in manifest.get("chapters") or ():
+        if not isinstance(entry, Mapping):
+            continue
+        chapter = int(entry.get("chapter") or 0)
+        revision = int(entry.get("revision") or 0)
+        commit_hash = str(entry.get("commit_hash") or "")
+        commit = repository.read_commit(commit_hash)
+        scan_object(
+            kind="commit",
+            object_hash=commit_hash,
+            payload=commit,
+            chapter=chapter,
+            revision=revision,
+        )
+        transaction_hash = str(commit.get("transaction_hash") or "")
+        if transaction_hash:
+            scan_object(
+                kind="transaction",
+                object_hash=transaction_hash,
+                payload=repository.read_transaction(transaction_hash),
+                chapter=chapter,
+                revision=revision,
+            )
+        for decision_hash in commit.get("decision_hashes") or ():
+            digest = str(decision_hash)
+            scan_object(
+                kind="decision",
+                object_hash=digest,
+                payload=repository.read_decision(digest),
+                chapter=chapter,
+                revision=revision,
+            )
+        for decision_hash in commit.get("lineage_decision_hashes") or ():
+            digest = str(decision_hash)
+            scan_object(
+                kind="lineage_decision",
+                object_hash=digest,
+                payload=repository.read_decision(digest),
+                chapter=chapter,
+                revision=revision,
+            )
+    for entry in manifest.get("author_axiom_commits") or ():
+        if not isinstance(entry, Mapping):
+            continue
+        revision = int(entry.get("revision") or 0)
+        commit_hash = str(entry.get("commit_hash") or "")
+        commit = repository.read_author_axiom_commit(commit_hash)
+        scan_object(
+            kind="author_axiom_commit",
+            object_hash=commit_hash,
+            payload=commit,
+            chapter=0,
+            revision=revision,
+        )
+        transaction_hash = str(commit.get("transaction_hash") or "")
+        if transaction_hash:
+            scan_object(
+                kind="author_axiom_transaction",
+                object_hash=transaction_hash,
+                payload=repository.read_author_axiom_transaction(
+                    transaction_hash
+                ),
+                chapter=0,
+                revision=revision,
+            )
+        for field, kind in (
+            ("decision_hashes", "author_axiom_decision"),
+            (
+                "lineage_decision_hashes",
+                "author_axiom_lineage_decision",
+            ),
+        ):
+            for decision_hash in commit.get(field) or ():
+                digest = str(decision_hash)
+                scan_object(
+                    kind=kind,
+                    object_hash=digest,
+                    payload=repository.read_author_axiom_decision(digest),
+                    chapter=0,
+                    revision=revision,
+                )
+    dependencies.sort(
+        key=lambda item: (
+            item["chapter"],
+            item["revision"],
+            item["object_kind"],
+            item["object_hash"],
+            item["json_pointer"],
+        )
+    )
+    report = {
+        "schema_version": LEGACY_FACT_BOUNDARY_DEPENDENCIES_SCHEMA,
+        "head_hash": resolved_head,
+        "admission_digests": list(requested),
+        "fact_digests": sorted(target_fact_digests),
+        "has_dependencies": bool(dependencies),
+        "dependencies": dependencies,
+    }
+    report["report_digest"] = content_hash(report)
+    return report
+
+
+def require_legacy_genesis_supersession_safe(
+    project_root: str | Path,
+    admission_digests: Iterable[str],
+    *,
+    head_hash: str | None = None,
+) -> dict[str, Any]:
+    report = legacy_genesis_supersession_dependencies(
+        project_root,
+        admission_digests,
+        head_hash=head_hash,
+    )
+    if report["has_dependencies"]:
+        raise LegacyMigrationError(
+            "legacy_genesis_supersession_has_downstream_dependencies",
+            f"report_digest={report['report_digest']}",
+            f"dependency_count={len(report['dependencies'])}",
+            review_material=report,
+        )
+    return report
+
+
+def analyze_legacy_fact_boundary(
+    project_root: str | Path,
+    *,
+    head_hash: str | None = None,
+) -> dict[str, Any]:
+    """Build a deterministic read-only remediation plan for v8 v2 genesis."""
+
+    root = _root(project_root)
+    repository = CanonV3Repository(root)
+    resolved_head = head_hash or repository.current_head(validate=True)
+    if resolved_head is None:
+        raise LegacyMigrationError("legacy_fact_boundary_current_missing")
+    genesis = _genesis_manifest(repository, resolved_head)
+    metadata = genesis.get("genesis_metadata")
+    snapshot = (
+        metadata.get("legacy_snapshot")
+        if isinstance(metadata, Mapping)
+        else None
+    )
+    facts = snapshot.get("facts") if isinstance(snapshot, Mapping) else None
+    if not isinstance(metadata, Mapping) or not isinstance(facts, Mapping):
+        raise LegacyMigrationError(
+            "legacy_fact_boundary_genesis_snapshot_missing"
+        )
+    superseded = _active_superseded_genesis_admissions(
+        repository, resolved_head
+    )
+    candidates: list[dict[str, Any]] = []
+    for admission in facts.get("cutover_fact_admissions") or ():
+        if (
+            not isinstance(admission, Mapping)
+            or admission.get("mode") != "author_axiom_snapshot"
+        ):
+            continue
+        admission_digest = str(admission.get("admission_digest") or "")
+        if admission_digest in superseded:
+            continue
+        record = _legacy_admission_fact_record(
+            facts=facts,
+            snapshot_digest=str(metadata.get("legacy_snapshot_sha256") or ""),
+            admission=admission,
+        )
+        fact = copy.deepcopy(record["fact"])
+        classification = classify_setting_leaf(fact)
+        candidates.append(
+            {
+                "admission_digest": admission_digest,
+                "fact_content_sha256": str(
+                    admission.get("fact_content_sha256") or ""
+                ),
+                "fact_digest": str(record["fact_digest"]),
+                "classification": classification.value,
+                "locations": list(admission.get("locations") or ()),
+                "fact": fact,
+            }
+        )
+    candidates.sort(key=lambda item: item["admission_digest"])
+    soft = [
+        item
+        for item in candidates
+        if item["classification"] == FactBoundaryClass.KNOWN_SOFT.value
+    ]
+    ambiguous = [
+        item
+        for item in candidates
+        if item["classification"] == FactBoundaryClass.AMBIGUOUS.value
+    ]
+    dependencies = legacy_genesis_supersession_dependencies(
+        root,
+        [item["admission_digest"] for item in soft],
+        head_hash=resolved_head,
+    )
+    if ambiguous:
+        state = "human_classification_required"
+    elif dependencies["has_dependencies"]:
+        state = "manual_fork_required"
+    elif soft:
+        state = "ready_to_supersede"
+    else:
+        state = "clean"
+    override_plan = None
+    if state == "ready_to_supersede":
+        override_plan = {
+            "schema_version": "canon-v3/legacy-fact-boundary-override-plan/v1",
+            "expected_head_hash": resolved_head,
+            "must_preserve_current_author_axiom_records": True,
+            "genesis_overrides": [
+                {
+                    "admission_digest": item["admission_digest"],
+                    "fact_content_sha256": item["fact_content_sha256"],
+                    "replacement_axiom_key": None,
+                }
+                for item in soft
+            ],
+            "dependency_report_digest": dependencies["report_digest"],
+        }
+        override_plan["plan_digest"] = content_hash(override_plan)
+    report = {
+        "schema_version": LEGACY_FACT_BOUNDARY_ANALYSIS_SCHEMA,
+        "read_only": True,
+        "writes_performed": False,
+        "policy_version": FACT_BOUNDARY_POLICY_VERSION,
+        "head_hash": resolved_head,
+        "genesis_schema_version": str(metadata.get("schema_version") or ""),
+        "state": state,
+        "can_supersede_genesis": state == "ready_to_supersede",
+        "requires_manual_fork": state == "manual_fork_required",
+        "candidates": candidates,
+        "known_soft_admission_digests": [
+            item["admission_digest"] for item in soft
+        ],
+        "ambiguous_admission_digests": [
+            item["admission_digest"] for item in ambiguous
+        ],
+        "dependency_report": dependencies,
+        "override_plan": override_plan,
+    }
+    report["analysis_digest"] = content_hash(report)
+    return report
 
 
 def _status_payload(
@@ -1769,7 +2562,10 @@ def legacy_prefix_status(project_root: str | Path) -> dict[str, Any]:
             source=str(metadata.get("source") or "") or None,
             projection_fresh=projection_is_fresh(root),
         )
-    if not isinstance(metadata, dict) or metadata.get("schema_version") != LEGACY_GENESIS_SCHEMA:
+    if not isinstance(metadata, dict) or metadata.get("schema_version") not in {
+        LEGACY_GENESIS_SCHEMA_V2,
+        LEGACY_GENESIS_SCHEMA,
+    }:
         return _status_payload(
             state="stale",
             migration_required=True,
@@ -1817,7 +2613,13 @@ def legacy_prefix_status(project_root: str | Path) -> dict[str, Any]:
     current_material = None
     if source == "v2_accepted_commits":
         try:
-            current_material = _build_material(root, cutover)
+            current_material = _build_material(
+                root,
+                cutover,
+                apply_fact_boundary=(
+                    metadata.get("schema_version") != LEGACY_GENESIS_SCHEMA_V2
+                ),
+            )
         except LegacyMigrationError as exc:
             reasons.append(exc.code)
             details.extend(exc.details)
@@ -1827,9 +2629,17 @@ def legacy_prefix_status(project_root: str | Path) -> dict[str, Any]:
             reasons.append("legacy_source_changed")
         if isinstance(stored_commits, list) and list(current_material.commits) != stored_commits:
             reasons.append("legacy_commit_refs_changed")
-        if isinstance(stored_snapshot, dict) and current_material.snapshot != stored_snapshot:
+        active_snapshot_changed = (
+            isinstance(stored_snapshot, dict)
+            and legacy_snapshot_active_provenance(current_material.snapshot)
+            != legacy_snapshot_active_provenance(stored_snapshot)
+        )
+        if active_snapshot_changed:
             reasons.append("legacy_snapshot_changed")
-        if current_material.snapshot_sha256 != stored_digest:
+        if (
+            active_snapshot_changed
+            and current_material.snapshot_sha256 != stored_digest
+        ):
             reasons.append("legacy_snapshot_digest_changed")
 
     fresh_projection = projection_is_fresh(root)
@@ -2284,9 +3094,42 @@ def _recertification_case(
         "family": family,
         "target_digest": target_digest,
         "material_digest": material_digest,
-        "allowed_actions": ["confirm"],
+        "allowed_actions": list(
+            ordered_allowed_actions(
+                HumanActionProfile.LEGACY_RECERTIFICATION
+            )
+        ),
         "review_material": review_material,
     }
+
+
+def _public_recertification_case(
+    case: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project an internal digest-bearing case onto the shared public shape."""
+
+    return serialize_public_human_case(
+        case,
+        profile=HumanActionProfile.LEGACY_RECERTIFICATION,
+        target_digest=str(case.get("target_digest") or ""),
+        material_digest=str(case.get("material_digest") or ""),
+        expected_decision_head_hash=None,
+    )
+
+
+def _internal_recertification_case(
+    case: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Remove only digest-neutral public overlay fields for byte proof."""
+
+    internal = copy.deepcopy(dict(case))
+    for key in (
+        "decision_head_hash",
+        "expected_decision_head_hash",
+        "decision_binding",
+    ):
+        internal.pop(key, None)
+    return internal
 
 
 def _recertification_cases(
@@ -2617,6 +3460,7 @@ def audit_cutover(
     details: list[str] = []
     material: _LegacyMaterial | None = None
     recertification_bundle: _RecertificationBundle | None = None
+    fact_boundary_review_material: dict[str, Any] | None = None
     if head_error:
         reasons.append("v3_current_invalid")
         details.append(head_error)
@@ -2644,10 +3488,20 @@ def audit_cutover(
                     )
                     material = recertification_bundle.material
                 else:
-                    material = _build_material(root, effective_cutover)
+                    material = _build_material(
+                        root,
+                        effective_cutover,
+                        apply_fact_boundary=(
+                            genesis_schema != LEGACY_GENESIS_SCHEMA_V2
+                        ),
+                    )
         except LegacyMigrationError as exc:
             reasons.append(exc.code)
             details.extend(exc.details)
+            if exc.review_material is not None:
+                fact_boundary_review_material = copy.deepcopy(
+                    exc.review_material
+                )
     if requires_recertification:
         reasons.append("legacy_genesis_needs_recertification")
 
@@ -2700,6 +3554,29 @@ def audit_cutover(
         if requires_recertification
         else "ready"
     )
+    fact_boundary_analysis: dict[str, Any] | None = None
+    if genesis_schema == LEGACY_GENESIS_SCHEMA_V2 and head is not None:
+        try:
+            fact_boundary_analysis = analyze_legacy_fact_boundary(
+                root, head_hash=head
+            )
+        except LegacyMigrationError as exc:
+            # This is an upgrade diagnostic, not a new write blocker for an
+            # otherwise valid v2 CURRENT.  Preserve the exact failure material
+            # so a later tool/version can recover it explicitly.
+            fact_boundary_analysis = {
+                "schema_version": LEGACY_FACT_BOUNDARY_ANALYSIS_SCHEMA,
+                "read_only": True,
+                "writes_performed": False,
+                "state": "diagnostic_unavailable",
+                "head_hash": head,
+                "reason_code": exc.code,
+                "details": list(exc.details),
+                "review_material": copy.deepcopy(exc.review_material),
+            }
+            fact_boundary_analysis["analysis_digest"] = content_hash(
+                fact_boundary_analysis
+            )
     return {
         "schema_version": LEGACY_CUTOVER_AUDIT_SCHEMA,
         "state": state,
@@ -2718,7 +3595,10 @@ def audit_cutover(
             else "legacy_cutover"
         ),
         "conflicting_staging_kinds": list(staging_kinds),
-        "cases": [copy.deepcopy(case) for case in review_cases],
+        "cases": [
+            _public_recertification_case(copy.deepcopy(case))
+            for case in review_cases
+        ],
         "required_case_count": len(review_cases),
         "detached_plan": detached_plan,
         "detached_plan_digest": (
@@ -2727,6 +3607,8 @@ def audit_cutover(
             else None
         ),
         "publish_token": publish_token,
+        "fact_boundary_review_material": fact_boundary_review_material,
+        "fact_boundary_analysis": fact_boundary_analysis,
     }
 
 
@@ -2755,6 +3637,12 @@ def repair_cutover_dry_run(
         "detached_plan": copy.deepcopy(report["detached_plan"]),
         "detached_plan_digest": report["detached_plan_digest"],
         "publish_token": report["publish_token"],
+        "fact_boundary_review_material": copy.deepcopy(
+            report.get("fact_boundary_review_material")
+        ),
+        "fact_boundary_analysis": copy.deepcopy(
+            report.get("fact_boundary_analysis")
+        ),
         "audit_digest": content_hash(report),
     }
 
@@ -2814,8 +3702,14 @@ def _parse_recertification_publish_request(
         "material_digest",
         "action",
     }
+    public_decision_fields = decision_fields | {
+        "expected_decision_head_hash"
+    }
     for index, raw in enumerate(raw_decisions):
-        if not isinstance(raw, Mapping) or set(raw) != decision_fields:
+        if not isinstance(raw, Mapping) or frozenset(raw) not in {
+            frozenset(decision_fields),
+            frozenset(public_decision_fields),
+        }:
             raise LegacyMigrationError(
                 "legacy_recertification_decision_fields_invalid", str(index)
             )
@@ -2839,11 +3733,24 @@ def _parse_recertification_publish_request(
             ),
             "action": str(raw.get("action") or ""),
         }
-        if decision["action"] != "confirm":
+        if (
+            "expected_decision_head_hash" in raw
+            and raw.get("expected_decision_head_hash") is not None
+        ):
+            raise LegacyMigrationError(
+                "legacy_recertification_decision_head_stale",
+                decision["case_key"],
+            )
+        try:
+            require_allowed_action(
+                HumanActionProfile.LEGACY_RECERTIFICATION,
+                decision["action"],
+            )
+        except PublicHumanProtocolError as exc:
             raise LegacyMigrationError(
                 "legacy_recertification_decision_action_invalid",
                 decision["case_key"],
-            )
+            ) from exc
         if decision["case_key"] in seen:
             raise LegacyMigrationError(
                 "legacy_recertification_duplicate_decision",
@@ -3106,7 +4013,10 @@ def publish_recertification(
                 != canonical_json_bytes(dict(plan))
                 or canonical_json_bytes(list(locked_bundle.cases))
                 != canonical_json_bytes(
-                    list(locked_report.get("cases") or ())
+                    [
+                        _internal_recertification_case(case)
+                        for case in locked_report.get("cases") or ()
+                    ]
                 )
                 or locked_bundle.plan.get("detached_plan_digest")
                 != request["detached_plan_digest"]
@@ -3490,6 +4400,7 @@ __all__ = [
     "LEGACY_COMMIT_REF_SCHEMA",
     "LEGACY_GENESIS_SCHEMA",
     "LEGACY_GENESIS_SCHEMA_V1",
+    "LEGACY_GENESIS_SCHEMA_V2",
     "LEGACY_MIGRATION_RESULT_SCHEMA",
     "LEGACY_RECERTIFICATION_CASE_SCHEMA",
     "LEGACY_RECERTIFICATION_DECISION_SCHEMA",
@@ -3500,12 +4411,19 @@ __all__ = [
     "LEGACY_RECERTIFIED_SUFFIX_TRANSACTION_SCHEMA",
     "LEGACY_REPAIR_DRY_RUN_SCHEMA",
     "LEGACY_SNAPSHOT_SCHEMA",
+    "LEGACY_SNAPSHOT_SCHEMA_V2",
     "LEGACY_STATUS_SCHEMA",
+    "LEGACY_FACT_BOUNDARY_ANALYSIS_SCHEMA",
+    "LEGACY_FACT_BOUNDARY_DEPENDENCIES_SCHEMA",
     "LegacyMigrationError",
+    "analyze_legacy_fact_boundary",
     "audit_cutover",
+    "legacy_genesis_supersession_dependencies",
+    "legacy_snapshot_active_provenance",
     "legacy_prefix_status",
     "migrate_legacy",
     "publish_recertification",
     "repair_cutover_apply",
     "repair_cutover_dry_run",
+    "require_legacy_genesis_supersession_safe",
 ]

@@ -5,7 +5,8 @@ description: 只读诊断 Canon v3 workflow、cutover 认证、事务对象、�
 
 # Canon v3 体检
 
-开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)。本 Skill 只读：不修复、不安装依赖、不启动 Dashboard、不修改项目。
+开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)
+和 [`../../references/index/reference-loading-map.md`](../../references/index/reference-loading-map.md)。本 Skill 只读：不修复、不安装依赖、不启动 Dashboard、不修改项目。
 
 ## 检查顺序
 
@@ -36,11 +37,15 @@ description: 只读诊断 Canon v3 workflow、cutover 认证、事务对象、�
   reason codes、detached plan 和所需人工 case；
 - legacy prefix/genesis 是否需要 recertification，并明确区分首次迁移与已有
   HEAD 的 `legacy_repair`；
+- `legacy-genesis/v2` 的只读 `fact_boundary_analysis`：已知软事实、待人工分类项、
+  下游依赖以及 `ready_to_supersede|manual_fork_required`；
 - canon projection 的 HEAD/generation freshness；
 - 旧 index、RAG 和 projection log 只作为明确标记的兼容告警。
 
 `--deep` 另外报告 Dashboard 前端打包、服务端依赖和插件运行环境。缺少可选
 RAG 或旧 projection 日志不能把有效 HEAD 判成损坏，也不能触发任何 v2 补跑命令。
+缺少大纲、角色卡、卷/章/审查规划合同或 legacy state/index 字段只能是规划/兼容
+warning；它们不改变 `report.ok`、`can_write_next` 或唯一事实恢复动作。
 
 ## 状态对应报告
 
@@ -48,12 +53,15 @@ RAG 或旧 projection 日志不能把有效 HEAD 判成损坏，也不能触发�
 - `migration_required + legacy_cutover`：展示只读 audit，再报告 snapshot 的 migrate action。
 - `migration_required + legacy_repair`：展示 stale prefix/suffix 的 audit 证据，且只报告
   snapshot 指向的 `canon-v3 audit-cutover`。作者按稳定 reason code 恢复冻结来源或
-  显式重建受影响后缀后重新读取 status；不得再次调用 migrate、猜 cutover、原地
-  initialize，或用旧 commit/索引覆盖当前 HEAD。
+  后重新读取 status。有意修改且无法恢复时保留原项目只读，在 clean target
+  fork/rebuild；不得再次调用 migrate、猜 cutover、原地 initialize/重写后缀，或用旧
+  commit/索引覆盖当前 HEAD。
 - `migration_required + recertification`：展示 `repair-cutover --dry-run` 产生的
   exact detached plan/cases；逐项确认完成后，snapshot 才可能给出
   `repair-cutover --apply --input-file <request.json>`。这两者都是 confirm 的后续
   恢复动作，Doctor 只报告、绝不执行。
+  若被已有 STAGING 占用，只报告 snapshot 的 exact
+  `archive_conflicting_staging` 动作；作者明确放弃后交 `/canon-ledger-confirm` 执行，Doctor 不自动归档。
 - `awaiting_human`：报告 `/canon-ledger-confirm` 和当前 transaction/stage。
 - `ready_to_finalize`：报告当前 exact finalize action，不宣称已经发布。
 - `rewrite_required|recompile_required`：恢复当前章或当前 author-axiom 事务，不建议下一章。

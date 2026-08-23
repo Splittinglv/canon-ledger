@@ -89,6 +89,16 @@
       "id": "dashboard_read_only",
       "type": "dashboard_read_only",
       "description": "Dashboard 只提供 GET API。"
+    },
+    {
+      "id": "canon_v3_init_runtime",
+      "type": "canon_v3_init_runtime",
+      "description": "公共 CLI 真实完成 clean init、HEAD-bound query，并拒绝 dirty re-init。"
+    },
+    {
+      "id": "canon_v3_nonempty_transaction",
+      "type": "canon_v3_nonempty_transaction",
+      "description": "公共 CLI 真实完成一条非空候选、人工确认和 Canon 发布事务。"
     }
   ]
 }

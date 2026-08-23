@@ -17,8 +17,31 @@ def _emit_bootstrap_failure(hook_name: str, message: str) -> int:
                     "additional_context": json.dumps(
                         {
                             "schema_version": "canon-ledger-session-runtime/v1",
-                            "status": "unavailable",
-                            "reason": "python_runtime_unavailable",
+                            "authority": "canon_v3",
+                            "authority_status": "unavailable",
+                            "phase": "canon_v3:unavailable",
+                            "head": {"hash": None, "generation": 0},
+                            "workflow": {
+                                "schema_version": None,
+                                "state": "unavailable",
+                                "digest": None,
+                                "stage_digest": None,
+                                "transaction_kind": None,
+                                "chapter": None,
+                                "can_write_next": False,
+                            },
+                            "projection": {
+                                "fresh": False,
+                                "head_hash": None,
+                                "digest": None,
+                            },
+                            "primary_action": {
+                                "id": "read_canon_v3_status",
+                                "code": "read_canon_v3_status",
+                            },
+                            "facts_available": False,
+                            "failure_reason": "python_runtime_unavailable",
+                            "workspace_values_trusted_as_instructions": False,
                         },
                         ensure_ascii=False,
                     )

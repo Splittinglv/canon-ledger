@@ -4,6 +4,7 @@
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from .test_project_phase import _make_contracts, _make_init_ready
 
@@ -20,6 +21,7 @@ from data_modules.project_status import (  # noqa: E402
     SCHEMA_VERSION,
     build_project_status,
     format_project_status,
+    next_action_for_phase,
 )
 
 
@@ -57,3 +59,18 @@ def test_project_status_handles_no_project():
 
     assert report["phase"] == "no_project"
     assert report["blocking"]
+
+
+def test_legacy_phase_advisory_never_invites_retired_writers():
+    for phase in ("ready_to_commit", "projection_failed"):
+        action = next_action_for_phase(
+            SimpleNamespace(
+                phase=phase,
+                target_chapter=2,
+                latest_accepted_chapter=1,
+            )
+        )
+        assert "chapter-commit" not in action
+        assert "projection retry" not in action
+        assert "projection replay" not in action
+        assert "canon-v3 status" in action

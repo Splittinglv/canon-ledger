@@ -13,6 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
+
+_PLUGIN_SCRIPTS_DIR = (Path(__file__).resolve().parents[1] / "scripts").resolve()
+if str(_PLUGIN_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_PLUGIN_SCRIPTS_DIR))
+
+from runtime_command_policy import evaluate_public_command
+
 PROTECTED_SUFFIXES = (
     ".canon-ledger/state.json",
     ".canon-ledger/index.db",
@@ -1073,14 +1080,9 @@ def _command_targets_resolved_protected(command: str, *, base_directory: Path) -
     return False
 
 
-def _command_is_runtime_safe(command: str) -> bool:
-    command = _normalize_shell_continuations(command).strip()
-    if not command or SHELL_CONTROL_RE.search(command):
-        return False
-    try:
-        tokens = shlex.split(command, posix=True)
-    except ValueError:
-        return False
+def _trusted_runtime_arguments(tokens: list[str]) -> list[str] | None:
+    """Return arguments after one exact trusted unified-CLI invocation."""
+
     runtime_indexes = [
         index
         for index, token in enumerate(tokens)
@@ -1088,7 +1090,7 @@ def _command_is_runtime_safe(command: str) -> bool:
         in RUNTIME_ENTRYPOINT_NAMES
     ]
     if len(runtime_indexes) != 1:
-        return False
+        return None
     runtime_index = runtime_indexes[0]
     runtime_token = tokens[runtime_index].replace("\\", "/")
     runtime_name = runtime_token.rsplit("/", 1)[-1].lower()
@@ -1097,33 +1099,34 @@ def _command_is_runtime_safe(command: str) -> bool:
     ).as_posix()
     if runtime_token != trusted_absolute:
         env_spec = TRUSTED_RUNTIME_ENV_TOKENS.get(runtime_token)
-        if env_spec is None:
-            return False
-        env_name, suffix, expected_name = env_spec
-        if expected_name != runtime_name:
-            return False
-        raw_root = os.environ.get(env_name)
-        if not raw_root:
-            return False
-        candidate = Path(raw_root).expanduser()
-        if suffix:
-            candidate /= suffix
-        try:
-            candidate_runtime = (candidate / expected_name).resolve(strict=False).as_posix()
-        except OSError:
-            return False
-        if candidate_runtime != trusted_absolute:
-            return False
+        if env_spec is not None:
+            env_name, suffix, expected_name = env_spec
+            if expected_name != runtime_name:
+                return None
+            raw_root = os.environ.get(env_name)
+            if not raw_root:
+                return None
+            candidate = Path(raw_root).expanduser()
+            if suffix:
+                candidate /= suffix
+            try:
+                candidate_runtime = (candidate / expected_name).resolve(strict=False).as_posix()
+            except OSError:
+                return None
+            if candidate_runtime != trusted_absolute:
+                return None
+        elif _trusted_plugin_script(runtime_token) is None:
+            return None
     prefix = tokens[:runtime_index]
     if not prefix:
-        return False
+        return tokens[runtime_index + 1 :]
     interpreter_token = prefix[0].replace("\\", "/")
     interpreter = interpreter_token.rsplit("/", 1)[-1].lower()
     if (
         interpreter_token not in TRUSTED_PYTHON_ENV_TOKENS
-        and interpreter not in {"python", "python3", "python.exe", "python3.exe", "py", "py.exe"}
+        and not _is_python_interpreter(interpreter)
     ):
-        return False
+        return None
     interpreter_args = prefix[1:]
     allowed_interpreter_args = (
         [],
@@ -1132,30 +1135,37 @@ def _command_is_runtime_safe(command: str) -> bool:
         ["-u", "-X", "utf8"],
         ["-X", "utf8", "-u"],
     )
-    if interpreter in {"py", "py.exe"} and interpreter_args[:1] in (["-3"], ["-3.10"], ["-3.11"], ["-3.12"], ["-3.13"]):
+    if interpreter in {"py", "py.exe"} and interpreter_args[:1] in (["-3"], ["-3.10"], ["-3.11"], ["-3.12"], ["-3.13"], ["-3.14"]):
         interpreter_args = interpreter_args[1:]
     if interpreter_args not in allowed_interpreter_args:
+        return None
+    return tokens[runtime_index + 1 :]
+
+
+def _command_invokes_disallowed_runtime(command: str) -> bool:
+    """Return whether any trusted CLI invocation leaves the public closure.
+
+    Trusting the shipped ``canon_ledger.py`` path is not enough: its exact
+    tool/operation must also be a production capability.  The same semantic
+    policy runs inside the CLI, closing the Hook-to-CLI time-of-check gap while
+    still permitting read-only legacy diagnostics and preference-only writes.
+    Every segment of a compound shell request is checked independently.
+    """
+
+    command = _normalize_shell_continuations(command).strip()
+    if not command:
         return False
-    arguments = tokens[runtime_index + 1 :]
-    command_arguments: list[str] = []
-    index = 0
-    while index < len(arguments):
-        token = arguments[index]
-        if token == "--project-root":
-            if index + 1 >= len(arguments):
-                return False
-            index += 2
-            continue
-        if token.startswith("--project-root="):
-            index += 1
-            continue
-        command_arguments.append(token.lower())
-        index += 1
-    if not command_arguments:
+    try:
+        commands = _ShellCommandScanner(command).scan()
+    except ValueError:
         return False
-    if command_arguments[0] == "chapter-commit":
-        return True
-    return command_arguments[:2] in (["projections", "retry"], ["projections", "replay"])
+    for words in commands:
+        arguments = _trusted_runtime_arguments([word.value for word in words])
+        if arguments is None:
+            continue
+        if not evaluate_public_command(arguments).allowed:
+            return True
+    return False
 
 
 def _command_mentions_protected_runtime(command: str) -> bool:
@@ -1190,8 +1200,8 @@ def _looks_like_runtime_bypass(command: str, *, base_directory: Path) -> bool:
     # 规范守卫行是 skill 代码块的首行断链自检（: "${VAR:?...}"），对判定透明；
     # 仅剥离与随包文本逐字一致的行，改写过的变体不享受豁免、照常全文扫描。
     command = _strip_env_guard_lines(command)
-    if _command_is_runtime_safe(command):
-        return False
+    if _command_invokes_disallowed_runtime(command):
+        return True
     if _command_is_read_only_protected(command):
         return False
     inline_found, inline_safe, screened_command = _screen_inline_interpreters(command)
@@ -1230,8 +1240,9 @@ def main() -> int:
             return _deny("叙典 CanonLedger 运行时保护收到缺少命令内容的 Shell 请求。")
         if _looks_like_runtime_bypass(command, base_directory=base_directory):
             return _deny(
-                "叙典 CanonLedger 已阻止直接写入或绕过 Story System 与读模型的命令。"
-                "请改用 canon_ledger.py 的 write-gate、chapter-commit 或 projections retry/replay。"
+                "叙典 CanonLedger 已阻止直接写入、绕过 Canon v3 或调用退役事实写入口。"
+                "请先读取 canon_ledger.py canon-v3 status，并且只执行同一份 workflow "
+                "snapshot 返回的 primary_action。"
             )
         return _allow()
 
@@ -1241,8 +1252,9 @@ def main() -> int:
         for path in paths
     ):
         return _deny(
-            "叙典 CanonLedger 已阻止直接编辑 Story System 或读模型文件。"
-            "请通过统一运行时命令写入，以保持提交与投影一致。"
+            "叙典 CanonLedger 已阻止直接编辑 Canon 权威存储或兼容读模型。"
+            "请先读取 canon_ledger.py canon-v3 status，并且只执行同一份 workflow "
+            "snapshot 返回的 primary_action。"
         )
     if not tool or not paths:
         return _deny("叙典 CanonLedger 运行时保护拒绝了字段不完整的工具请求。")

@@ -228,7 +228,8 @@ def test_query_context_and_dashboard_are_head_bound() -> None:
 def test_query_uses_real_public_facades_and_fails_closed() -> None:
     query = _read(SKILLS / "canon-ledger-query" / "SKILL.md")
     for marker in (
-        "canon-v3 history",
+        "canon-v3 query snapshot",
+        "canon-v3 query entity-state",
         "canon-v3 author-axioms",
         "canon-v3 status",
         "canon-v3 audit-cutover",
@@ -311,11 +312,12 @@ def test_agent_write_ownership_is_closed() -> None:
     assert "不是 Canon" in _read(AGENTS / "deconstruction-agent.md")
 
 
-def test_reviewer_contract_is_v2_and_fact_only() -> None:
+def test_reviewer_contract_is_v3_id_bound_and_fact_only() -> None:
     text = _read(AGENTS / "reviewer.md")
     schema = _read(REFERENCES / "review-schema.md")
     for marker in (
-        "canon-v3/reviewer-output/v2",
+        "canon-v3/reviewer-output/v3",
+        "candidate_digest_map",
         "parent_head",
         "author_axiom_digest",
         "entity_registry_digest",
@@ -384,7 +386,7 @@ def test_skill_and_agent_evals_use_v2_language() -> None:
         assert "调用 index.db.review_audits" not in text, path
         assert "输出 `manual_checks`" not in text, path
     agent_eval = _read(AGENTS / "evals" / "evals.json")
-    assert "reviewer-output/v2" in agent_eval
+    assert "reviewer-output/v3" in agent_eval
     assert "extraction_incomplete" in agent_eval
 
 
@@ -406,7 +408,10 @@ def test_root_docs_match_canon_v3_human_and_migration_routes() -> None:
     readme_compact = re.sub(r"\s+", " ", readme)
     notice = _read(ROOT / "NOTICE.md")
     attribution = _read(ROOT / "ATTRIBUTION.md")
-    release = _read(ROOT / "releases" / "v8.0.0.md")
+    plugin = json.loads(_read(ROOT / ".cursor-plugin" / "plugin.json"))
+    release = _read(
+        ROOT / "releases" / f"v{plugin['version']}.md"
+    )
     architecture = _read(REFERENCES / "canon-v3-architecture.md")
 
     for marker in (

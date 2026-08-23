@@ -152,19 +152,13 @@ def test_init_genesis_excludes_motivation_archetype_and_story_roles(tmp_path, mo
     }
     assert master["initial_canon"]["world"]["factions"] == "巡夜司与商会"
 
-    projection = json.loads(
-        (
-            project_root
-            / ".story-system"
-            / "v3"
-            / "projections"
-            / "canon.json"
-        ).read_text(encoding="utf-8")
-    )
-    serialized_projection = json.dumps(projection, ensure_ascii=False)
-    assert "巡夜司与商会" in serialized_projection
-    assert "林舟" in serialized_projection
-    assert "苏云" in serialized_projection
+    from data_modules.canon_v3.query import CanonQueryFacade
+
+    active_query = CanonQueryFacade(project_root).snapshot(as_of_chapter=0)
+    serialized_active = json.dumps(active_query, ensure_ascii=False)
+    assert "巡夜司与商会" in serialized_active
+    assert "林舟" in serialized_active
+    assert "苏云" in serialized_active
     for soft_value in (
         "查明姐姐失踪真相",
         "过度相信旧友",
@@ -173,7 +167,7 @@ def test_init_genesis_excludes_motivation_archetype_and_story_roles(tmp_path, mo
         "调查搭档",
         "终局:商会会长",
     ):
-        assert soft_value not in serialized_projection
+        assert soft_value not in serialized_active
 
     # 软设计仍保留给作者和写作模型使用，只是不自动成为 Canon。
     protagonist_card = (project_root / "设定集" / "主角卡.md").read_text(
@@ -257,7 +251,9 @@ def test_init_does_not_manufacture_golden_finger_fact(tmp_path, monkeypatch):
     assert not (project_root / "设定集" / "金手指.md").exists()
 
 
-def test_init_does_not_migrate_removed_placeholder_shape(tmp_path, monkeypatch):
+def test_init_rejects_existing_state_without_migrating_placeholder_shape(
+    tmp_path, monkeypatch
+):
     import init_project as init_project_module
 
     monkeypatch.setattr(init_project_module, "is_git_available", lambda: False)
@@ -282,18 +278,18 @@ def test_init_does_not_migrate_removed_placeholder_shape(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    init_project_module.init_project(
-        str(project_root),
-        title="测试书",
-        genre="历史",
-        protagonist_name="陆鸣",
-        target_chapters=50,
-    )
+    before = state_path.read_bytes()
+    with pytest.raises(SystemExit, match="init_target_legacy"):
+        init_project_module.init_project(
+            str(project_root),
+            title="测试书",
+            genre="历史",
+            protagonist_name="陆鸣",
+            target_chapters=50,
+        )
 
-    state = json.loads(state_path.read_text(encoding="utf-8"))
-    golden_finger = state["protagonist_state"]["golden_finger"]
-    assert golden_finger["name"] == "未命名金手指"
-    assert golden_finger["level"] == 1
+    assert state_path.read_bytes() == before
+    assert not (project_root / ".story-system").exists()
 
 
 def test_init_rejects_english_profile_key_before_writing_state(tmp_path, monkeypatch):
@@ -317,7 +313,7 @@ def test_init_rejects_english_profile_key_before_writing_state(tmp_path, monkeyp
     assert not (project_root / ".canon-ledger" / "state.json").exists()
 
 
-def test_init_preserves_corrupt_state_json_before_rebuilding(tmp_path, monkeypatch, capsys):
+def test_init_rejects_corrupt_existing_state_without_rebuilding(tmp_path, monkeypatch):
     import init_project as init_project_module
 
     monkeypatch.setattr(init_project_module, "is_git_available", lambda: False)
@@ -327,15 +323,15 @@ def test_init_preserves_corrupt_state_json_before_rebuilding(tmp_path, monkeypat
     corrupt_text = '{"project_info": '
     (state_dir / "state.json").write_text(corrupt_text, encoding="utf-8")
 
-    init_project_module.init_project(
-        str(project_root),
-        title="测试书",
-        genre="仙侠",
-        protagonist_name="陆鸣",
-        target_chapters=50,
-    )
+    with pytest.raises(SystemExit, match="init_target_legacy"):
+        init_project_module.init_project(
+            str(project_root),
+            title="测试书",
+            genre="仙侠",
+            protagonist_name="陆鸣",
+            target_chapters=50,
+        )
 
-    corrupt_copies = sorted(state_dir.glob("state.corrupt_*.json"))
-    assert len(corrupt_copies) == 1
-    assert corrupt_copies[0].read_text(encoding="utf-8") == corrupt_text
-    assert "原 state.json 已损坏" in capsys.readouterr().out
+    assert (state_dir / "state.json").read_text(encoding="utf-8") == corrupt_text
+    assert not list(state_dir.glob("state.corrupt_*.json"))
+    assert not (project_root / ".story-system").exists()

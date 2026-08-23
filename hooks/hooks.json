@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Cursor 运行时保护：会话开始时注入插件与工作区路径，并阻止直接写入 Story System 和读模型文件。",
+  "description": "Cursor 运行时保护：会话开始时注入 HEAD-bound Canon v3 workflow 摘要，并阻止直接写入权威存储或调用退役事实写入口。",
   "hooks": {
     "sessionStart": [
       {

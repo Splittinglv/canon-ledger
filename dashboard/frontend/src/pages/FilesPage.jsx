@@ -126,7 +126,10 @@ export default function FilesPage() {
         <section className="dashboard-page">
             <header className="page-header">
                 <h2>文档浏览</h2>
-                <Badge tone="blue">{totalFiles} 个文件</Badge>
+                <div className="header-badges">
+                    <Badge tone="blue">{totalFiles} 个文件</Badge>
+                    <Badge tone="amber">原始资料 · 非 Canon 事实</Badge>
+                </div>
             </header>
 
             <div className="content-grid files-layout">

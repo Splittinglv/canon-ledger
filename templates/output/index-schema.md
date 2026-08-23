@@ -6,12 +6,14 @@
 
 ```text
 Canon v3 HEAD + active author axioms
-  -> HEAD-bound projection builder
-  -> index.db / Dashboard compatibility views
+  -> .story-system/v3/projections/canon.json
+
+index.db 不由 Canon v3 projection builder 生成，只是冻结的 legacy/兼容数据。
 ```
 
 CURRENT、manifest、不可变对象与 exact decisions 决定事实；`index.db` 只加速展示。
-数据库缺失或 binding 过期时，workflow 应返回 `projection_rebuild_required`，随后执行
+数据库缺失或变化不会决定 v3 workflow freshness；正式查询不读取它。只有
+`canon.json` 与 CURRENT binding 不一致时才进入 `projection_rebuild_required` 并执行
 `canon-v3 rebuild-projection`。禁止从数据库反向修补对象库。
 
 ## 历史表族

@@ -1,23 +1,30 @@
 ---
-description: 长篇小说项目的防幻觉与真源保护；仅在书项目文件命中时加载。
-globs: "**/.canon-ledger/state.json,**/.story-system/**,**/大纲/**/*.md,**/设定集/**/*.md"
+description: 长篇小说项目的长期事实一致性与 Canon v3 真源保护；仅在书项目文件命中时加载。
+globs: "**/.story-system/**,**/.canon-ledger/state.json,**/正文/**/*.md,**/大纲/**/*.md,**/设定集/**/*.md"
 alwaysApply: false
 ---
 
-# CanonLedger canon
+# CanonLedger 长期事实边界
 
-- **大纲即法律**：剧情推进以总纲/卷纲/章纲为准，不擅自改结局或跳过必须节点。
-- **设定即物理**：战力、地点、时间线、世界规则以设定集和 `.story-system/` 合同为准。
-- **发明需识别**：新角色/地点/道具必须经 data-agent 提取并入库，禁止口头发明后不登记。
+## 唯一事实权威
 
-## 真源与投影
+- 只有 `.story-system/v3/CURRENT` 可达的 Canon v3 HEAD，以及与该 HEAD 和 generation 精确绑定的 fresh projection，才是当前长期事实真源。
+- `.canon-ledger/state.json`、`index.db`、旧报告、RAG、模型记忆和未发布 STAGING 都不能替代当前 HEAD。
+- 写作、规划、审查、查询或恢复前，先读取 exact `canon-v3 status`；只执行同一份 workflow snapshot 返回的 `primary_action`，并使用对应 `/canon-ledger-*` Skill。
 
-- 写前真源：`.story-system/MASTER_SETTING.json`、`volumes/`、`chapters/`、`reviews/`
-- 写后真源：accepted `CHAPTER_COMMIT`
-- `.canon-ledger/state.json`、`index.db`、`summaries/`、`memory_scratchpad.json` 只是投影，禁止手改后当作事实
+## 强制一致性范围
 
-## 禁止手改
+- 只检查后续章节必须依赖的客观长期事实：身份、时间线、永久状态、关系、知识边界、真实在场、物品持有、世界硬规则、承诺与开放问题。
+- 已有正文或 active Canon 没有锚点的极低概率猜测可以忽略。
+- 证据不足但可能影响长期事实时，交给人工确认；不得由模型猜测后直接发布。
 
-不要直接编辑 `.story-system/commits/`、`.canon-ledger/index.db`、`.canon-ledger/vectors.db`、`.canon-ledger/memory_scratchpad.json`、`.canon-ledger/projection_log.jsonl`。提交与投影只走 `scripts/canon_ledger.py` 的 `write-gate` / `chapter-commit` / `projections retry|replay`。
+## Advisory 范围
 
-写作、规划、审查、查询走对应 `/canon-ledger-*` skill，不要跳过预检与提交链。
+- 大纲、章纲、规划合同、未认证设定草案仅供创作参考，不是剧情法律，也不能因未履约而阻断事实事务。
+- 文风、文笔、节奏、口吻、句式、审美、人物动机、性格模板、人设类型和一般因果永远属于可自定义偏好，不进入 Canon 强制检查。
+- 设定草案中的客观硬事实，只有经过 author-axiom 的版本化提议、人工确认和发布后，才成为 active Canon。
+
+## 权威存储保护
+
+- 不直接编辑或删除 `.story-system/v3/` 的 CURRENT、对象、STAGING、决定、manifest 或 projection。
+- 不把旧 Story System、兼容读模型或手工文件修改当作事实写入口；需要恢复时重新读取 workflow，并按其 `primary_action` 操作。

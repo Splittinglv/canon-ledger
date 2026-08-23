@@ -105,6 +105,34 @@ def _load_text(path: Path) -> tuple[str, str]:
         return "", f"read_error:{exc}"
 
 
+def _dashboard_source_digest(frontend_root: Path) -> str:
+    """Bind committed Dashboard assets to every build-relevant source byte."""
+
+    paths = [
+        frontend_root / relative
+        for relative in (
+            "index.html",
+            "package.json",
+            "package-lock.json",
+            "vite.config.js",
+        )
+    ]
+    source_root = frontend_root / "src"
+    if source_root.is_dir():
+        paths.extend(path for path in source_root.rglob("*") if path.is_file())
+    digest = hashlib.sha256()
+    for path in sorted(paths, key=lambda item: item.relative_to(frontend_root).as_posix()):
+        relative = path.relative_to(frontend_root).as_posix()
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            digest.update(b"<missing>")
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def _frontmatter(path: Path) -> dict[str, str]:
     try:
         text = path.read_text(encoding="utf-8")
@@ -814,6 +842,23 @@ def _check_core_identity_surfaces(root: Path, issues: list[dict[str, str]]) -> N
             )
         )
 
+    source_host_drift: list[Path] = []
+    for path in sorted((frontend_root / "src").rglob("*")):
+        if not path.is_file() or path.suffix not in {".js", ".jsx", ".ts", ".tsx"}:
+            continue
+        content, error = _load_text(path)
+        if not error and re.search(r"(?i)\b(?:codex|chatgpt|claude\s+code)\b", content):
+            source_host_drift.append(path)
+    if source_host_drift:
+        issues.append(
+            _issue(
+                "identity.dashboard_host_drift",
+                message="Cursor-only Dashboard 源码包含其他 AI 宿主文案",
+                path=", ".join(str(path) for path in source_host_drift),
+                repair="改为 Cursor/CanonLedger Skill 或 CLI 文案并重新构建 Dashboard。",
+            )
+        )
+
     dist_root = frontend_root / "dist"
     dist_javascript = sorted(dist_root.rglob("*.js"))
     readable_dist: dict[Path, str] = {}
@@ -844,6 +889,20 @@ def _check_core_identity_surfaces(root: Path, issues: list[dict[str, str]]) -> N
                 repair="清理旧文案后重新构建 Dashboard，并删除过期构建文件。",
             )
         )
+    host_drift_dist = [
+        path
+        for path, content in readable_dist.items()
+        if re.search(r"(?i)\b(?:codex|chatgpt|claude\s+code)\b", content)
+    ]
+    if host_drift_dist:
+        issues.append(
+            _issue(
+                "identity.dashboard_dist_host_drift",
+                message="Dashboard 构建产物包含其他 AI 宿主文案",
+                path=", ".join(str(path) for path in host_drift_dist),
+                repair="清理宿主漂移文案后重新构建并提交新的 dist 产物。",
+            )
+        )
     dist_assets = frontend_root / "dist" / "assets"
     if not any(dist_assets.glob("*.js")) or not any(dist_assets.glob("*.css")):
         issues.append(
@@ -871,6 +930,55 @@ def _check_core_identity_surfaces(root: Path, issues: list[dict[str, str]]) -> N
                 message="Dashboard package.json 与 package-lock.json 未统一为 canon-ledger-dashboard",
                 path=str(frontend_root),
                 repair="同步前端包名和锁文件根包名。",
+            )
+        )
+    package_version = str(package_json.get("version") or "")
+    lock_version = str(lock_json.get("version") or "")
+    lock_root_version = (
+        str(lock_root.get("version") or "") if isinstance(lock_root, dict) else ""
+    )
+    app_path = plugin_root / "dashboard" / "app.py"
+    dashboard_app, dashboard_app_error = _load_text(app_path)
+    app_match = re.search(
+        r"FastAPI\([^\n]*\bversion\s*=\s*[\"']([^\"']+)[\"']",
+        dashboard_app,
+    )
+    app_version = app_match.group(1) if app_match else ""
+    if (
+        package_error
+        or lock_error
+        or dashboard_app_error
+        or not package_version
+        or len({package_version, lock_version, lock_root_version, app_version}) != 1
+    ):
+        issues.append(
+            _issue(
+                "version.dashboard",
+                message=(
+                    "Dashboard 版本未在 package.json、lock 顶层、lock root 与 app.py 同步："
+                    f"package={package_version or 'missing'}, lock={lock_version or 'missing'}, "
+                    f"lock_root={lock_root_version or 'missing'}, app={app_version or 'missing'}"
+                ),
+                path=str(frontend_root),
+                repair="同步四处 Dashboard 版本后重新构建 dist。",
+            )
+        )
+
+    metadata_path = dist_root / "build-metadata.json"
+    metadata, metadata_error = _load_json(metadata_path)
+    expected_source_digest = _dashboard_source_digest(frontend_root)
+    if (
+        metadata_error
+        or metadata.get("schema_version") != "canon-ledger-dashboard-build/v1"
+        or metadata.get("dashboard_version") != package_version
+        or metadata.get("source_digest") != expected_source_digest
+    ):
+        issues.append(
+            _issue(
+                "dashboard.build_binding",
+                message="Dashboard dist 未绑定当前源码、依赖锁或 Dashboard 版本",
+                path=str(metadata_path),
+                repair="运行 npm --prefix dashboard/frontend run build 并提交完整 dist。",
             )
         )
 
@@ -1000,6 +1108,16 @@ def _check_portability(root: Path, issues: list[dict[str, str]]) -> None:
 def _check_deprecated_entrypoints(root: Path, issues: list[dict[str, str]]) -> None:
     """Reject legacy product entrypoints from a CanonLedger package."""
     plugin_root = _plugin_root(root)
+    codex_manifest = plugin_root / ".codex-plugin"
+    if codex_manifest.exists():
+        issues.append(
+            _issue(
+                "identity.codex_manifest",
+                message="Cursor-only 插件不得包含 .codex-plugin manifest",
+                path=str(codex_manifest),
+                repair="删除 .codex-plugin；本包只由 .cursor-plugin manifest 发布。",
+            )
+        )
     legacy_paths = [
         plugin_root / "scripts" / "webnovel.py",
         plugin_root / "scripts" / "data_modules" / "webnovel.py",
@@ -1034,6 +1152,222 @@ def _check_deprecated_entrypoints(root: Path, issues: list[dict[str, str]]) -> N
             )
 
 
+def _check_canon_v3_product_policy(
+    root: Path,
+    issues: list[dict[str, str]],
+) -> None:
+    """Validate the active policy surfaces, not just their brand sentinels.
+
+    These files are injected into every writing session.  A syntactically
+    valid package that silently restores v2 truth sources or outline/style
+    blockers is therefore a broken package, even when all runtime files are
+    present.
+    """
+
+    plugin_root = _plugin_root(root)
+    rule_path = plugin_root / "rules" / "canon-ledger-canon.mdc"
+    rule_text, rule_error = _load_text(rule_path)
+    if rule_error:
+        # The identity check also reports this, but retain the policy-specific
+        # code so mutation tests and release automation identify the real risk.
+        issues.append(
+            _issue(
+                "policy.rule_unreadable",
+                message=f"无法读取 active Canon Rule：{rule_error}",
+                path=str(rule_path),
+                repair="恢复只约束 HEAD-bound 长期事实一致性的 active Rule。",
+            )
+        )
+    else:
+        rule_frontmatter = _frontmatter(rule_path)
+        rule_globs = str(rule_frontmatter.get("globs") or "")
+        if "**/正文/**/*.md" not in rule_globs:
+            issues.append(
+                _issue(
+                    "policy.rule_manuscript_glob",
+                    message="active Canon Rule 未覆盖正文/**/*.md",
+                    path=str(rule_path),
+                    repair="把 **/正文/**/*.md 加入 Rule globs，确保直接写章也加载事实边界。",
+                )
+            )
+        authority_markers = (
+            ".story-system/v3/CURRENT",
+            "Canon v3 HEAD",
+            "fresh projection",
+            "唯一事实权威",
+            "不能替代当前 HEAD",
+        )
+        missing_authority = [
+            marker for marker in authority_markers if marker not in rule_text
+        ]
+        if missing_authority:
+            issues.append(
+                _issue(
+                    "policy.rule_head_authority",
+                    message=(
+                        "active Rule 未闭合到 CURRENT/HEAD-bound fresh projection；"
+                        f"缺少：{', '.join(missing_authority)}"
+                    ),
+                    path=str(rule_path),
+                    repair=(
+                        "明确只有 CURRENT 可达 HEAD 与同 generation 的 fresh "
+                        "projection 是当前长期事实真源。"
+                    ),
+                )
+            )
+
+        fact_markers = (
+            "强制一致性范围",
+            "身份",
+            "时间线",
+            "知识边界",
+            "真实在场",
+            "物品持有",
+            "世界硬规则",
+        )
+        missing_fact_scope = [
+            marker for marker in fact_markers if marker not in rule_text
+        ]
+        if missing_fact_scope:
+            issues.append(
+                _issue(
+                    "policy.rule_fact_scope",
+                    message=(
+                        "active Rule 未把强制范围限定为客观长期事实；"
+                        f"缺少：{', '.join(missing_fact_scope)}"
+                    ),
+                    path=str(rule_path),
+                    repair="恢复身份、时间、知识、在场、持有与硬规则等长期事实边界。",
+                )
+            )
+
+        advisory_markers = (
+            "Advisory 范围",
+            "大纲",
+            "不是剧情法律",
+            "不能因未履约而阻断事实事务",
+            "文风",
+            "不进入 Canon 强制检查",
+        )
+        missing_advisory = [
+            marker for marker in advisory_markers if marker not in rule_text
+        ]
+        if missing_advisory:
+            issues.append(
+                _issue(
+                    "policy.rule_advisory_boundary",
+                    message=(
+                        "active Rule 未明确 advisory 不阻断；"
+                        f"缺少：{', '.join(missing_advisory)}"
+                    ),
+                    path=str(rule_path),
+                    repair=(
+                        "明确大纲/合同/风格/动机只作参考，未履约不得阻断事实事务。"
+                    ),
+                )
+            )
+
+        retired_patterns = {
+            "大纲即法律": re.compile(r"大纲\s*即\s*法律"),
+            "chapter-commit": re.compile(r"(?i)chapter[-_]commit"),
+            "projections retry/replay": re.compile(
+                r"(?i)projections\s+(?:retry|replay)\b"
+            ),
+        }
+        found_retired = [
+            label
+            for label, pattern in retired_patterns.items()
+            if pattern.search(rule_text)
+        ]
+        if found_retired:
+            issues.append(
+                _issue(
+                    "policy.rule_retired_workflow",
+                    message=(
+                        "active Rule 重新暴露退役 v2 语义："
+                        + ", ".join(found_retired)
+                    ),
+                    path=str(rule_path),
+                    repair=(
+                        "删除旧章提交/投影 replay 与大纲强制履约，只保留 Canon v3 workflow。"
+                    ),
+                )
+            )
+
+    skill_root = plugin_root / "skills"
+    reference_target = "../../references/index/reference-loading-map.md"
+    reference_map = plugin_root / "references" / "index" / "reference-loading-map.md"
+    if not reference_map.is_file():
+        issues.append(
+            _issue(
+                "policy.reference_map_missing",
+                message="reference-loading-map.md 缺失，Skill 的渐进加载路由不可执行",
+                path=str(reference_map),
+                repair="恢复 references/index/reference-loading-map.md 并保持 9 个 Skill 直链。",
+            )
+        )
+    for surface in CORE_SURFACES:
+        skill_path = skill_root / f"canon-ledger-{surface}" / "SKILL.md"
+        skill_text, skill_error = _load_text(skill_path)
+        linked = bool(
+            not skill_error
+            and re.search(
+                r"\]\(\.\./\.\./references/index/reference-loading-map\.md\)",
+                skill_text,
+            )
+        )
+        if not linked:
+            issues.append(
+                _issue(
+                    "policy.skill_reference_map",
+                    message=(
+                        f"canon-ledger-{surface} 未直接链接 reference-loading-map"
+                    ),
+                    path=str(skill_path),
+                    repair=f"在 Skill 开头直接链接 {reference_target}。",
+                )
+            )
+
+    agent_requirements = {
+        "data-agent.md": (
+            "canon-v3 agent-schema candidate-draft",
+            "canon-v3 validate-agent-output",
+            "candidate-draft --input-file",
+            "canon-v3 assemble-proposal",
+            "--candidate-file",
+            "--reviewer-file",
+            "mode=author_axiom_proposal",
+            "canon-v3 agent-schema author-axiom-proposal",
+            "canon-v3 validate-agent-output author-axiom-proposal",
+            ".canon-ledger/tmp/canon_v3_author_axiom_proposal.json",
+            "canon-v3 author-axiom-prepare",
+        ),
+        "reviewer.md": (
+            "canon-v3 agent-schema reviewer-output",
+            "canon-v3 validate-agent-output reviewer-output",
+        ),
+    }
+    for filename, markers in agent_requirements.items():
+        path = plugin_root / "agents" / filename
+        content, error = _load_text(path)
+        missing = [marker for marker in markers if marker not in content]
+        if error or missing:
+            issues.append(
+                _issue(
+                    "policy.agent_runtime_helpers",
+                    message=(
+                        f"{filename} 未闭合到 runtime schema/validate/assemble helper；"
+                        f"缺少：{', '.join(missing) if missing else error}"
+                    ),
+                    path=str(path),
+                    repair=(
+                        "要求 agent 先读 runtime schema、校验 artifact，并由 runtime "
+                        "assemble proposal；禁止手算 digest/手拼 strict schema。"
+                    ),
+                )
+            )
+
+
 def validate_package(root: str | Path | None = None, *, strict: bool = False) -> dict[str, Any]:
     if root is not None:
         repo_root = Path(root)
@@ -1051,6 +1385,7 @@ def validate_package(root: str | Path | None = None, *, strict: bool = False) ->
     _check_optional_assets(repo_root, issues)
     _check_portability(repo_root, issues)
     _check_deprecated_entrypoints(repo_root, issues)
+    _check_canon_v3_product_policy(repo_root, issues)
     blocking = [
         item for item in issues if item["severity"] == "error" or (strict and item["severity"] == "warning")
     ]

@@ -5,7 +5,8 @@ description: 把作者明确要求长期保留的文风、口吻、句式和写�
 
 # 保存长期文风偏好
 
-完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md) 的环境和 style 边界。本 Skill 是非事实例外：在大多数 workflow 状态下都可使用，但永远没有放行写作或修改 Canon 的权限。
+完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)
+和 [`../../references/index/reference-loading-map.md`](../../references/index/reference-loading-map.md) 的环境、style 与 reference 边界。本 Skill 是非事实例外：在大多数 workflow 状态下都可使用，但永远没有放行写作或修改 Canon 的权限。
 
 ## 流程
 

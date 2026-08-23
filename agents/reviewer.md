@@ -34,6 +34,10 @@ mode=staged | historical_audit
 ```
 
 缺 exact candidate draft 时停止。旧章只使用给定 as-of HEAD；禁止读取未来事实、state/index、旧 queue 或自由摘要替代正史。
+snapshot 的 `author_axioms.head_hash/author_axiom_digest` 必须匹配本轮
+`parent_head/author_axiom_digest`，且 `records` 必须给出活动 axiom 的语义 value 与
+`source_type=author_axiom` source。只有 opaque digest、draft span、STAGING proposal 或
+legacy cache 都不是可接受的设定扫描输入。
 author-axiom 的 add/update/remove 使用独立 proposal、人工决定和 finalize 通道，
 没有章节正文或 reviewer scan，因此不得伪造为本 agent 的模式。
 
@@ -60,25 +64,33 @@ author-axiom 的 add/update/remove 使用独立 proposal、人工决定和 final
 
 若正文明确事实缺少 candidate，返回 `extraction_incomplete`，不得签 complete attestation。
 
-## 输出 v2
+## 输出 v3
+
+不要凭本文档猜 Observation 或 ScanAttestation 字段。先读取运行时 schema：
+
+```bash
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 agent-schema reviewer-output
+```
 
 严格 JSON：
 
 ```json
 {
-  "schema_version": "canon-v3/reviewer-output/v2",
+  "schema_version": "canon-v3/reviewer-output/v3",
   "chapter": 1,
   "chapter_sha256": "...",
   "parent_head": "...",
   "author_axiom_digest": "...",
   "entity_registry_digest": "...",
+  "candidate_digest_map": {},
   "candidate_digests": [],
   "observations": [],
   "scan_attestations": [
     {
       "attestation_id": "...",
       "scanner": "reviewer",
-      "scanner_version": "canon-v3-reviewer-v2",
+      "scanner_version": "canon-v3-reviewer-v3",
       "chapter_sha256": "...",
       "parent_head": "...",
       "author_axiom_digest": "...",
@@ -92,6 +104,15 @@ author-axiom 的 add/update/remove 使用独立 proposal、人工决定和 final
 }
 ```
 
-只有绑定字段全部匹配、五维完整、全部 candidates 已检查且 `extraction_incomplete=[]` 时，才能返回唯一 complete attestation。historical audit 使用相同 schema，但结果只用于报告，不能创建队列。
+`candidate_digest_map` 必须逐项原样回显 candidate-draft validator 返回的 exact
+`candidate_id -> candidate_digest`，不能只复制 digest 集合、手算或按 candidate ID
+重新配对。只有该 map、其它绑定字段全部匹配，五维完整、全部 candidates 已检查且
+`extraction_incomplete=[]` 时，才能返回唯一 complete attestation。historical audit 使用相同 schema，但结果只用于报告，不能创建队列。
+
+输出写入 `.canon-ledger/tmp/canon_v3_reviewer_output.json` 后，调用方必须运行
+`canon-v3 validate-agent-output reviewer-output`。校验器拒绝额外字段、错误或缺失的
+ID→digest map、漏维度、多份 complete attestation、未知 candidate 和不闭合的 scan；
+assemble 还会把该 map 与 exact draft 逐项比较，审核后互换 candidate ID 必须失败。
+reviewer 不得自行放宽。
 
 自然语言原因使用中文；字段、枚举、路径、实体 ID 和正文逐字引文保持原值。

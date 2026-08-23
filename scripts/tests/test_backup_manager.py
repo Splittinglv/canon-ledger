@@ -29,6 +29,8 @@ def test_backup_manager_gitignore_excludes_env(tmp_path, monkeypatch):
     assert ".env.*" in gitignore
     assert "!.env.example" in gitignore
     assert ".canon-ledger/backups/.integrity-key" in gitignore
+    assert ".canon-ledger/**/*.lock" in gitignore
+    assert ".story-system/**/*.lock" in gitignore
 
 
 def _run_git(project_root, *args):
@@ -45,6 +47,44 @@ def _run_git(project_root, *args):
 def _configure_git_identity(project_root):
     assert _run_git(project_root, "config", "user.name", "Test Author").returncode == 0
     assert _run_git(project_root, "config", "user.email", "author@example.com").returncode == 0
+
+
+def test_git_backup_does_not_stage_recursive_runtime_locks(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    assert _run_git(project_root, "init", "-b", "main").returncode == 0
+    _configure_git_identity(project_root)
+
+    runtime_dir = project_root / ".story-system" / "v3"
+    nested_runtime_dir = runtime_dir / "nested"
+    nested_runtime_dir.mkdir(parents=True)
+    tracked_lock = runtime_dir / ".publish.lock"
+    tracked_lock.write_text("old-lock-state\n", encoding="utf-8")
+    (project_root / "baseline.md").write_text("baseline\n", encoding="utf-8")
+    assert _run_git(project_root, "add", ".").returncode == 0
+    assert _run_git(project_root, "commit", "-m", "baseline").returncode == 0
+
+    tracked_lock.write_text("new-lock-state\n", encoding="utf-8")
+    (nested_runtime_dir / "STAGING.json.lock").write_text("ephemeral\n", encoding="utf-8")
+    (project_root / "chapter-note.md").write_text("chapter one\n", encoding="utf-8")
+
+    manager = GitBackupManager(str(project_root))
+    assert manager.backup(1, "lock hygiene") is True
+
+    assert (
+        _run_git(project_root, "show", "ch0001:.story-system/v3/.publish.lock").stdout
+        == "old-lock-state\n"
+    )
+    assert (
+        _run_git(
+            project_root,
+            "cat-file",
+            "-e",
+            "ch0001:.story-system/v3/nested/STAGING.json.lock",
+        ).returncode
+        != 0
+    )
+    assert _run_git(project_root, "show", "ch0001:chapter-note.md").stdout == "chapter one\n"
 
 
 def _persist_accepted_bound_commit(project_root, chapter=1):

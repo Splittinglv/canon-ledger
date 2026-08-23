@@ -9,7 +9,7 @@ import json
 import sqlite3
 import sys
 from datetime import datetime, timezone
-from contextlib import asynccontextmanager, closing
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -52,12 +52,6 @@ def _story_system_dir() -> Path:
     return _get_project_root() / ".story-system"
 
 
-def _build_story_runtime_health_report(project_root: Path) -> dict:
-    from data_modules.story_runtime_health import build_story_runtime_health
-
-    return build_story_runtime_health(project_root)
-
-
 def _ensure_scripts_dir_on_path() -> None:
     scripts_dir = Path(__file__).resolve().parents[1] / "scripts"
     scripts_entry = str(scripts_dir)
@@ -78,86 +72,6 @@ def _load_state_payload(*, required: bool = False) -> dict:
         raise HTTPException(status_code=500, detail=f"state.json 读取失败: {exc}") from exc
 
     return payload if isinstance(payload, dict) else {}
-
-
-def _parse_json_value(raw: object, default):
-    if raw is None:
-        return default
-    if isinstance(raw, (dict, list)):
-        return raw
-    if not isinstance(raw, str):
-        return default
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return default
-
-
-def _resolve_volume_for_chapter(state: dict, chapter: int) -> int | None:
-    progress = state.get("progress") if isinstance(state, dict) else {}
-    if not isinstance(progress, dict):
-        return None
-    volumes_planned = progress.get("volumes_planned")
-    if not isinstance(volumes_planned, list):
-        return None
-
-    best: tuple[int, int] | None = None
-    for item in volumes_planned:
-        if not isinstance(item, dict):
-            continue
-        volume = item.get("volume")
-        if not isinstance(volume, int) or volume <= 0:
-            continue
-        chapter_range = str(item.get("chapters_range") or "").strip()
-        if "-" not in chapter_range:
-            continue
-        left, _, right = chapter_range.partition("-")
-        try:
-            start = int(left.strip())
-            end = int(right.strip())
-        except ValueError:
-            continue
-        if start <= 0 or end <= 0 or start > end:
-            continue
-        if start <= chapter <= end:
-            candidate = (start, volume)
-            if best is None or candidate[0] > best[0] or (
-                candidate[0] == best[0] and candidate[1] < best[1]
-            ):
-                best = candidate
-    return best[1] if best else None
-
-
-def _build_strand_map(state: dict) -> dict[int, str]:
-    tracker = state.get("strand_tracker") if isinstance(state, dict) else {}
-    history = tracker.get("history") if isinstance(tracker, dict) else []
-    if not isinstance(history, list):
-        return {}
-
-    strand_map: dict[int, str] = {}
-    for index, entry in enumerate(history, start=1):
-        if not isinstance(entry, dict):
-            continue
-        chapter_value = entry.get("chapter", index)
-        try:
-            chapter = int(chapter_value)
-        except (TypeError, ValueError):
-            chapter = index
-        strand = str(entry.get("strand") or entry.get("dominant") or "").strip().lower()
-        if chapter > 0 and strand:
-            strand_map[chapter] = strand
-    return strand_map
-
-
-def _extract_story_chapter(path: Path) -> int:
-    stem = path.stem
-    if "_" not in stem:
-        return 0
-    _, _, tail = stem.partition("_")
-    try:
-        return int(tail.split(".")[0])
-    except ValueError:
-        return 0
 
 
 def _inspect_vector_db(project_root: Path) -> dict:
@@ -225,30 +139,6 @@ def _build_env_status(project_root: Path) -> dict:
     }
 
 
-def _projection_status_for_commit(project_root: Path, chapter: int, commit_payload: dict) -> tuple[dict, str, dict]:
-    try:
-        from data_modules.projection_log import latest_projection_run, projection_status_from_run
-
-        latest_run = latest_projection_run(project_root, chapter=chapter)
-    except Exception:
-        latest_run = None
-
-    if isinstance(latest_run, dict):
-        projection_status = projection_status_from_run(latest_run)
-        return (
-            projection_status if isinstance(projection_status, dict) else {},
-            "projection_log",
-            {
-                "run_id": str(latest_run.get("run_id") or ""),
-                "status": str(latest_run.get("status") or ""),
-                "created_at": str(latest_run.get("created_at") or ""),
-                "commit_hash": str(latest_run.get("commit_hash") or ""),
-            },
-        )
-
-    return commit_payload.get("projection_status") or {}, "commit", {}
-
-
 def _canon_dashboard_view() -> dict[str, Any]:
     """Build one disposable dashboard view from an exact fresh Canon HEAD."""
 
@@ -263,12 +153,28 @@ def _canon_dashboard_view() -> dict[str, Any]:
         workflow, projection = authority.require_fresh_projection()
     except CanonReadModelUnavailable as exc:
         workflow = authority.snapshot()
+        state = str(workflow.get("state") or "invalid")
         raise HTTPException(
             status_code=409,
             detail={
-                "code": "canon_v3_read_model_unavailable",
+                "schema_version": "canon-v3/dashboard-error/v1",
+                "code": (
+                    state
+                    if state
+                    in {
+                        "projection_rebuild_required",
+                        "migration_required",
+                        "recompile_required",
+                        "rewrite_required",
+                        "invalid",
+                    }
+                    else "canon_v3_read_model_unavailable"
+                ),
                 "message": str(exc),
+                "authority": "canon_v3",
+                "usable_for_writing": False,
                 "workflow": workflow,
+                "primary_action": workflow.get("primary_action"),
             },
         ) from exc
     latest = int(workflow.get("latest_chapter") or 0)
@@ -279,6 +185,8 @@ def _canon_dashboard_view() -> dict[str, Any]:
             status_code=409,
             detail={
                 "code": "canon_v3_workflow_changed_during_dashboard_read",
+                "authority": "canon_v3",
+                "usable_for_writing": False,
                 "workflow": post_read_workflow,
             },
         )
@@ -287,15 +195,28 @@ def _canon_dashboard_view() -> dict[str, Any]:
             status_code=409,
             detail={
                 "code": "canon_v3_compatibility_view_invalid",
+                "authority": "canon_v3",
+                "usable_for_writing": False,
                 "invalid_sources": list(history.invalid_sources),
                 "workflow": workflow,
             },
         )
+    from data_modules.canon_v3.schema import canonical_digest
+
+    binding = {
+        "schema_version": "canon-v3/dashboard-binding/v1",
+        "authority": "canon_v3",
+        "head_hash": workflow.get("head_hash"),
+        "generation": int(workflow.get("generation") or 0),
+        "workflow_digest": workflow.get("workflow_digest"),
+        "projection_digest": canonical_digest(projection),
+        "as_of_chapter": latest,
+    }
     return {
         "workflow": workflow,
         "projection": projection,
         "history": history,
-        "binding": dict(projection.get("binding") or {}),
+        "binding": binding,
     }
 
 
@@ -305,6 +226,26 @@ def _bound_items(view: dict[str, Any], items: list[dict[str, Any]]) -> dict[str,
         "source": "canon_v3_head",
         "items": items,
     }
+
+
+def _legacy_dashboard_endpoint_retired(
+    endpoint: str,
+    *,
+    replacement: str | None = None,
+) -> None:
+    """Fail closed instead of presenting legacy index analytics as Canon facts."""
+
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "schema_version": "canon-v3/dashboard-error/v1",
+            "code": "legacy_dashboard_endpoint_retired",
+            "endpoint": endpoint,
+            "authority": "legacy_read_only",
+            "usable_for_writing": False,
+            "replacement": replacement,
+        },
+    )
 
 
 def _dashboard_entities(view: dict[str, Any]) -> list[dict[str, Any]]:
@@ -467,7 +408,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         finally:
             _watcher.stop()
 
-    app = FastAPI(title="CanonLedger Dashboard", version="0.1.0", lifespan=_lifespan)
+    app = FastAPI(title="CanonLedger Dashboard", version="0.2.0", lifespan=_lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -482,7 +423,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
 
     @app.get("/api/project/info")
     def project_info():
-        """Return project metadata while keeping legacy facts advisory-only."""
+        """Return planning metadata plus the exact public workflow snapshot."""
 
         from data_modules.workflow_authority import WorkflowAuthority
 
@@ -505,15 +446,22 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
             progress["current_chapter"] = int(workflow.get("latest_chapter") or 0)
         payload["progress"] = progress
         payload["canon_binding"] = {
+            "authority": "canon_v3",
             "head_hash": workflow.get("head_hash"),
             "generation": int(workflow.get("generation") or 0),
+            "workflow_digest": workflow.get("workflow_digest"),
+            "projection_fresh": bool(workflow.get("projection_fresh")),
         }
         payload["workflow"] = workflow
+        payload["source"] = "planning_metadata_with_canon_v3_workflow"
         return payload
 
     @app.get("/api/story-runtime/health")
     def story_runtime_health():
-        return _build_story_runtime_health_report(_get_project_root())
+        """Compatibility health alias backed only by Canon v3 authority."""
+        from data_modules.workflow_authority import WorkflowAuthority
+
+        return WorkflowAuthority(_get_project_root()).snapshot()
 
     @app.get("/api/canon-v3/workflow")
     def canon_v3_workflow():
@@ -524,7 +472,16 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
 
     @app.get("/api/canon-v3/history")
     def canon_v3_history():
-        return _canon_dashboard_view()["projection"]
+        view = _canon_dashboard_view()
+        projection = view["projection"]
+        return {
+            "binding": dict(view["binding"]),
+            "source": "canon_v3_head",
+            "chapters": list(projection.get("chapters") or []),
+            "author_axioms": dict(projection.get("author_axioms") or {}),
+            "facts": list(projection.get("facts") or []),
+            "history": list(projection.get("history") or []),
+        }
 
     @app.get("/api/canon-v3/facts")
     def canon_v3_facts(
@@ -580,28 +537,30 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
             "state_changes": _dashboard_state_changes(view),
         }
 
-    # ===========================================================
-    # API：HEAD-bound Canon 事实视图。index.db 仅保留分析/旧数据用途，
-    # 不再驱动人物、关系、状态或章节事实页面。
-    # ===========================================================
+    @app.get("/api/canon-v3/obligations")
+    def canon_v3_obligations():
+        """Return active/open and historical lifecycle facts from one HEAD."""
 
-    def _get_db() -> sqlite3.Connection:
-        db_path = _canon_ledger_dir() / "index.db"
-        if not db_path.is_file():
-            raise HTTPException(404, "index.db 不存在")
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        return conn
+        view = _canon_dashboard_view()
+        return {
+            "binding": dict(view["binding"]),
+            "source": "canon_v3_head",
+            "latest_chapter": int(view["workflow"].get("latest_chapter") or 0),
+            "items": [
+                dict(item)
+                for item in view["history"].obligations
+                if isinstance(item, dict)
+            ],
+            "lifecycle_history": [
+                dict(item)
+                for item in view["history"].lifecycle_history
+                if isinstance(item, dict)
+            ],
+        }
 
-    def _fetchall_safe(conn: sqlite3.Connection, query: str, params: tuple = ()) -> list[dict]:
-        """执行只读查询；若目标表不存在（旧库），返回空列表。"""
-        try:
-            rows = conn.execute(query, params).fetchall()
-            return [dict(r) for r in rows]
-        except sqlite3.OperationalError as exc:
-            if "no such table" in str(exc).lower() or "no such column" in str(exc).lower():
-                return []
-            raise HTTPException(status_code=500, detail=f"数据库查询失败: {exc}") from exc
+    # ===========================================================
+    # API：HEAD-bound Canon 事实视图。Dashboard 不读取 legacy index.db。
+    # ===========================================================
 
     @app.get("/api/canon-v3/entities")
     @app.get("/api/entities", include_in_schema=False)
@@ -653,7 +612,8 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         rows.sort(key=lambda row: (-row["chapter"], row["id"]))
         return _bound_items(view, rows[: max(0, int(limit))])
 
-    @app.get("/api/relationship-events")
+    @app.get("/api/canon-v3/relationship-events")
+    @app.get("/api/relationship-events", include_in_schema=False)
     def list_relationship_events(
         entity: Optional[str] = None,
         from_chapter: Optional[int] = None,
@@ -728,191 +688,39 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
 
     @app.get("/api/reading-power")
     def list_reading_power(limit: int = 50):
-        with closing(_get_db()) as conn:
-            rows = conn.execute(
-                "SELECT * FROM chapter_reading_power ORDER BY chapter DESC LIMIT ?", (limit,)
-            ).fetchall()
-            return [dict(r) for r in rows]
+        _legacy_dashboard_endpoint_retired("/api/reading-power")
 
     @app.get("/api/review-metrics")
     def list_review_metrics(limit: int = 20):
-        with closing(_get_db()) as conn:
-            rows = conn.execute(
-                "SELECT * FROM review_metrics ORDER BY end_chapter DESC LIMIT ?", (limit,)
-            ).fetchall()
-            normalized = []
-            for row in rows:
-                item = dict(row)
-                item["dimension_scores"] = _parse_json_value(item.get("dimension_scores"), {})
-                item["severity_counts"] = _parse_json_value(item.get("severity_counts"), {})
-                item["critical_issues"] = _parse_json_value(item.get("critical_issues"), [])
-                normalized.append(item)
-            return normalized
+        _legacy_dashboard_endpoint_retired("/api/review-metrics")
 
     @app.get("/api/stats/chapter-trend")
     def chapter_trend(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
-        from data_modules.workflow_authority import WorkflowAuthority
-
-        workflow = WorkflowAuthority(_get_project_root()).snapshot()
-        cutover = int(workflow.get("cutover_chapter") or 0)
-        active_chapters = {
-            *range(1, cutover + 1),
-            *(int(value) for value in workflow.get("active_chapters") or []),
-        }
-        state = _load_state_payload()
-        strand_map = _build_strand_map(state)
-
-        if (_canon_ledger_dir() / "index.db").is_file():
-            with closing(_get_db()) as conn:
-                rows = _fetchall_safe(
-                    conn,
-                    """
-                SELECT
-                    c.chapter,
-                    c.title,
-                    c.location,
-                    c.word_count,
-                    c.characters,
-                    c.summary,
-                    rp.is_transition,
-                    rp.override_count,
-                    rp.debt_balance,
-                    rm.severity_counts
-                FROM chapters c
-                LEFT JOIN chapter_reading_power rp ON rp.chapter = c.chapter
-                LEFT JOIN review_metrics rm ON rm.end_chapter = c.chapter
-                ORDER BY c.chapter ASC
-                """,
-                )
-        else:
-            rows = []
-
-        items = []
-        for row in rows:
-            chapter = int(row.get("chapter") or 0)
-            if chapter not in active_chapters:
-                continue
-            items.append(
-                {
-                    "chapter": chapter,
-                    "title": row.get("title") or "",
-                    "word_count": int(row.get("word_count") or 0),
-                    "location": "",
-                    "characters": [],
-                    "summary": "",
-                    "review_severity_counts": _parse_json_value(row.get("severity_counts"), {}),
-                    "is_transition": bool(row.get("is_transition")),
-                    "override_count": int(row.get("override_count") or 0),
-                    "debt_balance": float(row.get("debt_balance") or 0.0),
-                    "strand": strand_map.get(chapter, ""),
-                    "volume": _resolve_volume_for_chapter(state, chapter),
-                    "legacy_advisory": {
-                        "location": row.get("location") or "",
-                        "characters": _parse_json_value(row.get("characters"), []),
-                        "summary": row.get("summary") or "",
-                    },
-                }
-            )
-
-        return {
-            "binding": {
-                "head_hash": workflow.get("head_hash"),
-                "generation": int(workflow.get("generation") or 0),
-            },
-            "source": "canon_v3_head_with_legacy_analytics",
-            "items": items[offset : offset + limit],
-            "total": len(items),
-            "latest_chapter": int(workflow.get("latest_chapter") or 0),
-            "limit": limit,
-            "offset": offset,
-        }
+        _legacy_dashboard_endpoint_retired(
+            "/api/stats/chapter-trend",
+            replacement="/api/canon-v3/history",
+        )
 
     @app.get("/api/commits")
     def list_commits(limit: int = Query(20, ge=1, le=200)):
-        from data_modules.workflow_authority import WorkflowAuthority
-
-        workflow = WorkflowAuthority(_get_project_root()).snapshot()
-        binding = {
-            "head_hash": workflow.get("head_hash"),
-            "generation": int(workflow.get("generation") or 0),
-        }
-        if workflow.get("head_hash"):
-            from data_modules.canon_v3.projection import projection_is_fresh
-            from data_modules.canon_v3.repository import CanonV3Repository
-
-            repository = CanonV3Repository(_get_project_root())
-            fresh = projection_is_fresh(_get_project_root())
-            items = []
-            for commit_hash, payload in repository.current_commits():
-                items.append(
-                    {
-                        "chapter": int(payload.get("chapter") or 0),
-                        "revision": int(payload.get("revision") or 0),
-                        "status": "accepted",
-                        "projection_status": {"canon": "done" if fresh else "pending"},
-                        "projection_source": "canon_v3_head",
-                        "projection_run": {},
-                        "write_fact_role": "canon_v3_immutable_commit",
-                        "contract_refs": {},
-                        "path": f"v3/commits/{commit_hash}.json",
-                        "updated_at": "",
-                    }
-                )
-            items.sort(key=lambda item: item["chapter"], reverse=True)
-            return {
-                "binding": binding,
+        view = _canon_dashboard_view()
+        items = [
+            {
+                "chapter": int(item.get("chapter") or 0),
+                "revision": int(item.get("revision") or 0),
+                "commit_hash": str(item.get("commit_hash") or ""),
+                "transaction_hash": str(item.get("transaction_hash") or ""),
+                "status": "accepted",
+                "projection_status": "fresh",
                 "source": "canon_v3_head",
-                "items": items[:limit],
-                "total": len(items),
-                "limit": limit,
             }
-        commits_dir = _story_system_dir() / "commits"
-        if not commits_dir.is_dir():
-            return {
-                "binding": binding,
-                "source": "legacy_read_only",
-                "workflow_digest": workflow.get("workflow_digest"),
-                "items": [],
-                "total": 0,
-                "limit": limit,
-            }
-
-        items = []
-        for path in commits_dir.glob("chapter_*.commit.json"):
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-
-            meta = payload.get("meta") if isinstance(payload, dict) else {}
-            provenance = payload.get("provenance") if isinstance(payload, dict) else {}
-            chapter = int((meta or {}).get("chapter") or _extract_story_chapter(path))
-            projection_status, projection_source, projection_run = _projection_status_for_commit(
-                _get_project_root(),
-                chapter,
-                payload if isinstance(payload, dict) else {},
-            )
-            items.append(
-                {
-                    "chapter": chapter,
-                    "status": str((meta or {}).get("status") or "missing"),
-                    "projection_status": projection_status,
-                    "projection_source": projection_source,
-                    "projection_run": projection_run,
-                    "write_fact_role": str((provenance or {}).get("write_fact_role") or ""),
-                    "contract_refs": payload.get("contract_refs") or {},
-                    "path": path.name,
-                    "updated_at": datetime.fromtimestamp(
-                        path.stat().st_mtime, tz=timezone.utc
-                    ).isoformat(),
-                }
-            )
-
+            for item in view["projection"].get("chapters") or []
+            if isinstance(item, dict)
+        ]
         items.sort(key=lambda item: item["chapter"], reverse=True)
         return {
-            "binding": binding,
-            "source": "legacy_read_only",
-            "workflow_digest": workflow.get("workflow_digest"),
+            "binding": dict(view["binding"]),
+            "source": "canon_v3_head",
             "items": items[:limit],
             "total": len(items),
             "limit": limit,
@@ -920,42 +728,10 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
 
     @app.get("/api/contracts/summary")
     def contracts_summary():
-        from data_modules.story_contracts import StoryContractPaths, read_json_if_exists
-
-        project_root = _get_project_root()
-        state = _load_state_payload()
-        runtime = _build_story_runtime_health_report(project_root)
-        chapter = int(runtime.get("chapter") or ((state.get("progress") or {}).get("current_chapter") or 0))
-        current_volume = _resolve_volume_for_chapter(state, chapter) or int(
-            ((state.get("progress") or {}).get("current_volume") or 1)
+        _legacy_dashboard_endpoint_retired(
+            "/api/contracts/summary",
+            replacement="/api/canon-v3/workflow",
         )
-
-        paths = StoryContractPaths.from_project_root(project_root)
-        master_payload = read_json_if_exists(paths.master_json) or {}
-
-        return {
-            "chapter": chapter,
-            "current_volume": current_volume,
-            "master": {
-                "exists": bool(master_payload),
-                "primary_genre": str(((master_payload.get("route") or {}).get("primary_genre") or "")),
-                "core_tone": str(
-                    ((master_payload.get("master_constraints") or {}).get("core_tone") or "")
-                ),
-            },
-            "counts": {
-                "volumes": len(list(paths.volumes_dir.glob("volume_*.json"))) if paths.volumes_dir.is_dir() else 0,
-                "chapters": len(list(paths.chapters_dir.glob("chapter_*.json"))) if paths.chapters_dir.is_dir() else 0,
-                "reviews": len(list(paths.reviews_dir.glob("chapter_*.review.json"))) if paths.reviews_dir.is_dir() else 0,
-                "commits": len(list(paths.commits_dir.glob("chapter_*.commit.json"))) if paths.commits_dir.is_dir() else 0,
-            },
-            "current_contracts": {
-                "volume": paths.volume_json(current_volume).is_file(),
-                "chapter": paths.chapter_json(chapter).is_file() if chapter > 0 else False,
-                "review": paths.review_json(chapter).is_file() if chapter > 0 else False,
-                "commit": paths.commit_json(chapter).is_file() if chapter > 0 else False,
-            },
-        }
 
     @app.get("/api/env-status")
     def env_status():
@@ -963,8 +739,10 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
 
     @app.get("/api/env-status/probe")
     def env_status_probe():
+        from data_modules.workflow_authority import WorkflowAuthority
+
         status = _build_env_status(_get_project_root())
-        runtime = _build_story_runtime_health_report(_get_project_root())
+        workflow = WorkflowAuthority(_get_project_root()).snapshot()
         vector_db = status["vector_db"]
         checks = [
             {
@@ -984,12 +762,11 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
                 or f"{vector_db['record_count']} records · {vector_db['size_bytes']} bytes",
             },
             {
-                "name": "story_runtime",
-                "ok": bool(runtime.get("mainline_ready")),
+                "name": "canon_v3_workflow",
+                "ok": str(workflow.get("state") or "") == "ready",
                 "detail": (
-                    f"chapter={runtime.get('chapter')} "
-                    f"status={runtime.get('latest_commit_status')} "
-                    f"fallback={','.join(runtime.get('fallback_sources') or []) or 'none'}"
+                    f"state={workflow.get('state')} "
+                    f"action={(workflow.get('primary_action') or {}).get('code')}"
                 ),
             },
         ]
@@ -1020,165 +797,50 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         return _bound_items(view, rows)
 
     # ===========================================================
-    # API：扩展表（v5.3+ / v5.4+）
+    # API：退役的 legacy index 分析端点。保留 410 仅用于兼容发现。
     # ===========================================================
 
     @app.get("/api/overrides")
     def list_overrides(status: Optional[str] = None, limit: int = 100):
-        with closing(_get_db()) as conn:
-            if status:
-                return _fetchall_safe(
-                    conn,
-                    "SELECT * FROM override_contracts WHERE status = ? ORDER BY chapter DESC LIMIT ?",
-                    (status, limit),
-                )
-            return _fetchall_safe(
-                conn,
-                "SELECT * FROM override_contracts ORDER BY chapter DESC LIMIT ?",
-                (limit,),
-            )
+        _legacy_dashboard_endpoint_retired("/api/overrides")
 
     @app.get("/api/debts")
     def list_debts(status: Optional[str] = None, limit: int = 100):
-        with closing(_get_db()) as conn:
-            if status:
-                return _fetchall_safe(
-                    conn,
-                    "SELECT * FROM chase_debt WHERE status = ? ORDER BY updated_at DESC LIMIT ?",
-                    (status, limit),
-                )
-            return _fetchall_safe(
-                conn,
-                "SELECT * FROM chase_debt ORDER BY updated_at DESC LIMIT ?",
-                (limit,),
-            )
+        _legacy_dashboard_endpoint_retired("/api/debts")
 
     @app.get("/api/debt-events")
     def list_debt_events(debt_id: Optional[int] = None, limit: int = 200):
-        with closing(_get_db()) as conn:
-            if debt_id is not None:
-                return _fetchall_safe(
-                    conn,
-                    "SELECT * FROM debt_events WHERE debt_id = ? ORDER BY chapter DESC, id DESC LIMIT ?",
-                    (debt_id, limit),
-                )
-            return _fetchall_safe(
-                conn,
-                "SELECT * FROM debt_events ORDER BY chapter DESC, id DESC LIMIT ?",
-                (limit,),
-            )
+        _legacy_dashboard_endpoint_retired("/api/debt-events")
 
     @app.get("/api/invalid-facts")
     def list_invalid_facts(status: Optional[str] = None, limit: int = 100):
-        with closing(_get_db()) as conn:
-            if status:
-                return _fetchall_safe(
-                    conn,
-                    "SELECT * FROM invalid_facts WHERE status = ? ORDER BY marked_at DESC LIMIT ?",
-                    (status, limit),
-                )
-            return _fetchall_safe(
-                conn,
-                "SELECT * FROM invalid_facts ORDER BY marked_at DESC LIMIT ?",
-                (limit,),
-            )
+        _legacy_dashboard_endpoint_retired("/api/invalid-facts")
 
     @app.get("/api/rag-queries")
     def list_rag_queries(query_type: Optional[str] = None, limit: int = 100):
-        with closing(_get_db()) as conn:
-            if query_type:
-                return _fetchall_safe(
-                    conn,
-                    "SELECT * FROM rag_query_log WHERE query_type = ? ORDER BY created_at DESC LIMIT ?",
-                    (query_type, limit),
-                )
-            return _fetchall_safe(
-                conn,
-                "SELECT * FROM rag_query_log ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            )
+        _legacy_dashboard_endpoint_retired("/api/rag-queries")
 
     @app.get("/api/tool-stats")
     def list_tool_stats(tool_name: Optional[str] = None, limit: int = 200):
-        with closing(_get_db()) as conn:
-            if tool_name:
-                return _fetchall_safe(
-                    conn,
-                    "SELECT * FROM tool_call_stats WHERE tool_name = ? ORDER BY created_at DESC LIMIT ?",
-                    (tool_name, limit),
-                )
-            return _fetchall_safe(
-                conn,
-                "SELECT * FROM tool_call_stats ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            )
+        _legacy_dashboard_endpoint_retired("/api/tool-stats")
 
     @app.get("/api/checklist-scores")
     def list_checklist_scores(limit: int = 100):
-        with closing(_get_db()) as conn:
-            return _fetchall_safe(
-                conn,
-                "SELECT * FROM writing_checklist_scores ORDER BY chapter DESC LIMIT ?",
-                (limit,),
-            )
+        _legacy_dashboard_endpoint_retired("/api/checklist-scores")
 
     @app.get("/api/story-events")
     def list_story_events(chapter: Optional[int] = None, limit: int = 200):
-        with closing(_get_db()) as conn:
-            if chapter is not None:
-                rows = _fetchall_safe(
-                    conn,
-                    """
-                    SELECT event_id, chapter, event_type, subject, payload_json, created_at
-                    FROM story_events
-                    WHERE chapter = ?
-                    ORDER BY id DESC
-                    LIMIT ?
-                    """,
-                    (chapter, limit),
-                )
-            else:
-                rows = _fetchall_safe(
-                    conn,
-                    """
-                    SELECT event_id, chapter, event_type, subject, payload_json, created_at
-                    FROM story_events
-                    ORDER BY chapter DESC, id DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
-                )
-
-        normalized = []
-        for row in rows:
-            payload = {}
-            try:
-                payload = json.loads(row.get("payload_json") or "{}")
-            except json.JSONDecodeError:
-                payload = {}
-            normalized.append({**row, "payload": payload})
-        return normalized
+        _legacy_dashboard_endpoint_retired(
+            "/api/story-events",
+            replacement="/api/canon-v3/history",
+        )
 
     @app.get("/api/story-events/health")
     def story_event_health():
-        with closing(_get_db()) as conn:
-            event_rows = _fetchall_safe(conn, "SELECT COUNT(*) AS count FROM story_events")
-            proposal_rows = _fetchall_safe(
-                conn,
-                """
-                SELECT COUNT(*) AS count
-                FROM override_contracts
-                WHERE record_type = 'amend_proposal' AND status = 'pending'
-                """,
-            )
-
-        events_dir = _story_system_dir() / "events"
-        file_count = len(list(events_dir.glob("chapter_*.events.json"))) if events_dir.is_dir() else 0
-        return {
-            "story_events": event_rows[0]["count"] if event_rows else 0,
-            "pending_amend_proposals": proposal_rows[0]["count"] if proposal_rows else 0,
-            "event_files": file_count,
-        }
+        _legacy_dashboard_endpoint_retired(
+            "/api/story-events/health",
+            replacement="/api/canon-v3/workflow",
+        )
 
     # ===========================================================
     # API：文档浏览（正文/大纲/设定集 —— 只读）

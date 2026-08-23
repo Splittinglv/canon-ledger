@@ -15,6 +15,12 @@ from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from typing import Any, Iterable, Mapping, Sequence
 
+from .public_protocol import (
+    HumanActionProfile,
+    chapter_action_profile,
+    ordered_allowed_actions,
+)
+
 
 REVIEW_SCHEMA_VERSION = "canon-v3/review/v1"
 UNBOUND_ENTITY_REGISTRY_DIGEST = "0" * 64
@@ -69,18 +75,22 @@ class ReviewAction(str, Enum):
 
 ACTION_MATRIX: Mapping[ReviewCaseKind, frozenset[ReviewAction]] = {
     ReviewCaseKind.CHECKPOINT: frozenset(
-        {ReviewAction.APPROVE, ReviewAction.REWRITE}
+        ReviewAction(action)
+        for action in ordered_allowed_actions(
+            HumanActionProfile.CHAPTER_CHECKPOINT
+        )
     ),
     ReviewCaseKind.AMBIGUITY: frozenset(
-        {
-            ReviewAction.APPROVE,
-            ReviewAction.OMIT,
-            ReviewAction.CORRECT,
-            ReviewAction.REWRITE,
-        }
+        ReviewAction(action)
+        for action in ordered_allowed_actions(
+            HumanActionProfile.CHAPTER_AMBIGUITY
+        )
     ),
     ReviewCaseKind.UNBOUND: frozenset(
-        {ReviewAction.NO_CONFLICT, ReviewAction.REWRITE}
+        ReviewAction(action)
+        for action in ordered_allowed_actions(
+            HumanActionProfile.CHAPTER_UNBOUND
+        )
     ),
 }
 
@@ -301,13 +311,14 @@ class ReviewCase:
 
     @property
     def allowed_actions(self) -> frozenset[ReviewAction]:
-        if self.requires_rewrite:
-            return frozenset({ReviewAction.REWRITE})
-        if self.level is not ReviewLevel.HUMAN_REQUIRED:
-            # Advisory/audit cases are presentation-only.  They can be hidden
-            # without gaining authority to change, omit, or approve canon.
-            return frozenset({ReviewAction.DISMISS})
-        return ACTION_MATRIX[self.kind]
+        profile = chapter_action_profile(
+            kind=self.kind.value,
+            level=self.level.value,
+            requires_rewrite=self.requires_rewrite,
+        )
+        return frozenset(
+            ReviewAction(action) for action in ordered_allowed_actions(profile)
+        )
 
     @property
     def target_digest(self) -> str:

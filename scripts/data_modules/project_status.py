@@ -55,11 +55,11 @@ def next_action_for_phase(snapshot: ProjectPhaseSnapshot) -> str:
     if phase == PHASE_DRAFT_IN_PROGRESS:
         return f"完成第 {target} 章的审查与数据产物"
     if phase == PHASE_READY_TO_COMMIT:
-        return f"运行 canon_ledger.py chapter-commit --chapter {target}"
+        return "运行 canon_ledger.py canon-v3 status，并只执行其中的 primary_action"
     if phase == PHASE_CHAPTER_COMMITTED:
         return f"继续写第 {snapshot.latest_accepted_chapter + 1} 章"
     if phase == PHASE_PROJECTION_FAILED:
-        return "检查 projection_log / projection_status，并修复失败或待处理的投影"
+        return "运行 canon_ledger.py canon-v3 status，并只执行其中的 primary_action"
     return "运行 canon_ledger.py doctor --format text"
 
 

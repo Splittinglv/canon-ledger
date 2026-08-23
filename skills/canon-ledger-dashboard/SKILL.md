@@ -5,7 +5,8 @@ description: 启动只读 Dashboard，展示统一 Canon v3 workflow 和绑定�
 
 # Canon v3 Dashboard
 
-开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)。Dashboard 只读，不修改项目、STAGING 或 HEAD。
+开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)
+和 [`../../references/index/reference-loading-map.md`](../../references/index/reference-loading-map.md)。Dashboard 只读，不修改项目、STAGING 或 HEAD。
 
 ## 启动前
 
@@ -37,15 +38,22 @@ fi
 /api/canon-v3/entities
 /api/canon-v3/relationships
 /api/canon-v3/state-changes
+/api/canon-v3/obligations
 ```
 
-所有事实响应必须携带同一 `{head_hash, generation}`。人物、关系、状态、知识、在场、持有、时间线和 obligations 从 fresh canon projection/history 派生，不能读取 legacy `index.db` 作为当前事实。
+所有事实响应必须携带同一 `{authority, head_hash, generation, workflow_digest, projection_digest, as_of_chapter}`。人物、关系、状态、知识、在场、持有、时间线和 obligations 从 fresh canon projection/history 派生，不能读取 legacy `index.db`、`state.json` 中的事实缓存或旧 commit/projection 作为当前事实。
 
-projection stale 时事实接口返回 409 并展示 `projection_rebuild_required`；前端不能把失败静默转换为空列表。legacy/index 只能出现在明确标记的历史诊断视图。
+projection stale 时事实接口返回结构化 409，包含 exact workflow、`projection_rebuild_required` 和 `primary_action`；前端不能把失败静默转换为空列表。退役的 legacy/index 分析接口返回结构化 410，并明确标记 `authority=legacy_read_only`、`usable_for_writing=false`，主导航不得调用。
+
+Dashboard 的全部 API 必须是 GET-only。启动、读取 workflow、读取事实、查看文件和诊断前后都不得创建目录、锁文件、缓存或其他项目文件。
 
 ## Workflow 展示
 
-首页直接显示 exact state、目标章、是否可写、当前 STAGING 和唯一恢复动作。不得用笼统 Mainline/Fallback 替代权威状态，也不得自行推断“可继续”。
+侧栏和首页直接显示 exact state、HEAD、generation、目标章、`can_write_next`、当前 STAGING、人工 cases 及其 exact `allowed_actions`、唯一 `primary_action`。不得用笼统 Mainline/Fallback 替代权威状态，也不得自行推断“可继续”。
+
+Dashboard 只展示 `primary_action`、命令和人工审核材料，不提供 decide/finalize/cancel 按钮，不提交人工决定，也不修改 STAGING 或 HEAD。需要采取动作时回到相应 CanonLedger Skill。
+
+伏笔/开放问题页只读取 HEAD-bound `obligations` 与 `lifecycle_history` 中的 open-loop 事实，不能读取 `project_info.plot_threads`、大纲伏笔表或 legacy index。
 
 ## 成功标准
 
@@ -53,4 +61,6 @@ projection stale 时事实接口返回 409 并展示 `projection_rebuild_require
 - workflow API 与 CLI 的 `workflow_digest` 相同。
 - 所有事实页绑定同一 HEAD/generation。
 - stale/migration/invalid 状态被明确展示，不泄漏旧 index 数据。
+- 首页显示 exact workflow、STAGING、cases、`can_write_next` 和 `primary_action`。
+- 伏笔页的数据源为 `/api/canon-v3/obligations`。
 - Dashboard 全程只提供 GET/只读接口。

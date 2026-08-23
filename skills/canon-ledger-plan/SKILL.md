@@ -5,7 +5,8 @@ description: 基于活动 Canon HEAD 规划卷纲、时间线和章纲；规划�
 
 # 规划卷纲与章纲
 
-开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)。
+开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)
+和 [`../../references/index/reference-loading-map.md`](../../references/index/reference-loading-map.md)。
 
 ## 1. Workflow Gate
 
@@ -51,6 +52,8 @@ style_notes                  可选文风说明
   `.canon-ledger/tmp/author_axioms/<name>.json`；顶层只能是
   `schema_version=canon-v3/author-axiom-draft/v1` 与 `author_axioms`，不得直接覆盖活动设定。
   每个硬设定是 `/author_axioms/<axiom_key>` 的 JSON leaf；
+  runtime 会同时检查 key、category 与实际 value；不得用 `world_rule` 或无害 key
+  包装文风、动机、人格、人设、成长弧等软设计。
   style、软大纲、剧情目标、节奏和写作偏好不得写入此文件。
 - `style_notes` 只有作者明确要求记住时才交给 `/canon-ledger-learn`。
 
@@ -61,10 +64,44 @@ axiom digest 与 expected stage）。依次调用 `author-axiom-prepare`、由�
 逐条 `author-axiom-decide`、最后 `author-axiom-finalize`。删除旧 axiom 也
 必须形成带 exact prior record 的 remove case 并人工批准；未提及不能静默删除。
 完成前 query/context 继续使用上一个 active axiom digest。
+该路径必须使用 data-agent `mode=author_axiom_proposal`，先调用
+`canon-v3 agent-schema author-axiom-proposal`，再对唯一输出
+`.canon-ledger/tmp/canon_v3_author_axiom_proposal.json` 执行
+`validate-agent-output author-axiom-proposal`；校验通过后才可以把同一文件交给
+`author-axiom-prepare`。不得从测试或内部实现猜 schema。
 
 ## 5. 写回与合同刷新
 
-只增量更新目标卷和目标章节，不重写整份总纲或设定集。写回后刷新 Story System 卷/章合同；合同中不得包含 style 强制检查或把计划节点冒充既有事实。
+只增量更新目标卷和目标章节，不重写整份总纲或设定集。大纲成功写回后，先执行精确 dry-run：
+
+```bash
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 planning refresh-contracts \
+  --chapter "${CHAPTER}" --dry-run
+```
+
+确认返回的 `head_before=head_after`、`authority=planning_only`、
+`source_outline.digest` 与刚写回的大纲一致，且三份 preview 共享同一
+`planning_batch_digest`，再去掉 `--dry-run` 应用。
+应用后三份合同的 `meta.planning_batch_digest` 仍必须与结果同值；不一致时不使用
+混合合同，重新执行刷新。
+刷新只能在 `ready + projection_fresh=true` 下进行，并且唯一允许写入：
+
+```text
+.story-system/chapters/chapter_NNN.json
+.story-system/volumes/volume_NNN.json
+.story-system/reviews/chapter_NNN.review.json
+```
+
+刷新不得同步 MASTER/设定集、修改或创建 STAGING，也不得产生
+lock/backup/Git 文件。章纲节点和禁区保留在 chapter planning directive 中；
+review contract 的事实 `must_check/blocking_rules` 必须为空，不能把大纲履约
+变成事实门禁。若大纲、辅助输入或 Canon 在构建期间变化，丢弃派生结果并重新
+读取 status，不发布混合版本。
+
+卷号和章 directive 只从已写回总纲、分章大纲或卷详细大纲派生；旧
+`.canon-ledger/state.json` 不参与路由。重复分章文件、重叠卷范围或总纲与卷文件
+冲突时停止让作者修正规划文件，不按文件名字典序猜测。
 
 删除旧事实型 `update-state`。卷号、章节范围等非事实进度使用明确的 planning metadata 命令或从规划文件派生，不能复用通用事实写入口。
 
@@ -75,4 +112,5 @@ axiom digest 与 expected stage）。依次调用 `author-axiom-prepare`、由�
 - 未认证硬设定没有进入 HEAD、projection、query 或 context；draft 可修改或
   删除，但发布前任一字节变化都会使事务失效。
 - Canon workflow 仍为 ready；若产生 axiom recertification，则唯一下一步是完成该事务，而不是开始写章。
+- 合同刷新返回 source outline/input digest，且应用前后 HEAD/generation/workflow digest 不变。
 - 最终报告列出更新文件、待认证硬设定和下一步章节，不输出文风评分。

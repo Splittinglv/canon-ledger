@@ -539,12 +539,20 @@ def test_confirmed_conflict_only_allows_rewrite_and_never_publishes(tmp_path) ->
     case_key = _case_key(prepared)
 
     assert prepared["state"] == "rewrite_required"
+    assert prepared["cases"][0]["allowed_actions"] == ["rewrite"]
     with pytest.raises(Exception, match="not_allowed"):
         record_decisions_v2(service,
             {"decisions": [{"case_key": case_key, "action": "approve"}]}
         )
     rewritten = record_decisions_v2(service,
-        {"decisions": [{"case_key": case_key, "action": "rewrite"}]}
+        {
+            "decisions": [
+                {
+                    "case_key": case_key,
+                    "action": prepared["cases"][0]["allowed_actions"][0],
+                }
+            ]
+        }
     )
     assert rewritten["state"] == "rewrite_required"
     with pytest.raises(FinalizeBlockedError, match="rewrite_required"):
@@ -621,13 +629,34 @@ def test_redecision_recomputes_from_base_without_residual_fact(tmp_path) -> None
     service = CanonV3Service(root)
     prepared = service.prepare(_batch(service, binding, [candidate], [ambiguity]))
     key = _case_key(prepared)
+    public_case = prepared["cases"][0]
+    assert public_case["allowed_actions"] == [
+        "approve",
+        "omit",
+        "correct",
+        "rewrite",
+    ]
 
     first = record_decisions_v2(service,
-        {"decisions": [{"case_key": key, "action": "approve"}]}
+        {
+            "decisions": [
+                {
+                    "case_key": key,
+                    "action": public_case["allowed_actions"][0],
+                }
+            ]
+        }
     )
     assert first["state"] == "ready_to_finalize"
     second = record_decisions_v2(service,
-        {"decisions": [{"case_key": key, "action": "omit"}]}
+        {
+            "decisions": [
+                {
+                    "case_key": key,
+                    "action": public_case["allowed_actions"][1],
+                }
+            ]
+        }
     )
     assert second["state"] == "ready_to_finalize"
 
@@ -1002,11 +1031,46 @@ def test_v2_stage_and_case_material_are_explicit_authorization_inputs(tmp_path):
     assert len(case["target_digest"]) == 64
     assert len(case["review_material"]["material_digest"]) == 64
     assert case["decision_head_hash"] is None
+    assert case["allowed_actions"] == ["approve", "rewrite"]
+    assert case["material_digest"] == case["review_material"][
+        "material_digest"
+    ]
+    assert case["decision_binding"] == {
+        "target_digest": case["target_digest"],
+        "material_digest": case["material_digest"],
+        "expected_decision_head_hash": None,
+    }
 
     with pytest.raises(InvalidDecision, match="request_v2_invalid"):
         service.record_decisions(
             {"decisions": [{"case_key": case["case_key"], "action": "approve"}]}
         )
+
+    stale = decision_request(
+        snapshot,
+        [
+            {
+                "case_key": case["case_key"],
+                "action": case["allowed_actions"][0],
+            }
+        ],
+    )
+    stale["decisions"][0]["target_digest"] = "0" * 64
+    with pytest.raises(InvalidDecision, match="target_precondition"):
+        service.record_decisions(stale)
+
+    decided = service.record_decisions(
+        decision_request(
+            snapshot,
+            [
+                {
+                    "case_key": case["case_key"],
+                    "action": case["allowed_actions"][0],
+                }
+            ],
+        )
+    )
+    assert decided["state"] == "ready_to_finalize"
 
 
 def test_decision_request_is_cas_bound_and_batch_validation_is_atomic(tmp_path):

@@ -128,6 +128,52 @@ def _apply_genesis_axiom_supersessions(
                 target.pop(field, None)
                 if not target:
                     initial.pop(section, None)
+    setting_canon = result.get("setting_canon")
+    if isinstance(setting_canon, dict):
+        raw_setting_facts = setting_canon.get("facts") or []
+        if not isinstance(raw_setting_facts, list):
+            raise CanonIntegrityError(
+                "canon_v3_superseded_setting_canon_facts_invalid"
+            )
+        superseded_ids = {
+            str(fact.get("id") or "").strip()
+            for fact in facts
+            if str(fact.get("id") or "").strip()
+        }
+        superseded_signatures = {
+            (
+                str(fact.get("source") or ""),
+                str(fact.get("section") or ""),
+                str(fact.get("field") or ""),
+                content_hash(fact.get("value")),
+            )
+            for fact in facts
+        }
+
+        def is_superseded_setting_fact(raw: Any) -> bool:
+            if not isinstance(raw, dict):
+                raise CanonIntegrityError(
+                    "canon_v3_superseded_setting_canon_fact_invalid"
+                )
+            fact_id = str(raw.get("id") or "").strip()
+            signature = (
+                str(raw.get("source") or ""),
+                str(raw.get("section") or ""),
+                str(raw.get("field") or ""),
+                content_hash(raw.get("value")),
+            )
+            return bool(
+                (fact_id and fact_id in superseded_ids)
+                or signature in superseded_signatures
+            )
+
+        mutable_setting = copy.deepcopy(setting_canon)
+        mutable_setting["facts"] = [
+            copy.deepcopy(raw)
+            for raw in raw_setting_facts
+            if not is_superseded_setting_fact(raw)
+        ]
+        result["setting_canon"] = mutable_setting
     return result
 
 
@@ -174,7 +220,10 @@ def _projection_from_head(
     if not isinstance(metadata, dict):
         raise CanonIntegrityError("canon_v3_genesis_metadata_invalid")
     genesis_schema = str(metadata.get("schema_version") or "")
-    recertified_genesis = genesis_schema == "canon-v3/legacy-genesis/v2"
+    recertified_genesis = genesis_schema in {
+        "canon-v3/legacy-genesis/v2",
+        "canon-v3/legacy-genesis/v3",
+    }
     legacy_snapshot = metadata.get("legacy_snapshot")
     if legacy_snapshot is None:
         legacy_base: dict[str, Any] = {}
@@ -187,8 +236,18 @@ def _projection_from_head(
         raw_facts = legacy_snapshot.get("facts")
         if not isinstance(raw_facts, dict):
             raise CanonIntegrityError("canon_v3_legacy_snapshot_facts_invalid")
-        if recertified_genesis and legacy_snapshot.get("schema_version") != (
-            "canon-v3/legacy-fact-snapshot/v2"
+        expected_snapshot_schema = {
+            "canon-v3/legacy-genesis/v2": (
+                "canon-v3/legacy-fact-snapshot/v2"
+            ),
+            "canon-v3/legacy-genesis/v3": (
+                "canon-v3/legacy-fact-snapshot/v3"
+            ),
+        }.get(genesis_schema)
+        if (
+            recertified_genesis
+            and legacy_snapshot.get("schema_version")
+            != expected_snapshot_schema
         ):
             raise CanonIntegrityError("canon_v3_legacy_snapshot_schema_invalid")
         legacy_base = _apply_genesis_axiom_supersessions(
@@ -675,17 +734,19 @@ def rebuild_projection(project_root: str | Path) -> dict[str, Any]:
     return payload
 
 
-def read_projection(
+def _read_projection_once(
     project_root: str | Path,
     *,
     require_fresh: bool = True,
 ) -> dict[str, Any]:
     path = projection_path(project_root)
+    repository = CanonV3Repository(project_root)
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw_before = path.read_bytes()
+        payload = json.loads(raw_before.decode("utf-8"))
     except FileNotFoundError as exc:
         raise ProjectionStaleError("canon_v3_projection_missing") from exc
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise CanonProjectionError("canon_v3_projection_invalid_json") from exc
     if not isinstance(payload, dict) or payload.get("schema_version") != PROJECTION_SCHEMA:
         raise CanonProjectionError("canon_v3_projection_schema_invalid")
@@ -708,16 +769,59 @@ def read_projection(
     ):
         raise CanonProjectionError("canon_v3_projection_shape_invalid")
     if require_fresh:
-        repository = CanonV3Repository(project_root)
-        with repository.locked():
-            repository.assert_projection_fresh(binding)
-            head = repository.current_head(validate=True)
-            if head is None:
-                raise ProjectionStaleError("canon_v3_projection_without_head")
-            expected = _projection_from_head(repository, head)
-            if payload != expected:
-                raise CanonProjectionError("canon_v3_projection_content_mismatch")
+        # Read-only callers must not create ``.publish.lock``.  CURRENT and the
+        # projection are atomically replaced by writers, so prove a coherent
+        # view by reading both sides again after the expensive validation.
+        head_before = repository.current_head(validate=False)
+        if head_before is None:
+            raise ProjectionStaleError("canon_v3_projection_without_head")
+        manifest = repository.read_manifest(
+            head_before, validate_references=True
+        )
+        try:
+            supplied_generation = int(binding.get("generation") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ProjectionStaleError("canon_v3_projection_binding_invalid") from exc
+        if (
+            str(binding.get("head_hash") or "") != head_before
+            or supplied_generation != int(manifest.get("generation") or 0)
+        ):
+            raise ProjectionStaleError("canon_v3_projection_stale")
+        expected = _projection_from_head(repository, head_before)
+        if payload != expected:
+            raise CanonProjectionError("canon_v3_projection_content_mismatch")
+        head_after = repository.current_head(validate=False)
+        try:
+            raw_after = path.read_bytes()
+        except FileNotFoundError as exc:
+            raise ProjectionStaleError("canon_v3_projection_changed_during_read") from exc
+        except OSError as exc:
+            raise CanonProjectionError("canon_v3_projection_unreadable") from exc
+        if head_after != head_before or raw_after != raw_before:
+            raise ProjectionStaleError("canon_v3_projection_changed_during_read")
     return payload
+
+
+def read_projection(
+    project_root: str | Path,
+    *,
+    require_fresh: bool = True,
+) -> dict[str, Any]:
+    """Read one coherent projection without taking the publication lock."""
+
+    last_change: ProjectionStaleError | None = None
+    for _attempt in range(3):
+        try:
+            return _read_projection_once(
+                project_root,
+                require_fresh=require_fresh,
+            )
+        except ProjectionStaleError as exc:
+            if "changed_during_read" not in str(exc):
+                raise
+            last_change = exc
+    assert last_change is not None
+    raise last_change
 
 
 def projection_binding(project_root: str | Path) -> ProjectionBinding | None:

@@ -7,20 +7,24 @@ from pathlib import Path
 import pytest
 
 from scripts.data_modules.canon_v3.author_axiom import (
+    AuthorAxiomChannel,
     AuthorAxiomDecisionError,
     AuthorAxiomEvidenceError,
     AuthorAxiomFinalizeBlocked,
     AuthorAxiomStageConflict,
+    _record_set_digest,
 )
-from scripts.data_modules.canon_v3.projection import read_projection
+from scripts.data_modules.canon_v3.projection import read_projection, rebuild_projection
 from scripts.data_modules.canon_v3.repository import CanonHeadConflict
-from scripts.data_modules.canon_v3.schema import canonical_digest
+from scripts.data_modules.canon_v3.schema import AuthorAxiomRecord, canonical_digest
+from scripts.data_modules.canon_v3.migration import LegacyMigrationError
 from scripts.data_modules.canon_v3.service import (
     ActiveTransactionError,
     CanonV3Service,
 )
 from scripts.data_modules.config import DataModulesConfig
 from scripts.data_modules.memory_contract_adapter import MemoryContractAdapter
+from scripts.data_modules.workflow_authority import WorkflowAuthority
 
 
 def _sha(raw: bytes) -> str:
@@ -97,6 +101,7 @@ def _decide_all(
     service: CanonV3Service, *, action: str = "approve"
 ) -> dict:
     status = service.author_axiom_status()
+    assert all(action in case["allowed_actions"] for case in status["cases"])
     return service.record_author_axiom_decisions(
         {
             "schema_version": "canon-v3/author-axiom-decision-request/v2",
@@ -105,13 +110,7 @@ def _decide_all(
             "decisions": [
                 {
                     "case_key": case["case_key"],
-                    "target_digest": case["target_digest"],
-                    "material_digest": case["review_material"][
-                        "material_digest"
-                    ],
-                    "expected_decision_head_hash": case[
-                        "decision_head_hash"
-                    ],
+                    **case["decision_binding"],
                     "action": action,
                 }
                 for case in status["cases"]
@@ -144,6 +143,19 @@ def test_axiom_publish_is_head_bound_and_does_not_advance_chapters(tmp_path) -> 
 
     staged = service.prepare_author_axioms(_proposal(service, [record]))
     assert staged["state"] == "awaiting_human"
+    public_case = staged["cases"][0]
+    assert public_case["allowed_actions"] == [
+        "approve",
+        "omit",
+        "rewrite",
+    ]
+    assert public_case["decision_binding"] == {
+        "target_digest": public_case["target_digest"],
+        "material_digest": public_case["review_material"][
+            "material_digest"
+        ],
+        "expected_decision_head_hash": None,
+    }
     assert service.workflow_snapshot()["transaction_kind"] == "author_axiom"
     decided = _decide_all(service)
     assert decided["state"] == "ready_to_finalize"
@@ -159,6 +171,159 @@ def test_axiom_publish_is_head_bound_and_does_not_advance_chapters(tmp_path) -> 
     assert projection["author_axioms"]["records"][0]["axiom_key"] == (
         "death_is_irreversible"
     )
+
+
+@pytest.mark.parametrize(
+    ("key", "category", "value"),
+    [
+        ("core_motivation", "character_permanent_state", "复仇是永恒驱动力"),
+        ("hero_personality", "character_identity", "人格冷漠且寡言"),
+        ("immutable_law", "world_rule", "全书文风冷峻，短句为主"),
+        ("rule_17", "world_rule", "每段最多三句话"),
+    ],
+)
+def test_soft_design_cannot_enter_author_axiom_prepare(
+    tmp_path, key: str, category: str, value: str
+) -> None:
+    service = _service(tmp_path)
+    record = _draft_record(
+        service.project_root,
+        name=f"soft-{key}",
+        key=key,
+        value=value,
+        category=category,
+    )
+
+    with pytest.raises(
+        AuthorAxiomEvidenceError,
+        match="canon_v3_author_axiom_non_fact_semantics_forbidden",
+    ):
+        service.prepare_author_axioms(_proposal(service, [record]))
+
+    assert service.active_author_axioms()["records"] == []
+
+
+def test_legacy_active_soft_axiom_blocks_writing_until_human_supersession(
+    tmp_path,
+) -> None:
+    service = _service(tmp_path)
+    raw_record = _draft_record(
+        service.project_root,
+        name="legacy-soft-active",
+        key="core_motivation",
+        value="复仇是永恒驱动力",
+        category="character_permanent_state",
+    )
+    record = AuthorAxiomRecord.model_validate(raw_record)
+    repository = service.repository
+    head = repository.current_head(validate=True)
+    assert head is not None
+    manifest = repository.read_manifest(head, validate_references=True)
+    with repository.locked():
+        transaction_hash = repository._put_payload_unlocked(  # noqa: SLF001
+            "author_axiom_transaction",
+            {"schema_version": "canon-v3/legacy-soft-transaction/v1"},
+        )
+        commit_hash = repository._put_payload_unlocked(  # noqa: SLF001
+            "author_axiom_commit",
+            {
+                "schema_version": "canon-v3/author-axiom-commit/v1",
+                "revision": 1,
+                "transaction_hash": transaction_hash,
+                "decision_hashes": [],
+                "lineage_decision_hashes": [],
+                "base_head_hash": head,
+                "previous_author_axiom_commit_hash": None,
+                "records": [record.model_dump(mode="json")],
+                "axiom_set_digest": _record_set_digest((record,)),
+                "superseded_legacy_admission_digests": [],
+            },
+        )
+        polluted_head = repository._put_payload_unlocked(  # noqa: SLF001
+            "manifest",
+            {
+                "schema_version": "canon-v3/active-manifest/v1",
+                "generation": int(manifest["generation"]) + 1,
+                "parent_head_hash": head,
+                "chapters": list(manifest.get("chapters") or []),
+                "author_axiom_commits": [
+                    {"revision": 1, "commit_hash": commit_hash}
+                ],
+            },
+        )
+        repository._write_current_unlocked(polluted_head)  # noqa: SLF001
+    rebuild_projection(service.project_root)
+
+    blocked = WorkflowAuthority(service.project_root).snapshot()
+    assert blocked["state"] == "migration_required"
+    assert blocked["can_write_next"] is False
+    assert blocked["bootstrap_mode"] == "author_axiom_fact_boundary"
+    assert blocked["primary_action"]["code"] == (
+        "supersede_active_soft_author_axioms"
+    )
+    assert blocked["non_fact_author_axiom_keys"] == ["core_motivation"]
+
+    unrelated = _draft_record(
+        service.project_root,
+        name="unrelated-during-cleanup",
+        key="death_is_irreversible",
+        value="死者不能复生",
+    )
+    with pytest.raises(
+        AuthorAxiomEvidenceError,
+        match="canon_v3_active_author_axiom_cleanup_not_exact",
+    ):
+        service.prepare_author_axioms(_proposal(service, [unrelated]))
+
+    staged = service.prepare_author_axioms(_proposal(service, []))
+    assert staged["state"] == "awaiting_human"
+    _decide_all(service)
+    _finalize(service)
+
+    ready = WorkflowAuthority(service.project_root).snapshot()
+    assert ready["state"] == "ready"
+    assert ready["can_write_next"] is True
+    assert service.active_author_axioms()["records"] == []
+
+
+def test_author_axiom_public_binding_rejects_stale_material(tmp_path) -> None:
+    service = _service(tmp_path)
+    record = _draft_record(
+        service.project_root,
+        name="stale-material",
+        key="moon_gate_rule",
+        value="月门只能在夜间开启",
+    )
+    staged = service.prepare_author_axioms(_proposal(service, [record]))
+    case = staged["cases"][0]
+    stale_binding = dict(case["decision_binding"])
+    stale_binding["material_digest"] = "0" * 64
+
+    with pytest.raises(
+        AuthorAxiomDecisionError,
+        match="material_precondition",
+    ):
+        service.record_author_axiom_decisions(
+            {
+                "schema_version": (
+                    "canon-v3/author-axiom-decision-request/v2"
+                ),
+                "expected_stage_digest": staged["stage_digest"],
+                "transaction_hash": staged["transaction_hash"],
+                "decisions": [
+                    {
+                        "case_key": case["case_key"],
+                        **stale_binding,
+                        "action": case["allowed_actions"][0],
+                    }
+                ],
+            }
+        )
+
+    assert service.author_axiom_status()["cases"][0][
+        "decision_head_hash"
+    ] is None
+    assert _decide_all(service)["state"] == "ready_to_finalize"
 
 
 def test_unpublished_draft_never_enters_projection_or_context(tmp_path) -> None:
@@ -201,6 +366,86 @@ def test_published_axiom_survives_draft_deletion_and_is_in_context(tmp_path) -> 
         DataModulesConfig(project_root=service.project_root)
     ).load_context(1)
     assert pack.sections["author_axioms"][0]["axiom_key"] == "sun_rule"
+
+
+def test_asof_export_includes_sanitized_active_axiom_not_staging_or_legacy(
+    tmp_path,
+) -> None:
+    """Regression: an axiom digest alone is insufficient review context."""
+
+    from scripts.data_modules.canon_v3.query import CanonQueryFacade
+
+    service = _service(tmp_path)
+    active_record = _draft_record(
+        service.project_root,
+        name="asof-active",
+        key="moon_gate_rule",
+        value="月门只能在夜间开启",
+    )
+    service.prepare_author_axioms(_proposal(service, [active_record]))
+    _decide_all(service)
+    published = _finalize(service)
+
+    # A second proposal exists only in STAGING. It must not leak into an
+    # active-as-of view even though the workflow token now reflects staging.
+    active_records = service.active_author_axioms()["records"]
+    staged_record = _draft_record(
+        service.project_root,
+        name="asof-staging",
+        key="unpublished_sun_rule",
+        value="太阳永不落下（未发布）",
+    )
+    staged = service.prepare_author_axioms(
+        _proposal(service, [*active_records, staged_record])
+    )
+    assert staged["state"] == "awaiting_human"
+
+    # Poison a legacy cache with a conflicting assertion. Canon v3 as-of
+    # export must continue to use only CURRENT/projection authority.
+    (service.project_root / ".canon-ledger" / "state.json").write_text(
+        json.dumps(
+            {"author_axioms": {"moon_gate_rule": "月门白昼开启（伪 legacy）"}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    adapter = MemoryContractAdapter(
+        DataModulesConfig(project_root=service.project_root)
+    )
+    snapshot = adapter.export_asof_snapshot(chapter=1)
+    public_axioms = snapshot["author_axioms"]
+
+    assert public_axioms["schema_version"] == (
+        "canon-v3/asof-author-axioms/v1"
+    )
+    assert public_axioms["head_hash"] == published["head_hash"]
+    assert public_axioms["head_hash"] == snapshot["canon_binding"]["head_hash"]
+    assert public_axioms["author_axiom_digest"] == (
+        snapshot["author_axiom_digest"]
+    )
+    assert [item["axiom_key"] for item in public_axioms["records"]] == [
+        "moon_gate_rule"
+    ]
+    record = public_axioms["records"][0]
+    assert record["value"] == "月门只能在夜间开启"
+    assert record["source"]["source_type"] == "author_axiom"
+    assert record["source"]["value"] == record["value"]
+    assert record["record_digest"] == (
+        service.active_author_axioms()["record_digests"]["moon_gate_rule"]
+    )
+    assert {"start", "end", "quote", "quote_sha256"}.isdisjoint(
+        record["source"]
+    )
+
+    encoded = json.dumps(snapshot, ensure_ascii=False)
+    assert "太阳永不落下（未发布）" not in encoded
+    assert "月门白昼开启（伪 legacy）" not in encoded
+
+    query_view = CanonQueryFacade(service.project_root).snapshot(
+        as_of_chapter=0
+    )
+    assert query_view["data"]["author_axioms"] == public_axioms
 
 
 def test_draft_mutation_and_path_traversal_fail_closed(tmp_path) -> None:
@@ -806,6 +1051,159 @@ def test_certified_genesis_axiom_requires_exact_override_to_update(tmp_path) -> 
     rendered = json.dumps(pack.to_dict(), ensure_ascii=False)
     assert "炼气→筑基→金丹" in rendered
     assert '"value": "炼气→筑基"' not in rendered
+
+
+@pytest.mark.parametrize(
+    ("schema_version", "is_certified"),
+    [
+        ("canon-v3/legacy-genesis/v1", False),
+        ("canon-v3/legacy-genesis/v2", True),
+        ("canon-v3/legacy-genesis/v3", True),
+    ],
+)
+def test_only_certified_genesis_schemas_expose_author_axiom_facts(
+    tmp_path, schema_version: str, is_certified: bool
+) -> None:
+    facts = {
+        "cutover_fact_admissions": [
+            {
+                "mode": "author_axiom_snapshot",
+                "admission_digest": "a" * 64,
+            }
+        ]
+    }
+
+    class _GenesisRepository:
+        def read_manifest(self, _head, *, validate_references):
+            assert validate_references is True
+            return {
+                "generation": 0,
+                "genesis_metadata": {
+                    "schema_version": schema_version,
+                    "legacy_snapshot": {"facts": facts},
+                },
+            }
+
+    channel = AuthorAxiomChannel(
+        tmp_path / "book",
+        repository=_GenesisRepository(),  # type: ignore[arg-type]
+    )
+    assert bool(channel._genesis_facts("b" * 64)) is is_certified
+
+
+def test_genesis_override_prepare_rechecks_downstream_dependencies(
+    tmp_path, monkeypatch
+) -> None:
+    root = tmp_path / "book"
+    master = root / ".story-system/MASTER_SETTING.json"
+    master.parent.mkdir(parents=True, exist_ok=True)
+    master.write_text(
+        json.dumps(
+            {"initial_canon": {"world": {"cultivation_chain": "炼气→筑基"}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    service = CanonV3Service(root)
+    service.initialize_new_project()
+    admission = service.active_author_axioms()["genesis_admissions"][0]
+    replacement = _draft_record(
+        root,
+        name="blocked-genesis-update",
+        key="cultivation_chain",
+        value="炼气→筑基→金丹",
+    )
+
+    def _reject(*_args, **_kwargs) -> None:
+        raise LegacyMigrationError(
+            "legacy_genesis_supersession_has_downstream_dependencies",
+            admission["admission_digest"],
+        )
+
+    monkeypatch.setattr(
+        "scripts.data_modules.canon_v3.migration."
+        "require_legacy_genesis_supersession_safe",
+        _reject,
+    )
+    with pytest.raises(
+        AuthorAxiomEvidenceError,
+        match="legacy_genesis_supersession_has_downstream_dependencies",
+    ):
+        service.prepare_author_axioms(
+            _proposal(
+                service,
+                [replacement],
+                genesis_overrides=[
+                    {
+                        "admission_digest": admission["admission_digest"],
+                        "fact_content_sha256": admission[
+                            "fact_content_sha256"
+                        ],
+                        "replacement_axiom_key": "cultivation_chain",
+                    }
+                ],
+            )
+        )
+
+
+def test_genesis_override_finalize_rechecks_downstream_dependencies(
+    tmp_path, monkeypatch
+) -> None:
+    root = tmp_path / "book"
+    master = root / ".story-system/MASTER_SETTING.json"
+    master.parent.mkdir(parents=True, exist_ok=True)
+    master.write_text(
+        json.dumps(
+            {"initial_canon": {"world": {"cultivation_chain": "炼气→筑基"}}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    service = CanonV3Service(root)
+    service.initialize_new_project()
+    admission = service.active_author_axioms()["genesis_admissions"][0]
+    replacement = _draft_record(
+        root,
+        name="late-blocked-genesis-update",
+        key="cultivation_chain",
+        value="炼气→筑基→金丹",
+    )
+    service.prepare_author_axioms(
+        _proposal(
+            service,
+            [replacement],
+            genesis_overrides=[
+                {
+                    "admission_digest": admission["admission_digest"],
+                    "fact_content_sha256": admission["fact_content_sha256"],
+                    "replacement_axiom_key": "cultivation_chain",
+                }
+            ],
+        )
+    )
+    _decide_all(service)
+    before_head = service.workflow_snapshot()["head_hash"]
+    before_stage = service.author_axiom_status()["stage_digest"]
+
+    def _reject(*_args, **_kwargs) -> None:
+        raise LegacyMigrationError(
+            "legacy_genesis_supersession_has_downstream_dependencies",
+            admission["admission_digest"],
+        )
+
+    monkeypatch.setattr(
+        "scripts.data_modules.canon_v3.migration."
+        "require_legacy_genesis_supersession_safe",
+        _reject,
+    )
+    with pytest.raises(
+        AuthorAxiomFinalizeBlocked,
+        match="legacy_genesis_supersession_has_downstream_dependencies",
+    ):
+        _finalize(service)
+
+    assert service.workflow_snapshot()["head_hash"] == before_head
+    assert service.author_axiom_status()["stage_digest"] == before_stage
 
 
 @pytest.mark.parametrize(

@@ -7,6 +7,16 @@
 默认 `pytest` 因此只运行当前产品验收，并由 `scripts/conftest.py` 明确排除依赖已退役 v2 写入口的
 冻结规格。正常结果会报告 `deselected` 数量；这不是按失败动态忽略，而是固定的文件/用例清单。
 
+发布级 `scripts/run_acceptance.py --mode full` 还会启用 test-selection audit：
+
+- 所有 `test_canon_v3_*.py` 和列入 current-authority manifest 的关键入口必须被收集；
+- current-authority 模块不能被整文件排除；
+- 标记为 `current_authority` 的单测绝不能命中 retired 清单；
+- retired 文件/用例清单中的陈旧 node id 会直接令收集失败。
+
+新增 Canon v3 权威测试时必须同步 current-authority manifest。这个显式步骤防止新测试因目录级
+排除而静默消失，同时保留冻结 v2 规格，避免为了“零 deselected”重新开放已退役写入口。
+
 旧规格仍保留在仓库中，供迁移审计和历史设计对照。需要查看它们时可以显式执行：
 
 ```bash
@@ -20,15 +30,15 @@ recertification 和只读解析测试覆盖。
 当前发布至少运行：
 
 ```bash
-python -m pytest
-python scripts/run_behavior_evals.py --suite fast
-python scripts/validate_document_links.py
+npm --prefix dashboard/frontend ci  # 需要 Node.js 18+
+python scripts/run_acceptance.py --mode full
 python scripts/sync_plugin_version.py --check --expected-version <MANIFEST_VERSION>
-python scripts/validate_plugin_package.py --strict --format json
 python scripts/validate_release_notes.py --version <MANIFEST_VERSION> --previous-tag <PREVIOUS_TAG> --format json
-npm --prefix dashboard/frontend run build
 python /path/to/skill-creator/scripts/quick_validate.py skills/<skill-name>
 ```
+
+Windows 使用 `powershell -File scripts/run_tests.ps1 -Mode full`，POSIX 使用
+`scripts/run_tests.sh full`；二者只负责转发到同一个 Python runner。
 
 `quick_validate.py` 要遍历全部 9 个 `skills/canon-ledger-*` 目录，不只抽查发生改动的 Skill。
 

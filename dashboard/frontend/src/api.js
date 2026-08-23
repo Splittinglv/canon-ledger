@@ -1,5 +1,16 @@
 const BASE = ''
 
+export class DashboardApiError extends Error {
+    constructor(status, statusText, detail) {
+        const code = detail?.code || `http_${status}`
+        super(`${code}: ${detail?.message || statusText || 'Dashboard API 请求失败'}`)
+        this.name = 'DashboardApiError'
+        this.status = status
+        this.code = code
+        this.detail = detail || null
+    }
+}
+
 export async function fetchJSON(path, params = {}) {
     const url = new URL(`${BASE}${path}`, window.location.origin)
     for (const [key, value] of Object.entries(params)) {
@@ -8,63 +19,45 @@ export async function fetchJSON(path, params = {}) {
         }
     }
 
-    const response = await fetch(url.toString())
-    if (!response.ok) {
-        throw new Error(`${response.status} ${response.statusText}`)
+    const response = await fetch(url.toString(), { method: 'GET' })
+    let payload = null
+    try {
+        payload = await response.json()
+    } catch {
+        payload = null
     }
-    return response.json()
+    if (!response.ok) {
+        throw new DashboardApiError(response.status, response.statusText, payload?.detail || payload)
+    }
+    return payload
+}
+
+export function formatApiError(error) {
+    const detail = error?.detail || {}
+    const action = detail?.primary_action || detail?.workflow?.primary_action || {}
+    const code = detail?.code || error?.code || 'dashboard_request_failed'
+    const actionText = action?.label || action?.command || ''
+    return actionText ? `${code} · ${actionText}` : String(code)
 }
 
 export function fetchProjectInfo() {
     return fetchJSON('/api/project/info')
 }
 
-export function fetchStoryRuntimeHealth() {
-    return fetchJSON('/api/story-runtime/health')
-}
-
-export function fetchChapterTrend(params = {}) {
-    return fetchJSON('/api/stats/chapter-trend', params)
-}
-
-export function fetchChapters() {
-    return fetchJSON('/api/chapters').then(payload => payload.items || [])
+export function fetchWorkflow() {
+    return fetchJSON('/api/canon-v3/workflow')
 }
 
 export function fetchCanonCharacters() {
     return fetchJSON('/api/canon-v3/characters')
 }
 
-export function fetchEntities(params = {}) {
-    return fetchJSON('/api/canon-v3/entities', params).then(payload => payload.items || [])
-}
-
-export function fetchStateChanges(params = {}) {
-    return fetchJSON('/api/canon-v3/state-changes', params).then(payload => payload.items || [])
-}
-
-export function fetchRelationships(params = {}) {
-    return fetchJSON('/api/canon-v3/relationships', params).then(payload => payload.items || [])
-}
-
-export function fetchRelationshipEvents(params = {}) {
-    return fetchJSON('/api/relationship-events', params).then(payload => payload.items || [])
+export function fetchCanonObligations() {
+    return fetchJSON('/api/canon-v3/obligations')
 }
 
 export function fetchCommits(params = {}) {
     return fetchJSON('/api/commits', params)
-}
-
-export function fetchContractsSummary() {
-    return fetchJSON('/api/contracts/summary')
-}
-
-export function fetchEnvStatus() {
-    return fetchJSON('/api/env-status')
-}
-
-export function probeEnvStatus() {
-    return fetchJSON('/api/env-status/probe')
 }
 
 export function fetchFilesTree() {

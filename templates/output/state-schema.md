@@ -8,11 +8,13 @@
 .story-system/v3/CURRENT
   -> immutable manifest / commits / decisions
   -> rebuild-projection
-  -> state.json（如兼容组件需要）
+  -> .story-system/v3/projections/canon.json
+
+state.json 不由 Canon v3 rebuild 生成；它只保留项目元信息和旧组件兼容字段。
 ```
 
 活动状态、目标章、是否可继续和恢复动作统一读取
-`canon-v3 status` 返回的 `canon-v3/workflow-snapshot/v2`。事实查询统一读取与
+`canon-v3 status` 返回的公共 workflow snapshot。事实查询统一读取与
 CURRENT 同一 HEAD 绑定的 Canon v3 projection/API。
 
 ## 兼容字段

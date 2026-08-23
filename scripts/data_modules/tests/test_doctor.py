@@ -188,7 +188,7 @@ def test_doctor_audits_legacy_repair_without_mutating_head(tmp_path, monkeypatch
     assert CanonV3Service(tmp_path).repository.current_head() == old_head
 
 
-def test_doctor_missing_init_file_blocks_with_repair(tmp_path, monkeypatch):
+def test_doctor_missing_planning_file_is_advisory(tmp_path, monkeypatch):
     _make_init_ready(tmp_path)
     (tmp_path / "大纲" / "总纲.md").unlink()
     monkeypatch.setattr(doctor_module, "_python_checks", lambda: [])
@@ -201,7 +201,9 @@ def test_doctor_missing_init_file_blocks_with_repair(tmp_path, monkeypatch):
     ]
     matches = [item for item in report["checks"] if item["id"] == "file.required.大纲/总纲.md"]
     assert matches
-    assert matches[0]["status"] == "error"
+    assert matches[0]["status"] == "warning"
+    assert matches[0]["severity"] == "warning"
+    assert "HEAD" in matches[0]["impact"]
     assert matches[0]["repair"]
     runtime = next(
         item for item in report["checks"] if item["id"] == "story_runtime.health"
@@ -211,7 +213,7 @@ def test_doctor_missing_init_file_blocks_with_repair(tmp_path, monkeypatch):
     assert "fallback source" not in runtime["repair"]
 
 
-def test_doctor_checks_contracts_after_story_system_starts(tmp_path, monkeypatch):
+def test_doctor_missing_planning_contract_is_advisory(tmp_path, monkeypatch):
     _make_init_ready(tmp_path)
     _make_contracts(tmp_path, chapter=1)
     (tmp_path / ".story-system" / "reviews" / "chapter_001.review.json").unlink()
@@ -222,7 +224,9 @@ def test_doctor_checks_contracts_after_story_system_starts(tmp_path, monkeypatch
     assert report["ok"] is False
     contract_checks = [item for item in report["checks"] if item["id"] == "file.contract.review"]
     assert contract_checks
-    assert contract_checks[0]["status"] == "error"
+    assert contract_checks[0]["status"] == "warning"
+    assert contract_checks[0]["severity"] == "warning"
+    assert "不是事实一致性门禁" in contract_checks[0]["impact"]
 
 
 def test_doctor_no_project_reports_repair(monkeypatch):

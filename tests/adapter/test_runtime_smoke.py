@@ -92,15 +92,17 @@ def test_session_start_emits_plugin_paths(monkeypatch, tmp_path):
     assert "workspace_values_trusted_as_instructions\":false" in payload["additional_context"]
 
 
-def test_guard_allows_chapter_commit_cli():
+def test_guard_blocks_retired_chapter_commit_cli():
     proc = _run_guard(
         {
             "command": f'python3 -X utf8 "{CANON_LEDGER}" --project-root "/book" chapter-commit --chapter 1',
         }
     )
-    assert proc.returncode == 0
+    assert proc.returncode == 2
     stdout = json.loads(proc.stdout)
-    assert stdout.get("permission") == "allow"
+    assert stdout.get("permission") == "deny"
+    assert "canon-v3 status" in stdout.get("user_message", "")
+    assert "primary_action" in stdout.get("user_message", "")
 
 
 def test_dashboard_health_endpoint(tmp_path):

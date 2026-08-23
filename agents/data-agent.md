@@ -18,7 +18,10 @@ color: green
 
 ### `phase=extract`
 
-读取 exact chapter binding、正文、N-1 HEAD snapshot、entity registry 和 active author axioms，返回 candidate draft；不写文件。
+读取 exact chapter binding、正文、N-1 HEAD snapshot、entity registry，并只从该 snapshot
+的 `author_axioms.records` 读取 active author axioms，返回
+`canon-v3/candidate-draft/v1`；不写 Canon。每条公开 axiom record 必须含语义 value 和
+`source_type=author_axiom` 的可用 source；只有 axiom digest 或 draft span 不能作为完整输入。
 
 ### `phase=assemble`
 
@@ -27,6 +30,14 @@ color: green
 ### `mode=historical_audit`
 
 组装并返回 `canon-v3/historical-audit/v1` 只读 audit bundle，不生成可 prepare proposal、不写 STAGING，也不写文件。调用方负责把返回值持久化到固定派生路径；本 agent 的唯一文件写入仍是 `phase=assemble` 的 v2 proposal。
+
+### `mode=author_axiom_proposal`
+
+只在 `/canon-ledger-plan` 已生成受管硬设定 draft 时使用。读取当前 HEAD-bound
+`author-axioms` 快照和 exact workflow，返回完整期望 active snapshot 的
+`canon-v3/author-axiom-proposal/v2`。该模式不读章节正文、不生成 reviewer
+attestation，不复用 chapter proposal。唯一允许的文件输出是
+`.canon-ledger/tmp/canon_v3_author_axiom_proposal.json`。
 
 ## 章节候选的必需绑定
 
@@ -40,11 +51,21 @@ asof_snapshot_file
 ```
 
 workflow 非 ready/当前 staged recovery、目标章不允许、HEAD 或 axiom digest 不一致时停止。不得读取 state/index/legacy 数据补齐。
+`asof_snapshot_file.author_axioms.head_hash/author_axiom_digest` 必须分别等于
+`parent_head/author_axiom_digest`；records 只代表该 HEAD 已发布集合，不得从 STAGING draft
+补齐或替换。
 这些 chapter/body/as-of/scan 绑定只适用于 `phase=extract|assemble` 和
 `mode=historical_audit`。下文 author-axiom proposal 使用自己的无章节绑定，
 不得虚构 chapter、chapter_file、正文 span 或 reviewer attestation。
 
 ## FactCandidate
+
+不要凭本文档猜内部字段。提取前先读取运行时 schema：
+
+```bash
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 agent-schema candidate-draft
+```
 
 只使用 typed claim：人物状态、关系、规则及违反、力量变化、物品获得、实体观察、时间 occurrence、知识、在场、持有、承诺/兑现、开放问题/关闭。
 
@@ -58,7 +79,16 @@ workflow 非 ready/当前 staged recovery、目标章不允许、HEAD 或 axiom 
 - 实体引用使用 registry canonical ID/identity links；歧义身份显式保留给人工；
 - update/terminal 引用 exact prior slot/fact；新 occurrence 不复用旧 slot。
 
-`semantic_claim_digest`、effect、slot、policy case 和权威摘要由 compiler 计算，agent 不得自填。
+候选草案写入 `.canon-ledger/tmp/canon_v3_candidate_draft.json` 后，必须调用：
+
+```bash
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 validate-agent-output \
+  candidate-draft --input-file ".canon-ledger/tmp/canon_v3_candidate_draft.json"
+```
+
+runtime 返回唯一 `candidate_digest_map`。`candidate_digest`、`semantic_claim_digest`、
+effect、slot、policy case 和权威摘要都由 runtime/compiler 计算，agent 不得手算、自填或修改。
 
 ## 明确事实不能静默丢失
 
@@ -70,7 +100,11 @@ workflow 非 ready/当前 staged recovery、目标章不允许、HEAD 或 axiom 
 
 extract 返回的 exact draft 原样交给 reviewer。reviewer 只返回 observations 与 scan attestations，不得改 candidate。
 
-assemble 时要求唯一 complete attestation 同时绑定：
+reviewer 必须读取并逐项原样回显上一步 runtime 返回的 exact
+`candidate_id -> candidate_digest` map；只回显 digest 集合不构成候选绑定。assemble 会把
+reviewer map 与 draft 重新计算的 map 精确比较，审核后互换 candidate ID 必须失败。
+此外要求唯一 complete
+attestation 同时绑定：
 
 ```text
 chapter_sha256
@@ -85,7 +119,22 @@ setting/timeline/continuity/character/logic
 
 ## Proposal v2
 
-schema 必须为 `canon-v3/proposal-batch/v2`。唯一可 prepare 输出：
+禁止手工拼装 proposal。先把 reviewer JSON 写入
+`.canon-ledger/tmp/canon_v3_reviewer_output.json`，分别运行 reviewer validator，再调用：
+
+```bash
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 validate-agent-output \
+  reviewer-output --input-file ".canon-ledger/tmp/canon_v3_reviewer_output.json"
+
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 assemble-proposal \
+  --candidate-file ".canon-ledger/tmp/canon_v3_candidate_draft.json" \
+  --reviewer-file ".canon-ledger/tmp/canon_v3_reviewer_output.json"
+```
+
+只有 runtime 返回的 `canon-v3/proposal-batch/v2` 可以写入
+`.canon-ledger/tmp/canon_v3_proposal.json` 并传给 prepare。其顶层结构为：
 
 ```json
 {
@@ -110,7 +159,7 @@ schema 必须为 `canon-v3/proposal-batch/v2`。唯一可 prepare 输出：
 
 ## Author-axiom recertification
 
-规划产生长期硬设定草案时，使用独立模式组装
+规划产生长期硬设定草案时，使用 `mode=author_axiom_proposal` 组装
 `canon-v3/author-axiom-proposal/v2`，不得伪造 chapter/body binding。来源只能是
 `.canon-ledger/tmp/author_axioms/*.json` 中
 `schema_version=canon-v3/author-axiom-draft/v1` 的
@@ -123,8 +172,33 @@ unchanged record 从 `canon-v3 author-axioms` 的 HEAD-bound 结果原样带回�
 修改用新 draft span；删除必须省略目标旧 record 并让 compiler 产生 exact prior
 remove case，不能用空值暗删。每个 add/update/remove 都必须经过作者决定。
 
+不凭文档猜上述 strict record/category/source/genesis override 字段。先导出运行时
+schema：
+
+```bash
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 agent-schema author-axiom-proposal
+```
+
+写入唯一 proposal 路径后先严格校验，再原样交给 prepare：
+CLI 动作名是 `canon-v3 validate-agent-output author-axiom-proposal`。
+
+```bash
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 validate-agent-output \
+  author-axiom-proposal \
+  --input-file ".canon-ledger/tmp/canon_v3_author_axiom_proposal.json"
+
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 author-axiom-prepare \
+  --input-file ".canon-ledger/tmp/canon_v3_author_axiom_proposal.json"
+```
+
+validator 返回的 `record_digests` 只用于显示/调试；不回写 proposal。任一
+source byte、HEAD、workflow、active axiom 或 stage 变化时丢弃旧文件并重新生成。
+
 完成 `author-axiom-finalize` 前它不是 active axiom，不能进入普通写作上下文。
-style/outline/plot/prose/tone/pacing/preferences 文件、字段或实际 value 永远不能成为 source。即使调用方给了看似事实的 axiom key，只要 value 实际描述文风、文笔、节奏、口吻或写作偏好，就返回 `style_only` 并交调用方走 `/canon-ledger-learn`，不得生成 author-axiom record。
+style/outline/plot/prose/tone/pacing/preferences，以及人物动机、人格、人设、成长弧等文件、字段或实际 value 永远不能成为 axiom source。即使调用方给了无害 key 或 `world_rule` category，只要 value 实际描述这些软内容，就返回 `style_only` 并交调用方走 `/canon-ledger-learn`，不得生成 author-axiom record。
 
 ## 返回状态
 

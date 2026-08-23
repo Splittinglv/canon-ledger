@@ -61,23 +61,27 @@ def _make_cli_init_ready_project(project_root: Path) -> None:
         path.write_text("placeholder\n", encoding="utf-8")
 
 
-def test_v3_current_freezes_legacy_fact_store_mutators_but_keeps_queries(tmp_path):
+def test_v3_current_freezes_every_side_effecting_legacy_fact_adapter(tmp_path):
     module = _load_canon_ledger_module()
     current = tmp_path / ".story-system" / "v3" / "CURRENT"
     current.parent.mkdir(parents=True)
     current.write_text("0" * 64 + "\n", encoding="utf-8")
 
-    assert module._v3_legacy_mutation_reason(tmp_path, "memory", ["query"]) == ""
-    assert module._v3_legacy_mutation_reason(tmp_path, "index", ["stats"]) == ""
+    assert module._v3_legacy_mutation_reason(
+        tmp_path, "memory", ["query"]
+    ) == "canon_v3_active_legacy_memory_adapter_disabled:query"
+    assert module._v3_legacy_mutation_reason(
+        tmp_path, "index", ["stats"]
+    ) == "canon_v3_active_legacy_index_adapter_disabled:stats"
     assert module._v3_legacy_mutation_reason(
         tmp_path, "memory", ["bootstrap"]
-    ) == "canon_v3_active_legacy_memory_write_disabled:bootstrap"
+    ) == "canon_v3_active_legacy_memory_adapter_disabled:bootstrap"
     assert module._v3_legacy_mutation_reason(
         tmp_path, "rag", ["index-chapter"]
-    ) == "canon_v3_active_legacy_rag_write_disabled:index-chapter"
+    ) == "canon_v3_active_legacy_rag_adapter_disabled:index-chapter"
     assert module._v3_legacy_mutation_reason(
         tmp_path, "entity", ["register-alias"]
-    ) == "canon_v3_active_legacy_entity_write_disabled:register-alias"
+    ) == "canon_v3_active_legacy_entity_adapter_disabled:register-alias"
     assert module._v3_legacy_mutation_reason(
         tmp_path, "update-state", []
     ) == "canon_v3_active_legacy_update-state_write_disabled"
@@ -154,24 +158,24 @@ def test_memory_contract_forwards_context_budget(monkeypatch, tmp_path):
     ]
 
 
-def test_backup_forwards_resolved_book_root_from_parent_workspace(monkeypatch, tmp_path):
+def test_backup_writer_is_rejected_before_root_resolution_or_dispatch(
+    monkeypatch, tmp_path, capsys
+):
     module = _load_canon_ledger_module()
 
     workspace_root = (tmp_path / "workspace").resolve()
-    book_root = (workspace_root / "book").resolve()
-    (workspace_root / ".git").mkdir(parents=True, exist_ok=True)
-    (book_root / ".git").mkdir(parents=True, exist_ok=True)
-    (book_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
-    (book_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
-    called = {}
+    called = {"dispatch": False, "resolve": False}
 
     def _fake_run_script(script_name, argv):
-        called["script_name"] = script_name
-        called["argv"] = list(argv)
-        return 0
+        called["dispatch"] = True
+        raise AssertionError((script_name, argv))
 
-    monkeypatch.chdir(workspace_root)
+    def _fake_resolve(_explicit_project_root=None):
+        called["resolve"] = True
+        raise AssertionError("retired writer must fail before project discovery")
+
     monkeypatch.setattr(module, "_run_script", _fake_run_script)
+    monkeypatch.setattr(module, "_resolve_root", _fake_resolve)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -190,16 +194,11 @@ def test_backup_forwards_resolved_book_root_from_parent_workspace(monkeypatch, t
     with pytest.raises(SystemExit) as exc:
         module.main()
 
-    assert int(exc.value.code or 0) == 0
-    assert called["script_name"] == "backup_manager.py"
-    assert called["argv"] == [
-        "--project-root",
-        str(book_root),
-        "--chapter",
-        "2",
-        "--chapter-title",
-        "第二章",
-    ]
+    assert int(exc.value.code or 0) == 2
+    assert called == {"dispatch": False, "resolve": False}
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "canon_v3_public_command_disabled"
+    assert error["tool"] == "backup"
 
 
 def test_canon_ledger_story_system_forwards_with_resolved_project_root(monkeypatch, tmp_path):
@@ -238,19 +237,20 @@ def test_canon_ledger_story_system_forwards_with_resolved_project_root(monkeypat
     assert called["argv"][:2] == ["--project-root", str(book_root)]
 
 
-def test_canon_ledger_story_system_runtime_forwards(monkeypatch, tmp_path):
+def test_canon_ledger_story_system_runtime_persistence_is_rejected(
+    monkeypatch, tmp_path, capsys
+):
     module = _load_canon_ledger_module()
 
     project_root = (tmp_path / "book").resolve()
     called = {}
 
     def _fake_resolve(explicit_project_root=None):
-        return project_root
+        raise AssertionError("retired writer must fail before project discovery")
 
     def _fake_run_script(script_name, argv):
         called["script_name"] = script_name
-        called["argv"] = list(argv)
-        return 0
+        raise AssertionError((script_name, argv))
 
     monkeypatch.setattr(module, "_resolve_root", _fake_resolve)
     monkeypatch.setattr(module, "_run_script", _fake_run_script)
@@ -270,9 +270,95 @@ def test_canon_ledger_story_system_runtime_forwards(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as exc:
         module.main()
 
+    assert int(exc.value.code or 0) == 2
+    assert called == {}
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "canon_v3_public_command_disabled"
+    assert error["tool"] == "story-system"
+    assert error["operation"] == "emit-runtime-contracts"
+
+
+@pytest.mark.parametrize(
+    ("tail", "tool"),
+    [
+        (["backup", "--rollback", "2"], "backup"),
+        (["backup", "--chapter", "2"], "backup"),
+        (["backup", "--create-branch", "2", "--branch-name", "fork"], "backup"),
+        (["backup", "--list"], "backup"),
+        (["backup", "--diff", "1", "2"], "backup"),
+        (["archive", "--force"], "archive"),
+        (["archive", "--restore-character", "林默"], "archive"),
+        (["archive", "--auto-check"], "archive"),
+        (["archive", "--stats"], "archive"),
+        (["archive", "--auto-check", "--dry-run"], "archive"),
+        (["story-system", "玄幻", "--persist"], "story-system"),
+        (["story-system", "玄幻", "--pers"], "story-system"),
+        (["story-system", "玄幻", "--emit"], "story-system"),
+        (["update-state", "--chapter", "2"], "update-state"),
+        (["projections", "retry", "--chapter", "2"], "projections"),
+        (["master-outline-sync", "--volume", "2"], "master-outline-sync"),
+    ],
+)
+def test_public_cli_rejects_every_legacy_state_mutation_before_dispatch(
+    monkeypatch, capsys, tail, tool
+):
+    module = _load_canon_ledger_module()
+
+    monkeypatch.setattr(
+        module,
+        "_resolve_root",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("policy must run before project resolution")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "_run_script",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("retired writer dispatched")
+        ),
+    )
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", *tail])
+
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+
+    assert int(exc.value.code or 0) == 2
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "canon_v3_public_command_disabled"
+    assert error["tool"] == tool
+    assert error["replacement"].startswith("canon_ledger.py canon-v3")
+
+
+@pytest.mark.parametrize(
+    ("tail", "expected_script"),
+    [
+        (["story-system", "玄幻", "--format", "json"], "story_system.py"),
+    ],
+)
+def test_public_cli_keeps_exact_side_effect_free_story_render(
+    monkeypatch, tmp_path, tail, expected_script
+):
+    module = _load_canon_ledger_module()
+    project_root = tmp_path / "book"
+    called = {}
+
+    monkeypatch.setattr(module, "_resolve_root", lambda _explicit=None: project_root)
+
+    def _fake_run_script(script_name, argv):
+        called["script_name"] = script_name
+        called["argv"] = list(argv)
+        return 0
+
+    monkeypatch.setattr(module, "_run_script", _fake_run_script)
+    monkeypatch.setattr(sys, "argv", ["canon-ledger", *tail])
+
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+
     assert int(exc.value.code or 0) == 0
-    assert called["script_name"] == "story_system.py"
-    assert "--emit-runtime-contracts" in called["argv"]
+    assert called["script_name"] == expected_script
+    assert called["argv"][:2] == ["--project-root", str(project_root)]
 
 
 def test_canon_ledger_commit_forwards(monkeypatch, tmp_path):
@@ -730,7 +816,9 @@ def test_doctor_cli_reports_missing_init_file(monkeypatch, tmp_path, capsys):
     assert any(item["id"] == "file.required.大纲/总纲.md" for item in report["checks"])
 
 
-def test_status_command_still_forwards_to_status_reporter(monkeypatch, tmp_path):
+def test_status_command_uses_workflow_authority_not_legacy_reporter(
+    monkeypatch, tmp_path, capsys
+):
     module = _load_canon_ledger_module()
     project_root = tmp_path / "book"
     _make_cli_init_ready_project(project_root)
@@ -747,8 +835,63 @@ def test_status_command_still_forwards_to_status_reporter(monkeypatch, tmp_path)
     with pytest.raises(SystemExit) as exc:
         module.main()
 
+    payload = json.loads(capsys.readouterr().out)
+    assert int(exc.value.code or 0) == 1
+    assert called == {}
+    assert payload["schema_version"].startswith("canon-v3/workflow-snapshot/")
+    assert payload["state"] == "migration_required"
+    assert payload["primary_action"]["code"] == "initialize_v3"
+
+
+def test_archive_staging_cli_consumes_exact_inline_preconditions(
+    monkeypatch, tmp_path, capsys
+):
+    module = _load_canon_ledger_module()
+    from scripts.data_modules.canon_v3.service import (
+        CanonV3Service,
+        StagingPointer,
+    )
+
+    project_root = tmp_path / "book"
+    ledger = project_root / ".canon-ledger"
+    ledger.mkdir(parents=True)
+    (ledger / "state.json").write_text("{}", encoding="utf-8")
+    service = CanonV3Service(project_root)
+    service.initialize_new_project()
+    transaction_hash = service.repository.put_transaction(
+        {"fixture": "archive-cli"}
+    )
+    pointer = StagingPointer(transaction_hash=transaction_hash)
+    assert pointer.stage_digest is not None
+    with service.staging_lock:
+        service._write_staging_unlocked(pointer)  # noqa: SLF001
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "canon-ledger",
+            "--project-root",
+            str(project_root),
+            "canon-v3",
+            "archive-staging",
+            "--transaction-kind",
+            "chapter",
+            "--expected-stage-digest",
+            pointer.stage_digest,
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+
+    payload = json.loads(capsys.readouterr().out)
     assert int(exc.value.code or 0) == 0
-    assert called["script_name"] == "status_reporter.py"
+    assert payload["transaction_kind"] == "chapter"
+    assert payload["stage_digest"] == pointer.stage_digest
+    assert payload["created"] is True
+    assert payload["requires_reprepare"] is True
+    assert not service.staging_path.exists()
 
 
 def test_write_gate_cli_runs_prewrite(monkeypatch, tmp_path, capsys):

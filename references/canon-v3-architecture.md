@@ -1,6 +1,6 @@
 # Canon v3：长期一致性事务架构
 
-状态：8.0 可信边界基线（breaking change）
+状态：8.1 公开事实边界与恢复协议
 
 ## 产品边界
 
@@ -134,6 +134,11 @@ transactions、decisions、commits、manifests 使用内容寻址并且只写一
 
 `.story-system/v3/CURRENT` 是唯一活动指针。发布顺序为：先写并校验所有不可变对象，再以 compare-and-swap 方式原子替换 CURRENT。崩溃发生在切换前时旧 HEAD 仍完整；切换后可以仅凭新 manifest 重建全部派生数据。
 
+章节 finalize 在 HEAD CAS 前还会将 exact chapter binding 指向的当前正文字节以
+SHA-256 为名 no-clobber 写入 `.story-system/v3/revision-archive/manuscripts/`。归档失败
+阻止 seal；CAS 竞争失败只可能留下无权威的内容寻址 blob，重试幂等。这保证旧章
+审计有 exact 源，同时 archive 仍不是 Canon 事实权威。
+
 ## 工作流状态
 
 gate、报告、CLI、context、Skills 与 dashboard 只能读取同一个带 `workflow_digest` 的 `workflow_snapshot`。识别出书项目后，无论 CURRENT 是否存在都走该状态机：
@@ -151,17 +156,68 @@ gate、报告、CLI、context、Skills 与 dashboard 只能读取同一个带 `w
 
 - 已识别 clean skeleton、无 CURRENT 且无 accepted legacy prefix：`new_project`，执行 initialize。
 - 无 CURRENT 但存在 accepted legacy prefix：`legacy_cutover`，执行 migrate。
-- 已有 CURRENT，但冻结的 legacy prefix/来源绑定变化：`legacy_repair`。唯一通用下一步是只读 `audit-cutover`；作者按稳定 reason code 恢复冻结来源或显式重建受影响后缀，再重读 status。普通 `migrate` 会拒绝 stale CURRENT，不能作为修复命令。
+- 已有 CURRENT，但冻结的 legacy prefix/来源绑定变化：`legacy_repair`。唯一通用下一步是只读 `audit-cutover`；作者按稳定 reason code 恢复冻结来源，再重读 status。有意修改且无法恢复时保留旧项目只读，并在 clean target fork/rebuild；本版本不原地重写后缀。普通 `migrate` 会拒绝 stale CURRENT，不能作为修复命令。
 - 已有 CURRENT，且 genesis schema 为 `canon-v3/legacy-genesis/v1`：`recertification`，先产生 detached review material，再逐项确认和 CAS 发布。
+- 已有 v2 CURRENT 但 fact-boundary analysis 非 clean：`legacy_fact_boundary`；写作与公开事实 query 都停止，只允许 exact supersession、人工分类或 clean-target fork。
+- 旧 active author-axiom record 的 key/category/value 命中软设计：`author_axiom_fact_boundary`；保留其它记录并逐项人工移除后才恢复。
 - 有可验证 CURRENT 且无迁移 blocker：`canon_v3`。初始化成功后必须是这个模式，不是 `new_project`。
 
-前四种待恢复模式都是 `migration_required && can_write_next=false`。规划合同就绪不能覆盖 Canon 状态。
+所有待恢复模式都是 `migration_required && can_write_next=false`。规划合同就绪不能覆盖 Canon 状态。
 
 独立 review 不再调用 legacy `review-pipeline/update-state`。下一章草稿复用 extract→reviewer→assemble→prepare；历史范围默认 audit-only。队列完全由 compiler 从 prepared transaction 推导。
 
+## 公开读面、规划与历史审计
+
+`canon-v3 query snapshot|entity-state|relationships` 和兼容名 `history` 都经过同一
+HEAD-bound facade。它们要求 fresh projection，在查询前后复查 HEAD/generation，任何
+invalid source 直接 fail closed。实体同名时返回 `ambiguous + requires_human_resolution`，
+不把多个匹配伪装成空状态。旧 state/index/RAG/memory/entity adapters 即使名为读取也
+可能初始化数据库或写 observation，因此生产入口一律拒绝，`--legacy-read-only` 只是
+保留稳定错误的退役参数。迁移诊断只走纯读 `audit-cutover` 或
+`repair-cutover --dry-run`。所有 status/query/Doctor/Dashboard GET 路径不创建 lock、目录或其它文件。
+
+Agent 交界使用运行时 JSON Schema：章节是 candidate-draft → reviewer-output →
+runtime assemble proposal；author axiom 使用独立 `author-axiom-proposal` schema 与 validator。
+Reviewer output v3 逐项绑定 validator 返回的 `candidate_id -> candidate_digest`，assemble
+与 exact draft map 比较后才生成 proposal；digest 集合相同但 ID 被互换也会失败。
+Agent 不计算权威 digest，也不根据文档猜 strict payload。
+Author-axiom 的事实边界同时检查 key、closed category 与实际 leaf value，并在 validator、
+prepare、decision、finalize 重复执行；无害 key 或 `world_rule` category 都不能洗白文风、
+动机、人格、人设与成长弧。旧软 record 只可由 exact 全快照人工 remove 事务清理。
+
+`planning refresh-contracts` 仅在 ready/fresh 下从已落盘大纲生成卷/章/审查三份
+planning-only JSON。输入、HEAD 和共同 `planning_batch_digest` 使混合版本可检测；它不写
+MASTER、设定集、STAGING 或 Canon，也不把章纲履约放入 review blocker。
+
+`historical-export` 只沿审计开始时 CURRENT 的 manifest 祖先链导出 exact
+commit/transaction/decision/lineage、当时候选/effects、author axioms、entity registry 和
+revision source。它不读 STAGING、Git、legacy index 或未来事实，也不生成决定或写 HEAD。
+
+## STAGING 放弃与恢复
+
+未发布事务只能在作者明确要求放弃后，用最新 status 的
+`transaction_kind + stage_digest` 执行 `archive-staging`。服务在共享 staging lock 内复查
+exact digest，将 pointer 移入非权威 archive，保留不可变 transaction/decisions。摘要冲突
+不移动，exact replay 幂等。归档后旧 finalize 必须失败，后续事务重新 prepare。
+
 ## 迁移与兼容
 
-v1/v2 在切换后只读。迁移先生成 detached cutover transaction：所有 event、state/entity/timeline delta、appearance、scene 和旧人工决定都转成 typed legacy candidates；正文 span、identity resolution、slot transition 和 normalized facts 分别留下 admission receipt。任何未分类输入都会阻断。全部通过后才在章节边界 K CAS 发布新 genesis；随后只有 v3 能写。
+v1/v2 在切换后只读。迁移先生成 detached cutover transaction：所有 event、state/entity/timeline delta、appearance、scene 和旧人工决定都转成 typed legacy candidates；正文 span、identity resolution、slot transition 和 normalized facts 分别留下 admission receipt。全部通过后才在章节边界 K CAS 发布新 genesis；随后只有 v3 能写。
+
+新迁移使用 `legacy-genesis/v3 + legacy-fact-snapshot/v3` 与版本化
+`fact-boundary/v1`。已知软设计（文风、欲望、动机、性格、人设、成长弧等）从
+active facts/admissions/initial-setting Canon 中真正移除，仅在 snapshot 顶层保留 exclusion
+receipt；空模板和 placeholder 不生成 blocker。未知自定义字段只在它实际活动时
+返回确定性人工分类材料，不由模型猜。
+
+旧 `legacy-genesis/v2` 仍用原 `_fact_snapshot_v2` 字节语义校验，避免软件升级静默
+重解释已发布 HEAD。`audit-cutover/repair-cutover --dry-run` 可附带只读
+`fact_boundary_analysis`：无依赖软事实给出必须保留当前全部 author-axiom records 的
+override plan；活动下游对该 genesis fact 有引用时只能 `manual_fork_required`。
+author-axiom prepare/finalize 在 CAS 前复查 commit/transaction/decision 依赖，不得原地
+悬空后缀。
+分析为 `clean` 之前 workflow 与公共 query/context 都 fail closed；原投影只保留作迁移
+审计证据，不可继续参与写章。
 
 旧 opaque ID 只作为 alias，不能直接决定 rule/information/timeline/promise/loop slot。update/terminal 必须命中 exact active prior；重复 ID、错目标或不同语义复用进入人工。迁移先构建 namespace-aware 身份图，再编译事实；namespace 是唯一类型权威，type 由它派生，alias 不唯一时不得自动取第一个。`omitted_fact_ids`、字段无法证明、namespace 冲突或未映射输入都会直接进入 `migration_required`。
 
@@ -175,7 +231,8 @@ HEAD 或任一重编译差异都不发布。旧 transaction 只保留为 provena
 未发布的 v1 chapter/author-axiom STAGING 不进入上述 detached 认证，而是
 `recompile_required`：调用方必须使用当前 proposal schema、正文/axiom source、HEAD 与 workflow
 重新 prepare。任何 chapter/author-axiom STAGING 存在时，recertification audit/apply 都报告冲突，
-保证全项目只有一个权威待审事务。
+保证全项目只有一个权威待审事务。若作者明确放弃冲突事务，status 给出带
+exact kind/digest 的 `archive_conflicting_staging` 动作；归档后才重新开始 recertification。
 
 ## Skill 与 Author Axiom 边界
 
@@ -189,7 +246,9 @@ exact 人工 case，使用与章节事务相同的全局 staging lock 和 CURREN
 可删除。章节引用 axiom 时按该章节 parent HEAD 的 active axiom set 校验，后续 axiom 更新不能让
 旧章失绑。文风文件明确排除在 axiom digest、HEAD、迁移与人工 case 外。
 
-如果编辑 K 之前的正文，必须从最早受影响章节迁移整个后缀。旧人工决定默认失效并重新确认，除非其所有精确绑定摘要完全相同。禁止长期双写，也禁止正常路径上的 legacy replay。
+如果冻结边界 K 之前的正文发生变化，先尝试恢复 exact source bytes。有意修改且无法
+恢复时，保留原项目只读，在 clean target fork/rebuild；本版本不原地改写旧后缀、猜新
+cutover 或转接旧人工决定。禁止长期双写和正常路径上的 legacy replay。
 
 ## 发布门槛
 

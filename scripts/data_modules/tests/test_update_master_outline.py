@@ -150,15 +150,17 @@ def test_master_outline_sync_rejects_noncanonical_writeback_source(tmp_path):
         sync_master_outline(tmp_path, 1, writeback_file=other)
 
 
-def test_canon_ledger_master_outline_sync_cli_forwards_project_root(monkeypatch, tmp_path):
+def test_canon_ledger_master_outline_sync_cli_is_retired_before_dispatch(
+    monkeypatch, tmp_path, capsys
+):
     _ensure_scripts_on_path()
     import data_modules.canon_ledger as canon_ledger_module
 
-    project_root = (tmp_path / "book").resolve()
     called = {}
 
     def _fake_resolve(explicit_project_root=None):
-        return project_root
+        called["resolved"] = explicit_project_root
+        raise AssertionError("retired command must fail before root resolution")
 
     def _fake_run_script(script_name, argv):
         called["script_name"] = script_name
@@ -187,15 +189,9 @@ def test_canon_ledger_master_outline_sync_cli_forwards_project_root(monkeypatch,
     with pytest.raises(SystemExit) as exc:
         canon_ledger_module.main()
 
-    assert int(exc.value.code or 0) == 0
-    assert called["script_name"] == "update_master_outline.py"
-    assert called["argv"] == [
-        "--project-root",
-        str(project_root),
-        "--volume",
-        "1",
-        "--format",
-        "text",
-        "--writeback-file",
-        "大纲/第1卷-总纲写回.json",
-    ]
+    assert int(exc.value.code or 0) == 2
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "canon_v3_public_command_disabled"
+    assert error["tool"] == "master-outline-sync"
+    assert error["replacement"].endswith("planning refresh-contracts")
+    assert called == {}

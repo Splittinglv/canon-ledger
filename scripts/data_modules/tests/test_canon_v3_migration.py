@@ -17,16 +17,21 @@ from scripts.data_modules.canon_v3.migration import (
     LEGACY_RECERTIFICATION_PUBLISH_REQUEST_SCHEMA,
     LegacyMigrationError,
     _build_material,
+    analyze_legacy_fact_boundary,
     audit_cutover,
+    legacy_genesis_supersession_dependencies,
     legacy_prefix_status,
     migrate_legacy,
     publish_recertification,
     repair_cutover_dry_run,
+    require_legacy_genesis_supersession_safe,
 )
 from scripts.data_modules.canon_v3.projection import (
     projection_is_fresh,
     read_projection,
+    rebuild_projection,
 )
+from scripts.data_modules.canon_v3.query import CanonQueryError, CanonQueryFacade
 from scripts.data_modules.canon_v3.entity_registry import (
     build_approved_entity_registry,
 )
@@ -70,6 +75,10 @@ from scripts.data_modules.tests.canon_v3_protocol_helpers import (
     record_decisions as record_decisions_v3,
 )
 from scripts.data_modules.workflow_authority import WorkflowAuthority
+from scripts.data_modules.story_contracts import (
+    _build_legacy_setting_canon_v1,
+    build_setting_canon,
+)
 from .review_test_helpers import standard_review
 
 
@@ -148,6 +157,47 @@ def _genesis_metadata(project_root: Path) -> dict:
     return manifest["genesis_metadata"]
 
 
+def _write_character_setting(
+    project_root: Path,
+    *,
+    historical_v1: bool,
+) -> None:
+    settings = project_root / "设定集"
+    settings.mkdir(parents=True, exist_ok=True)
+    (settings / "主角卡.md").write_text(
+        "\n".join(
+            [
+                "# 主角卡",
+                "- 姓名：林舟",
+                "- 身份：巡夜人",
+                "- 真正渴望：向所有人证明自己",
+                "- 性格缺陷：冲动自负",
+                "- 人设类型：孤狼",
+                "- 成长弧：学会相信同伴",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    master = project_root / ".story-system" / "MASTER_SETTING.json"
+    master.parent.mkdir(parents=True, exist_ok=True)
+    setting_canon = (
+        _build_legacy_setting_canon_v1(project_root)
+        if historical_v1
+        else build_setting_canon(project_root)
+    )
+    master.write_text(
+        json.dumps(
+            {
+                "meta": {"contract_type": "MASTER_SETTING"},
+                "setting_canon": setting_canon,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+
 def _downgrade_to_markerless_v1(commit_path: Path, payload: dict) -> dict:
     """Persist a historical envelope without the v2 evidence markers."""
 
@@ -187,9 +237,8 @@ def _publish_request(report: dict, *, drop_last: bool = False) -> dict:
             {
                 "schema_version": LEGACY_RECERTIFICATION_DECISION_SCHEMA,
                 "case_key": case["case_key"],
-                "target_digest": case["target_digest"],
-                "material_digest": case["material_digest"],
-                "action": "confirm",
+                **case["decision_binding"],
+                "action": case["allowed_actions"][0],
             }
             for case in cases
         ],
@@ -259,6 +308,449 @@ def test_migration_records_exact_commit_bytes_binding_and_fact_snapshot(
     repeated = migrate_legacy(tmp_path)
     assert repeated["migrated"] is False
     assert repeated["head_hash"] == result["head_hash"]
+
+
+def test_legacy_setting_soft_design_is_excluded_before_v3_admission(
+    tmp_path: Path,
+) -> None:
+    _write_character_setting(tmp_path, historical_v1=True)
+    _persist_accepted_commit(tmp_path, 1)
+
+    result = migrate_legacy(tmp_path)
+    metadata = _genesis_metadata(tmp_path)
+    facts = metadata["legacy_snapshot"]["facts"]
+    soft_fields = {"真正渴望", "性格缺陷", "人设类型", "成长弧"}
+
+    assert metadata["schema_version"] == LEGACY_GENESIS_SCHEMA
+    assert metadata["legacy_snapshot"]["schema_version"] == LEGACY_SNAPSHOT_SCHEMA
+    assert {
+        row["field"] for row in facts["setting_canon"]["facts"]
+    } == {"姓名", "身份"}
+    for channel in ("canonical_facts", "hard_constraints", "rules"):
+        assert soft_fields.isdisjoint(
+            {
+                str(row.get("field") or "")
+                for row in facts.get(channel) or ()
+                if isinstance(row, dict)
+            }
+        )
+    exclusions = metadata["legacy_snapshot"]["fact_boundary"][
+        "excluded_known_soft"
+    ]
+    assert {row["source_fact"]["field"] for row in exclusions} == soft_fields
+    assert all(
+        row["policy_version"] == "canon-v3/fact-boundary/v1"
+        and row["receipt_digest"]
+        for row in exclusions
+    )
+    admitted_digests = {
+        row["fact_content_sha256"]
+        for row in facts["cutover_fact_admissions"]
+    }
+    assert all(
+        digest not in admitted_digests
+        for receipt in exclusions
+        for digest in receipt["active_fact_content_sha256s"]
+    )
+    projection = read_projection(tmp_path)
+    assert all(
+        str(row.get("fact", {}).get("field") or "") not in soft_fields
+        for row in projection["legacy_fact_records"]
+    )
+    assert projection["binding"]["head_hash"] == result["head_hash"]
+
+
+def test_new_filtered_setting_snapshot_still_records_source_exclusions(
+    tmp_path: Path,
+) -> None:
+    _write_character_setting(tmp_path, historical_v1=False)
+    _persist_accepted_commit(tmp_path, 1)
+
+    migrate_legacy(tmp_path)
+    facts = _genesis_metadata(tmp_path)["legacy_snapshot"]["facts"]
+
+    assert {row["field"] for row in facts["setting_canon"]["facts"]} == {
+        "姓名",
+        "身份",
+    }
+    snapshot = _genesis_metadata(tmp_path)["legacy_snapshot"]
+    assert {
+        row["source_fact"]["field"]
+        for row in snapshot["fact_boundary"]["excluded_known_soft"]
+    } == {"真正渴望", "性格缺陷", "人设类型", "成长弧"}
+
+
+def test_custom_writing_rule_sections_never_enter_setting_canon(
+    tmp_path: Path,
+) -> None:
+    setting = tmp_path / "设定集" / "自定义.md"
+    setting.parent.mkdir(parents=True)
+    setting.write_text(
+        "# 写作规则\n"
+        "- 规则：对白要简短\n\n"
+        "# 自定义风格\n"
+        "- 风格要求：多用短句\n\n"
+        "# 世界规则\n"
+        "- 规则：死亡不可逆\n"
+        "- 规则：每段最多三句话\n",
+        encoding="utf-8",
+    )
+
+    payload = build_setting_canon(tmp_path)
+
+    assert [row["value"] for row in payload["facts"]] == ["死亡不可逆"]
+    assert payload["facts"][0]["category"] == "world_rule"
+
+
+def test_advisory_only_setting_edit_does_not_stale_v3_active_provenance(
+    tmp_path: Path,
+) -> None:
+    _write_character_setting(tmp_path, historical_v1=False)
+    _persist_accepted_commit(tmp_path, 1)
+    result = migrate_legacy(tmp_path)
+    setting_path = tmp_path / "设定集" / "主角卡.md"
+    original = setting_path.read_text(encoding="utf-8")
+
+    setting_path.write_text(
+        original.replace("向所有人证明自己", "守护新结识的同伴"),
+        encoding="utf-8",
+    )
+
+    status = legacy_prefix_status(tmp_path)
+    assert status["state"] == "current"
+    assert status["head_hash"] == result["head_hash"]
+    assert CanonV3Repository(tmp_path).current_head() == result["head_hash"]
+
+    setting_path.write_text(
+        setting_path.read_text(encoding="utf-8").replace("巡夜人", "城主"),
+        encoding="utf-8",
+    )
+    hard_edit = legacy_prefix_status(tmp_path)
+    assert hard_edit["state"] == "stale"
+    assert hard_edit["migration_required"] is True
+
+
+def test_ambiguous_legacy_setting_fails_closed_with_review_material(
+    tmp_path: Path,
+) -> None:
+    settings = tmp_path / "设定集"
+    settings.mkdir()
+    (settings / "自定义.md").write_text(
+        "# 作者自定义\n- 镜面回声：只在月下出现\n",
+        encoding="utf-8",
+    )
+    master = tmp_path / ".story-system" / "MASTER_SETTING.json"
+    master.parent.mkdir(parents=True)
+    master.write_text(
+        json.dumps(
+            {
+                "meta": {"contract_type": "MASTER_SETTING"},
+                "setting_canon": build_setting_canon(tmp_path),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    _persist_accepted_commit(tmp_path, 1)
+
+    report = audit_cutover(tmp_path)
+    assert report["state"] == "blocked"
+    assert report["reason_codes"] == [
+        "legacy_fact_boundary_human_review_required"
+    ]
+    material = report["fact_boundary_review_material"]
+    assert material["required_human_action"] == (
+        "classify_legacy_setting_leaf"
+    )
+    assert material["items"][0]["fact"]["field"] == "镜面回声"
+    with pytest.raises(LegacyMigrationError) as raised:
+        migrate_legacy(tmp_path)
+    assert raised.value.code == "legacy_fact_boundary_human_review_required"
+    assert raised.value.review_material == material
+    assert CanonV3Repository(tmp_path).current_head(validate=False) is None
+
+
+def test_v2_pollution_analysis_plans_only_dependency_free_supersession(
+    tmp_path: Path,
+) -> None:
+    _write_character_setting(tmp_path, historical_v1=True)
+    _persist_accepted_commit(tmp_path, 1)
+    material = _build_material(
+        tmp_path,
+        None,
+        apply_fact_boundary=False,
+    )
+    repository = CanonV3Repository(tmp_path)
+    head = repository.initialize(
+        expected_head=None,
+        genesis_metadata=material.genesis_metadata(),
+    )
+    rebuild_projection(tmp_path)
+
+    blocked_workflow = WorkflowAuthority(tmp_path).snapshot()
+    assert blocked_workflow["state"] == "migration_required"
+    assert blocked_workflow["can_write_next"] is False
+    assert blocked_workflow["bootstrap_mode"] == "legacy_fact_boundary"
+    assert blocked_workflow["primary_action"]["code"] == (
+        "supersede_legacy_soft_facts"
+    )
+    assert blocked_workflow["fact_boundary_analysis"]["state"] == (
+        "ready_to_supersede"
+    )
+    with pytest.raises(
+        CanonQueryError,
+        match="canon_v3_head_projection_unavailable",
+    ):
+        CanonQueryFacade(tmp_path).snapshot()
+
+    report = analyze_legacy_fact_boundary(tmp_path)
+
+    assert report["head_hash"] == head
+    assert legacy_prefix_status(tmp_path)["state"] == "current"
+    assert report["state"] == "ready_to_supersede"
+    assert report["can_supersede_genesis"] is True
+    assert report["writes_performed"] is False
+    assert report["dependency_report"]["has_dependencies"] is False
+    assert report["override_plan"][
+        "must_preserve_current_author_axiom_records"
+    ] is True
+    assert {
+        item["fact"]["field"]
+        for item in report["candidates"]
+        if item["classification"] == "known_soft"
+    } == {"真正渴望", "性格缺陷", "人设类型", "成长弧"}
+    projected_legacy_digests = {
+        row["fact_digest"]
+        for row in read_projection(tmp_path)["legacy_fact_records"]
+    }
+    assert {
+        item["fact_digest"]
+        for item in report["candidates"]
+        if item["classification"] == "known_soft"
+    }.issubset(projected_legacy_digests)
+    assert repository.current_head() == head
+    public_dry_run = repair_cutover_dry_run(tmp_path)
+    assert public_dry_run["fact_boundary_analysis"]["state"] == (
+        "ready_to_supersede"
+    )
+    assert public_dry_run["fact_boundary_analysis"]["analysis_digest"] == (
+        report["analysis_digest"]
+    )
+
+    setting_path = tmp_path / "设定集" / "主角卡.md"
+    setting_path.write_text(
+        setting_path.read_text(encoding="utf-8").replace(
+            "向所有人证明自己", "改为守护同伴"
+        ),
+        encoding="utf-8",
+    )
+    assert legacy_prefix_status(tmp_path)["state"] == "stale"
+
+
+def test_v2_pollution_with_downstream_reference_requires_manual_fork(
+    tmp_path: Path,
+) -> None:
+    _write_character_setting(tmp_path, historical_v1=True)
+    _persist_accepted_commit(tmp_path, 1)
+    material = _build_material(
+        tmp_path,
+        None,
+        apply_fact_boundary=False,
+    )
+    repository = CanonV3Repository(tmp_path)
+    head = repository.initialize(
+        expected_head=None,
+        genesis_metadata=material.genesis_metadata(),
+    )
+    rebuild_projection(tmp_path)
+    clean_report = analyze_legacy_fact_boundary(tmp_path)
+    target = clean_report["candidates"][0]
+    sealed = repository._seal_objects(  # noqa: SLF001
+        chapter=1,
+        expected_head=head,
+        transaction={
+            "schema_version": "canon-v3/test-dependent-transaction/v1",
+            "chapter": 1,
+            "prior_fact_digests": [target["fact_digest"]],
+            "canon_effects": [],
+        },
+        canon_effects=[],
+    )
+
+    report = analyze_legacy_fact_boundary(
+        tmp_path, head_hash=sealed.manifest_hash
+    )
+    assert report["state"] == "manual_fork_required"
+    assert report["requires_manual_fork"] is True
+    assert report["override_plan"] is None
+    assert report["dependency_report"]["has_dependencies"] is True
+    assert any(
+        item["object_kind"] == "transaction"
+        for item in report["dependency_report"]["dependencies"]
+    )
+    blocked_workflow = WorkflowAuthority(tmp_path).snapshot()
+    assert blocked_workflow["state"] == "migration_required"
+    assert blocked_workflow["primary_action"]["code"] == (
+        "fork_legacy_fact_boundary"
+    )
+    assert blocked_workflow["fact_boundary_analysis"]["state"] == (
+        "manual_fork_required"
+    )
+    direct = legacy_genesis_supersession_dependencies(
+        tmp_path,
+        report["known_soft_admission_digests"],
+        head_hash=sealed.manifest_hash,
+    )
+    assert direct["report_digest"] == report["dependency_report"][
+        "report_digest"
+    ]
+    with pytest.raises(
+        LegacyMigrationError,
+        match="legacy_genesis_supersession_has_downstream_dependencies",
+    ):
+        require_legacy_genesis_supersession_safe(
+            tmp_path,
+            report["known_soft_admission_digests"],
+            head_hash=sealed.manifest_hash,
+        )
+
+
+def test_v2_soft_fact_cleanup_is_exact_human_axiom_transaction(
+    tmp_path: Path,
+) -> None:
+    _write_character_setting(tmp_path, historical_v1=True)
+    _persist_accepted_commit(tmp_path, 1)
+    material = _build_material(tmp_path, None, apply_fact_boundary=False)
+    repository = CanonV3Repository(tmp_path)
+    repository.initialize(
+        expected_head=None,
+        genesis_metadata=material.genesis_metadata(),
+    )
+    rebuild_projection(tmp_path)
+    service = CanonV3Service(tmp_path)
+    workflow = WorkflowAuthority(tmp_path).snapshot()
+    analysis = workflow["fact_boundary_analysis"]
+    active_axioms = service.active_author_axioms()
+
+    staged = service.prepare_author_axioms(
+        {
+            "schema_version": "canon-v3/author-axiom-proposal/v2",
+            "parent_head": workflow["head_hash"],
+            "workflow_digest": workflow["workflow_digest"],
+            "active_author_axiom_digest": workflow["author_axiom_digest"],
+            "expected_stage_digest": workflow.get("stage_digest"),
+            "records": active_axioms["records"],
+            "genesis_overrides": analysis["override_plan"][
+                "genesis_overrides"
+            ],
+        }
+    )
+    assert staged["state"] == "awaiting_human"
+    decided = service.record_author_axiom_decisions(
+        {
+            "schema_version": (
+                "canon-v3/author-axiom-decision-request/v2"
+            ),
+            "expected_stage_digest": staged["stage_digest"],
+            "transaction_hash": staged["transaction_hash"],
+            "decisions": [
+                {
+                    "case_key": case["case_key"],
+                    **case["decision_binding"],
+                    "action": "approve",
+                }
+                for case in staged["cases"]
+            ],
+        }
+    )
+    assert decided["state"] == "ready_to_finalize"
+    finalized = service.finalize_author_axioms(
+        {
+            "schema_version": (
+                "canon-v3/author-axiom-finalize-request/v2"
+            ),
+            "expected_stage_digest": decided["stage_digest"],
+            "transaction_hash": decided["transaction_hash"],
+            "finalize_token": decided["finalize_token"],
+        }
+    )
+
+    ready = WorkflowAuthority(tmp_path).snapshot()
+    assert finalized["head_hash"] == ready["head_hash"]
+    assert ready["state"] == "ready"
+    assert ready["can_write_next"] is True
+    assert set(
+        service.active_author_axioms()[
+            "superseded_genesis_admission_digests"
+        ]
+    ) == set(analysis["known_soft_admission_digests"])
+    projected = read_projection(tmp_path, require_fresh=True)
+    assert set(analysis["known_soft_admission_digests"]).isdisjoint(
+        {
+            row.get("admission_digest")
+            for row in projected.get("legacy_fact_records") or []
+        }
+    )
+    public = CanonQueryFacade(tmp_path).snapshot()["data"]
+    assert {
+        str(row.get("field") or "")
+        for row in (public.get("setting_canon") or {}).get("facts") or []
+    }.isdisjoint({"真正渴望", "性格缺陷", "人设类型", "成长弧"})
+
+
+def test_genesis_dependency_scan_resolves_lineage_decision_objects(
+    tmp_path: Path,
+) -> None:
+    _write_character_setting(tmp_path, historical_v1=True)
+    _persist_accepted_commit(tmp_path, 1)
+    material = _build_material(tmp_path, None, apply_fact_boundary=False)
+    repository = CanonV3Repository(tmp_path)
+    head = repository.initialize(
+        expected_head=None,
+        genesis_metadata=material.genesis_metadata(),
+    )
+    rebuild_projection(tmp_path)
+    target = analyze_legacy_fact_boundary(tmp_path)["candidates"][0]
+    sealed = repository._seal_objects(  # noqa: SLF001
+        chapter=1,
+        expected_head=head,
+        transaction={
+            "schema_version": "canon-v3/test-lineage-transaction/v1",
+            "chapter": 1,
+            "canon_effects": [],
+        },
+        lineage_decisions=[
+            {
+                "schema_version": "canon-v3/test-lineage-decision/v1",
+                "chapter": 1,
+                "target_fact_digest": target["fact_digest"],
+            }
+        ],
+        canon_effects=[],
+    )
+
+    report = legacy_genesis_supersession_dependencies(
+        tmp_path,
+        [target["admission_digest"]],
+        head_hash=sealed.manifest_hash,
+    )
+
+    assert report["has_dependencies"] is True
+    assert any(
+        item["object_kind"] == "lineage_decision"
+        and item["fact_digest"] == target["fact_digest"]
+        for item in report["dependencies"]
+    )
+    with pytest.raises(
+        LegacyMigrationError,
+        match="legacy_genesis_supersession_has_downstream_dependencies",
+    ):
+        require_legacy_genesis_supersession_safe(
+            tmp_path,
+            [target["admission_digest"]],
+            head_hash=sealed.manifest_hash,
+        )
 
 
 def test_invalid_v2_binding_fails_closed_without_publishing_current(
@@ -1146,6 +1638,10 @@ def test_v1_recertification_publishes_v2_genesis_and_exact_retry_is_idempotent(
     old_head = _install_v1_genesis(tmp_path)
     report = repair_cutover_dry_run(tmp_path)
     request = _publish_request(report)
+    # Requests assembled before the public binding overlay remain accepted;
+    # parsing discards the new nullable decision-head proof either way.
+    for decision in request["decisions"]:
+        decision.pop("expected_decision_head_hash")
 
     first = publish_recertification(tmp_path, request)
     second = publish_recertification(tmp_path, request)
@@ -1229,6 +1725,12 @@ def test_v1_recertification_partial_decisions_never_switch_current(
     }.issubset(families)
     for case in report["cases"]:
         assert case["material_digest"] == content_hash(case["review_material"])
+        assert case["allowed_actions"] == ["confirm"]
+        assert case["decision_binding"] == {
+            "target_digest": case["target_digest"],
+            "material_digest": case["material_digest"],
+            "expected_decision_head_hash": None,
+        }
     with pytest.raises(
         LegacyMigrationError,
         match="legacy_recertification_decisions_incomplete",
@@ -1237,6 +1739,15 @@ def test_v1_recertification_partial_decisions_never_switch_current(
             tmp_path,
             _publish_request(report, drop_last=True),
         )
+    assert CanonV3Repository(tmp_path).current_head() == old_head
+
+    stale = _publish_request(report)
+    stale["decisions"][0]["target_digest"] = "0" * 64
+    with pytest.raises(
+        LegacyMigrationError,
+        match="legacy_recertification_decision_target_stale",
+    ):
+        publish_recertification(tmp_path, stale)
     assert CanonV3Repository(tmp_path).current_head() == old_head
 
 

@@ -5,12 +5,15 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
 from chapter_outline_loader import volume_num_for_chapter_from_state
 from .consistency_context import sanitize_initial_canon, sanitize_story_contracts
+from .canon_v3.fact_boundary import is_known_soft_setting
 from .fact_text import normalize_author_text, sanitize_fact_atom
 
 try:
@@ -32,8 +35,8 @@ _SETTING_LIST_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)、]\s+)(.+?)\s*$")
 _SETTING_LABELED_RE = re.compile(
     r"^\s*(?:[-*+]\s+|\d+[.)、]\s+)(.{1,120}?)[：:]\s*(.*?)\s*$"
 )
-# 文风只来自固定文件，不靠关键词猜测。其它设定集 Markdown 的结构化
-# 内容一律按事实处理，即使字段或取值里出现「风格 / 写作 / 镜头」等词。
+# 固定文风文件永远是 advisory。其它结构化叶子仍需经过版本化事实边界；
+# 只有明确的字段语义会被判为软设计，不靠值里偶然出现“风格/写作”等词猜测。
 _STYLE_PROMPT_SOURCE = "设定集/文风提示词.md"
 _SETTING_HARD_RE = re.compile(
     r"(?:硬约束|硬限制|不可违背|禁止事项|禁忌|限制|规则|公理|底线|"
@@ -46,6 +49,9 @@ _SETTING_PLACEHOLDER_RE = re.compile(
 )
 _SETTING_REFERENCE_SECTION_RE = re.compile(r"(?:常见.+模板|示例|仅供参考|写作提示)")
 _SETTING_REFERENCE_FIELD_RE = re.compile(r"^(?:详见|参考|示例)$")
+_FACT_BOUNDARY_VERIFY = ContextVar(
+    "story_contracts_fact_boundary_verify", default=False
+)
 
 
 @dataclass(frozen=True)
@@ -174,6 +180,7 @@ def _setting_fact(
     subject: str,
     field: str,
     value: str,
+    include_known_soft: bool = False,
 ) -> Dict[str, Any] | None:
     cleaned_value = _clean_setting_value(value, source=source, line=line)
     if not cleaned_value:
@@ -194,7 +201,7 @@ def _setting_fact(
         category = "character_state"
     else:
         category = "story_fact"
-    return {
+    fact = {
         "id": fact_id,
         "category": category,
         "subject": cleaned_subject,
@@ -204,6 +211,9 @@ def _setting_fact(
         "section": cleaned_section,
         "line": int(line),
     }
+    if not include_known_soft and is_known_soft_setting(fact):
+        return None
+    return fact
 
 
 def _table_cells(line: str) -> List[str]:
@@ -234,7 +244,12 @@ def _template_setting_lines(path: Path) -> set[str]:
         return set()
 
 
-def _extract_setting_facts(path: Path, project_root: Path) -> List[Dict[str, Any]]:
+def _extract_setting_facts(
+    path: Path,
+    project_root: Path,
+    *,
+    include_known_soft: bool = False,
+) -> List[Dict[str, Any]]:
     source = path.relative_to(project_root).as_posix()
     raw_bytes = path.read_bytes()
     if len(raw_bytes) > _SETTING_SOURCE_SIZE_LIMIT:
@@ -302,6 +317,7 @@ def _extract_setting_facts(path: Path, project_root: Path) -> List[Dict[str, Any
                     subject=subject,
                     field=header,
                     value=value,
+                    include_known_soft=include_known_soft,
                 )
                 if fact is not None:
                     facts.append(fact)
@@ -320,6 +336,7 @@ def _extract_setting_facts(path: Path, project_root: Path) -> List[Dict[str, Any
                 subject=section,
                 field=field,
                 value=value,
+                include_known_soft=include_known_soft,
             )
             if fact is not None:
                 facts.append(fact)
@@ -335,6 +352,7 @@ def _extract_setting_facts(path: Path, project_root: Path) -> List[Dict[str, Any
                 subject=section,
                 field="事实",
                 value=value,
+                include_known_soft=include_known_soft,
             )
             if fact is not None:
                 facts.append(fact)
@@ -353,8 +371,11 @@ def _extract_setting_facts(path: Path, project_root: Path) -> List[Dict[str, Any
     return list(unique.values())
 
 
-def build_setting_canon(project_root: Path) -> Dict[str, Any]:
-    """从设定集构建闭合、可校验的事实快照；不含文风提示词文件。"""
+def _build_setting_canon(
+    project_root: Path,
+    *,
+    include_known_soft: bool,
+) -> Dict[str, Any]:
     root = Path(project_root).expanduser().resolve()
     sources: List[Dict[str, Any]] = []
     facts: List[Dict[str, Any]] = []
@@ -368,7 +389,13 @@ def build_setting_canon(project_root: Path) -> Dict[str, Any]:
                 "bytes": len(raw),
             }
         )
-        facts.extend(_extract_setting_facts(path, root))
+        facts.extend(
+            _extract_setting_facts(
+                path,
+                root,
+                include_known_soft=include_known_soft,
+            )
+        )
         if len(facts) > _SETTING_FACT_LIMIT:
             raise ValueError(f"设定事实超过上限：最多 {_SETTING_FACT_LIMIT} 条")
     facts.sort(key=lambda row: (row["source"], int(row["line"]), row["id"]))
@@ -377,6 +404,39 @@ def build_setting_canon(project_root: Path) -> Dict[str, Any]:
         "sources": sources,
         "facts": facts,
     }
+
+
+def build_setting_canon(project_root: Path) -> Dict[str, Any]:
+    """构建新设定快照；已知文风/人物设计叶子只保留在源文件中。"""
+
+    return _build_setting_canon(project_root, include_known_soft=False)
+
+
+def _build_legacy_setting_canon_v1(project_root: Path) -> Dict[str, Any]:
+    """Reconstruct historical ``setting-canon/v1`` bytes for verification.
+
+    Early v1 writers included structured design leaves.  Accepting that exact
+    source-bound snapshot keeps its historical schema verifiable; Canon v3's
+    migration boundary is responsible for excluding those leaves from the new
+    active snapshot and admissions.
+    """
+
+    return _build_setting_canon(project_root, include_known_soft=True)
+
+
+@contextmanager
+def _fact_boundary_setting_verification(enabled: bool = True):
+    """Let v3 migration prove active facts while ignoring advisory-only edits.
+
+    Historical v2 validation never enters this context and therefore retains
+    byte-exact ``setting-canon/v1`` source semantics.
+    """
+
+    token = _FACT_BOUNDARY_VERIFY.set(bool(enabled))
+    try:
+        yield
+    finally:
+        _FACT_BOUNDARY_VERIFY.reset(token)
 
 
 def sanitize_setting_canon(value: Any) -> Dict[str, Any]:
@@ -476,6 +536,7 @@ def verify_setting_canon(project_root: Path, value: Any) -> tuple[bool, str]:
     """校验设定事实快照与当前设定文件仍完全一致。"""
     try:
         current = build_setting_canon(project_root)
+        historical_v1 = _build_legacy_setting_canon_v1(project_root)
     except (OSError, ValueError):
         return False, "invalid_setting_canon_source"
     if not current["sources"] and not value:
@@ -485,9 +546,31 @@ def verify_setting_canon(project_root: Path, value: Any) -> tuple[bool, str]:
     cleaned = sanitize_setting_canon(value)
     if not cleaned or cleaned != value:
         return False, "invalid_setting_canon"
-    if cleaned["sources"] != current["sources"]:
+    boundary_verify = bool(_FACT_BOUNDARY_VERIFY.get())
+    if cleaned["sources"] != current["sources"] and not boundary_verify:
         return False, "stale_setting_canon"
-    if cleaned["facts"] != current["facts"]:
+    # Compare canonical bytes, because lists are not hashable and order is
+    # part of the closed snapshot contract.
+    cleaned_facts = json.dumps(
+        cleaned["facts"], ensure_ascii=False, sort_keys=True
+    )
+    valid_fact_sets = {
+        json.dumps(current["facts"], ensure_ascii=False, sort_keys=True),
+        json.dumps(historical_v1["facts"], ensure_ascii=False, sort_keys=True),
+    }
+    if boundary_verify:
+        effective_stored = [
+            row
+            for row in cleaned["facts"]
+            if not is_known_soft_setting(row)
+        ]
+        cleaned_facts = json.dumps(
+            effective_stored, ensure_ascii=False, sort_keys=True
+        )
+        valid_fact_sets = {
+            json.dumps(current["facts"], ensure_ascii=False, sort_keys=True)
+        }
+    if cleaned_facts not in valid_fact_sets:
         return False, "invalid_setting_canon"
     return True, ""
 

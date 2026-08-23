@@ -83,6 +83,21 @@ if sys.platform == "win32":
     enable_windows_utf8_stdio()
 
 
+_RUNTIME_LOCK_GITIGNORE = """# Runtime lock files are process-local and never project history.
+.canon-ledger/*.lock
+.canon-ledger/**/*.lock
+.story-system/*.lock
+.story-system/**/*.lock
+"""
+
+_RUNTIME_LOCK_GIT_PATHSPECS = (
+    ":(exclude,glob).canon-ledger/*.lock",
+    ":(exclude,glob).canon-ledger/**/*.lock",
+    ":(exclude,glob).story-system/*.lock",
+    ":(exclude,glob).story-system/**/*.lock",
+)
+
+
 class BackupError(RuntimeError):
     """Git backup operation failed."""
 
@@ -121,7 +136,7 @@ class GitBackupManager:
             gitignore_file = self.project_root / ".gitignore"
             if not gitignore_file.exists():
                 with open(gitignore_file, 'w', encoding='utf-8') as f:
-                    f.write("""# Python
+                    f.write(f"""# Python
 __pycache__/
 *.py[cod]
 *.so
@@ -139,6 +154,7 @@ __pycache__/
 # But ignore cache files
 .canon-ledger/context_cache.json
 .canon-ledger/backups/.integrity-key
+{_RUNTIME_LOCK_GITIGNORE}
 
 # Env files
 .env
@@ -148,7 +164,7 @@ __pycache__/
 
             # 初始提交
             subprocess.run(
-                ["git", "add", "."],
+                ["git", "add", "--all", "--", ".", *_RUNTIME_LOCK_GIT_PATHSPECS],
                 cwd=self.project_root,
                 check=True,
                 capture_output=True
@@ -511,8 +527,12 @@ __pycache__/
         if receipt is not None:
             self._write_receipt(receipt)
 
-        # Step 1: git add .
-        success, stdout, stderr = self._run_git_command(["add", "."], check=False)
+        # Step 1: stage the project snapshot while keeping process-local lock
+        # files out of both new and recurring backup commits.
+        success, stdout, stderr = self._run_git_command(
+            ["add", "--all", "--", ".", *_RUNTIME_LOCK_GIT_PATHSPECS],
+            check=False,
+        )
         if not success:
             if receipt is not None:
                 self._discard_receipt(chapter_num)

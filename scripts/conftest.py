@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import inspect
 import shutil
 import sqlite3
 import tempfile
@@ -12,6 +13,9 @@ import pytest
 
 _ORIGINAL_SQLITE_CONNECT = sqlite3.connect
 _ORIGINAL_TEMPORARY_DIRECTORY = tempfile.TemporaryDirectory
+_TEMPORARY_DIRECTORY_SUPPORTS_DELETE = (
+    "delete" in inspect.signature(_ORIGINAL_TEMPORARY_DIRECTORY).parameters
+)
 
 # These modules exercise the removed v2 fact-writing product as an active
 # workflow.  Canon v3 keeps dedicated read-only migration/recertification
@@ -67,6 +71,46 @@ _RETIRED_V2_TESTS = frozenset(
     }
 )
 
+# Full acceptance must prove that these current-product suites were actually
+# collected and retained.  This is intentionally independent from the retired
+# manifest: adding a new ``test_canon_v3_*.py`` file requires adding it here,
+# and the policy test enforces that invariant.
+_REQUIRED_CURRENT_AUTHORITY_MODULES = frozenset(
+    {
+        "scripts/data_modules/tests/test_canon_v3_agent_protocol.py",
+        "scripts/data_modules/tests/test_canon_v3_author_axiom.py",
+        "scripts/data_modules/tests/test_canon_v3_cli.py",
+        "scripts/data_modules/tests/test_canon_v3_domain.py",
+        "scripts/data_modules/tests/test_canon_v3_entity_registry.py",
+        "scripts/data_modules/tests/test_canon_v3_fact_boundary.py",
+        "scripts/data_modules/tests/test_canon_v3_global_invariants.py",
+        "scripts/data_modules/tests/test_canon_v3_historical_audit.py",
+        "scripts/data_modules/tests/test_canon_v3_migration.py",
+        "scripts/data_modules/tests/test_canon_v3_planning_history_cli.py",
+        "scripts/data_modules/tests/test_canon_v3_projection.py",
+        "scripts/data_modules/tests/test_canon_v3_public_protocol.py",
+        "scripts/data_modules/tests/test_canon_v3_public_query.py",
+        "scripts/data_modules/tests/test_canon_v3_read_purity.py",
+        "scripts/data_modules/tests/test_canon_v3_repository.py",
+        "scripts/data_modules/tests/test_canon_v3_review.py",
+        "scripts/data_modules/tests/test_canon_v3_service.py",
+        "scripts/data_modules/tests/test_canon_v3_source_verifier.py",
+        "scripts/data_modules/tests/test_canon_v3_staging_recovery.py",
+        "scripts/data_modules/tests/test_dashboard_app.py",
+        "scripts/data_modules/tests/test_planning_facade.py",
+        "scripts/data_modules/tests/test_workflow_authority_surfaces.py",
+        "scripts/tests/test_dashboard_v3.py",
+        "scripts/tests/test_hooks.py",
+        "scripts/tests/test_init_project.py",
+        "scripts/tests/test_run_acceptance.py",
+        "scripts/tests/test_runtime_command_policy.py",
+        "scripts/tests/test_test_selection_policy.py",
+        "scripts/tests/test_validate_plugin_package.py",
+        "tests/adapter/test_cursor_paths.py",
+        "tests/adapter/test_runtime_smoke.py",
+    }
+)
+
 
 def _repo_root() -> Path:
     here = Path(__file__).resolve()
@@ -112,13 +156,17 @@ def _install_safe_tempfile() -> None:
 
 class _SafeTemporaryDirectory(_ORIGINAL_TEMPORARY_DIRECTORY):
     def __init__(self, suffix=None, prefix=None, dir=None, ignore_cleanup_errors=True, *, delete=True):
-        super().__init__(
-            suffix=suffix,
-            prefix=prefix,
-            dir=dir,
-            ignore_cleanup_errors=ignore_cleanup_errors,
-            delete=delete,
-        )
+        kwargs = {
+            "suffix": suffix,
+            "prefix": prefix,
+            "dir": dir,
+            "ignore_cleanup_errors": ignore_cleanup_errors,
+        }
+        if _TEMPORARY_DIRECTORY_SUPPORTS_DELETE:
+            kwargs["delete"] = delete
+        elif not delete:
+            raise TypeError("delete=False requires Python 3.12+")
+        super().__init__(**kwargs)
 
 
 def _safe_sqlite_connect(*args, **kwargs):
@@ -141,6 +189,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "retired_v2: frozen specification for the removed v2 fact-writing workflow",
     )
+    config.addinivalue_line(
+        "markers",
+        "current_authority: current Canon v3 authority test; retirement is forbidden",
+    )
 
 
 def pytest_collection_modifyitems(
@@ -153,23 +205,59 @@ def pytest_collection_modifyitems(
     active: list[pytest.Item] = []
     retired: list[pytest.Item] = []
     root = _repo_root()
+    collected_paths: set[str] = set()
+    collected_keys: set[str] = set()
+    active_paths: set[str] = set()
     for item in items:
         try:
             relative = Path(str(item.path)).resolve().relative_to(root).as_posix()
         except (OSError, ValueError):
             active.append(item)
             continue
+        collected_paths.add(relative)
         base_node = str(item.name).split("[", 1)[0]
         key = f"{relative}::{base_node}"
+        collected_keys.add(key)
         is_retired = relative in _RETIRED_V2_MODULES or key in _RETIRED_V2_TESTS
+        if is_retired and item.get_closest_marker("current_authority") is not None:
+            raise pytest.UsageError(
+                "current authority test cannot be retired: " + key
+            )
         if not is_retired:
             active.append(item)
+            active_paths.add(relative)
             continue
         item.add_marker(pytest.mark.retired_v2)
         if include_retired:
             active.append(item)
+            active_paths.add(relative)
         else:
             retired.append(item)
+
+    if os.environ.get("CANON_LEDGER_REQUIRE_CURRENT_AUTHORITY") == "1":
+        missing_modules = sorted(
+            _REQUIRED_CURRENT_AUTHORITY_MODULES - collected_paths
+        )
+        fully_deselected = sorted(
+            path
+            for path in _REQUIRED_CURRENT_AUTHORITY_MODULES
+            if path in collected_paths and path not in active_paths
+        )
+        stale_retired_modules = sorted(_RETIRED_V2_MODULES - collected_paths)
+        stale_retired_tests = sorted(_RETIRED_V2_TESTS - collected_keys)
+        failures: list[str] = []
+        if missing_modules:
+            failures.append("current modules not collected=" + ",".join(missing_modules))
+        if fully_deselected:
+            failures.append("current modules fully deselected=" + ",".join(fully_deselected))
+        if stale_retired_modules:
+            failures.append("retired module manifest stale=" + ",".join(stale_retired_modules))
+        if stale_retired_tests:
+            failures.append("retired test manifest stale=" + ",".join(stale_retired_tests))
+        if failures:
+            raise pytest.UsageError(
+                "CanonLedger test-selection audit failed: " + "; ".join(failures)
+            )
     if retired:
         config.hook.pytest_deselected(items=retired)
         items[:] = active

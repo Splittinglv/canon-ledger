@@ -334,7 +334,7 @@ def test_canon_ledger_cmd_where(monkeypatch, tmp_path, capsys):
     assert str(book_root) in capsys.readouterr().out
 
 
-def test_canon_ledger_passthrough_state(monkeypatch, tmp_path):
+def test_canon_ledger_legacy_state_adapter_is_disabled(monkeypatch, tmp_path, capsys):
     module = _load_canon_ledger_module()
     book_root = tmp_path / "book"
     called = {}
@@ -349,29 +349,37 @@ def test_canon_ledger_passthrough_state(monkeypatch, tmp_path):
 
     monkeypatch.setattr(module, "_resolve_root", _fake_resolve)
     monkeypatch.setattr(module, "_run_data_module", _fake_run)
-    monkeypatch.setattr(sys, "argv", ["canon-ledger", "state", "get-progress"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["canon-ledger", "state", "--legacy-read-only", "get-progress"],
+    )
 
     with pytest.raises(SystemExit) as exc:
         module.main()
-    assert int(exc.value.code or 0) == 0
-    assert called["mod"] == "state_manager"
-    assert "--project-root" in called["argv"]
-    assert "get-progress" in called["argv"]
+    assert int(exc.value.code or 0) == 2
+    assert called == {}
+    assert json.loads(capsys.readouterr().err)["error"] == "canon_v3_public_command_disabled"
 
 
-def test_canon_ledger_passthrough_memory(monkeypatch, tmp_path):
+def test_canon_ledger_legacy_memory_adapter_is_disabled(monkeypatch, tmp_path, capsys):
     module = _load_canon_ledger_module()
     book_root = tmp_path / "book"
     called = {}
 
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: book_root)
     monkeypatch.setattr(module, "_run_data_module", lambda m, a: (called.update(mod=m, argv=list(a)), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["canon-ledger", "memory", "stats"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["canon-ledger", "memory", "stats", "--legacy-read-only"],
+    )
 
     with pytest.raises(SystemExit) as exc:
         module.main()
-    assert int(exc.value.code or 0) == 0
-    assert called["mod"] == "memory.store"
+    assert int(exc.value.code or 0) == 2
+    assert called == {}
+    assert json.loads(capsys.readouterr().err)["error"] == "canon_v3_public_command_disabled"
 
 
 def test_canon_ledger_strip_project_root_args():
@@ -380,17 +388,29 @@ def test_canon_ledger_strip_project_root_args():
     assert result == ["cmd", "--other"]
 
 
-def test_canon_ledger_passthrough_rag(monkeypatch, tmp_path):
+def test_canon_ledger_legacy_rag_adapter_is_disabled(monkeypatch, tmp_path, capsys):
     module = _load_canon_ledger_module()
     book_root = tmp_path / "book"
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: book_root)
     monkeypatch.setattr(module, "_run_data_module", lambda m, a: (called.update(mod=m), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["canon-ledger", "rag", "search", "--query", "test"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "canon-ledger",
+            "rag",
+            "search",
+            "--query",
+            "test",
+            "--legacy-read-only",
+        ],
+    )
     with pytest.raises(SystemExit) as exc:
         module.main()
-    assert int(exc.value.code or 0) == 0
-    assert called["mod"] == "rag_adapter"
+    assert int(exc.value.code or 0) == 2
+    assert called == {}
+    assert json.loads(capsys.readouterr().err)["error"] == "canon_v3_public_command_disabled"
 
 
 def test_canon_ledger_passthrough_entity(monkeypatch, tmp_path):
@@ -413,8 +433,8 @@ def test_canon_ledger_passthrough_status_script(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", ["canon-ledger", "status"])
     with pytest.raises(SystemExit) as exc:
         module.main()
-    assert int(exc.value.code or 0) == 0
-    assert called["script"] == "status_reporter.py"
+    assert int(exc.value.code or 0) == 1
+    assert called == {}
 
 
 def test_canon_ledger_passthrough_update_state_script(monkeypatch, tmp_path):
@@ -429,7 +449,7 @@ def test_canon_ledger_passthrough_update_state_script(monkeypatch, tmp_path):
     assert called["script"] == "update_state.py"
 
 
-def test_canon_ledger_passthrough_backup_script(monkeypatch, tmp_path):
+def test_canon_ledger_backup_without_read_operation_is_disabled(monkeypatch, tmp_path, capsys):
     module = _load_canon_ledger_module()
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
@@ -437,11 +457,12 @@ def test_canon_ledger_passthrough_backup_script(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", ["canon-ledger", "backup"])
     with pytest.raises(SystemExit) as exc:
         module.main()
-    assert int(exc.value.code or 0) == 0
-    assert called["script"] == "backup_manager.py"
+    assert int(exc.value.code or 0) == 2
+    assert called == {}
+    assert json.loads(capsys.readouterr().err)["error"] == "canon_v3_public_command_disabled"
 
 
-def test_canon_ledger_passthrough_archive_script(monkeypatch, tmp_path):
+def test_canon_ledger_archive_without_read_operation_is_disabled(monkeypatch, tmp_path, capsys):
     module = _load_canon_ledger_module()
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
@@ -449,21 +470,34 @@ def test_canon_ledger_passthrough_archive_script(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "argv", ["canon-ledger", "archive"])
     with pytest.raises(SystemExit) as exc:
         module.main()
-    assert int(exc.value.code or 0) == 0
-    assert called["script"] == "archive_manager.py"
+    assert int(exc.value.code or 0) == 2
+    assert called == {}
+    assert json.loads(capsys.readouterr().err)["error"] == "canon_v3_public_command_disabled"
 
 
-def test_canon_ledger_remainder_strips_leading_double_dash(monkeypatch, tmp_path):
+def test_canon_ledger_legacy_adapter_double_dash_cannot_bypass_policy(
+    monkeypatch, tmp_path, capsys
+):
     module = _load_canon_ledger_module()
     called = {}
     monkeypatch.setattr(module, "_resolve_root", lambda _=None: tmp_path)
     monkeypatch.setattr(module, "_run_data_module", lambda m, a: (called.update(argv=list(a)), 0)[1])
-    monkeypatch.setattr(sys, "argv", ["canon-ledger", "index", "--", "get-core-entities"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "canon-ledger",
+            "index",
+            "--legacy-read-only",
+            "--",
+            "get-core-entities",
+        ],
+    )
     with pytest.raises(SystemExit) as exc:
         module.main()
-    assert int(exc.value.code or 0) == 0
-    assert "get-core-entities" in called["argv"]
-    assert "--" not in called["argv"]
+    assert int(exc.value.code or 0) == 2
+    assert called == {}
+    assert json.loads(capsys.readouterr().err)["error"] == "canon_v3_public_command_disabled"
 
 
 def test_canon_ledger_cmd_use(monkeypatch, tmp_path, capsys):

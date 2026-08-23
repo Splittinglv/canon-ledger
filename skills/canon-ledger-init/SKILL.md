@@ -5,7 +5,8 @@ description: 初始化新的长篇小说项目，收集作者已确定的故事�
 
 # 初始化长篇小说项目
 
-开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)。初始化只服务新项目；已有 accepted prefix 或 CURRENT 时不得覆盖。只有创建尚未可识别的 clean target 时可以暂不运行项目 locator/status；骨架生成后必须立即回到统一 workflow authority。
+开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)
+和 [`../../references/index/reference-loading-map.md`](../../references/index/reference-loading-map.md)。初始化只服务新项目；已有 accepted prefix 或 CURRENT 时不得覆盖。只有创建尚未可识别的 clean target 时可以暂不运行项目 locator/status；骨架生成后必须立即回到统一 workflow authority。
 
 ## 1. 确认 exact target
 

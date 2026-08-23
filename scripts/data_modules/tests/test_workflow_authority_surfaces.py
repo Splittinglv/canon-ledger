@@ -150,8 +150,11 @@ def test_legacy_repair_routes_to_executable_read_only_audit(
 
     assert snapshot["bootstrap_mode"] == "legacy_repair"
     assert snapshot["primary_action"] == {
+        "id": recovery_action,
         "code": recovery_action,
         "label": "审计失效的旧前缀并由作者修复精确来源",
+        "interface": "cli",
+        "transaction_kind": "chapter",
         "command": "canon_ledger.py canon-v3 audit-cutover",
     }
 

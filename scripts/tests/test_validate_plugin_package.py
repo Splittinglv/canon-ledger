@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 
@@ -16,7 +18,7 @@ def _ensure_scripts_on_path() -> None:
 
 _ensure_scripts_on_path()
 
-from validate_plugin_package import validate_package  # noqa: E402
+from validate_plugin_package import _dashboard_source_digest, validate_package  # noqa: E402
 
 
 SOURCE_ROOT = SCRIPTS_DIR.parent
@@ -189,16 +191,60 @@ def _write_minimal_package(
         skill = plugin_root / "skills" / name / "SKILL.md"
         skill.parent.mkdir(parents=True, exist_ok=True)
         skill.write_text(
-            f"---\nname: {name}\ndescription: CanonLedger 核心技能\n---\n\n# CanonLedger\n\n响应 /{name}。\n",
+            f"---\nname: {name}\ndescription: CanonLedger 核心技能\n---\n\n"
+            "# CanonLedger\n\n"
+            "读取 [reference map](../../references/index/reference-loading-map.md)。\n\n"
+            f"响应 /{name}。\n",
             encoding="utf-8",
         )
 
-    agent = plugin_root / "agents" / "demo.md"
-    agent.parent.mkdir(parents=True, exist_ok=True)
-    agent.write_text("---\nname: demo\ndescription: 测试代理\ntools: Read\n---\n\n# 测试代理\n", encoding="utf-8")
+    reference_map = plugin_root / "references" / "index" / "reference-loading-map.md"
+    reference_map.parent.mkdir(parents=True, exist_ok=True)
+    reference_map.write_text(
+        "# Canon v3 reference loading map\n",
+        encoding="utf-8",
+    )
+
+    agents_root = plugin_root / "agents"
+    agents_root.mkdir(parents=True, exist_ok=True)
+    (agents_root / "data-agent.md").write_text(
+        "---\nname: data-agent\ndescription: typed proposal\ntools: Read\n---\n\n"
+        "运行 `canon-v3 agent-schema candidate-draft`，随后运行 "
+        "`canon-v3 validate-agent-output candidate-draft --input-file draft.json`。\n"
+        "最终只运行 `canon-v3 assemble-proposal --candidate-file draft.json "
+        "--reviewer-file review.json`。\n"
+        "硬设定使用 `mode=author_axiom_proposal`，先运行 "
+        "`canon-v3 agent-schema author-axiom-proposal`，将结果写入 "
+        "`.canon-ledger/tmp/canon_v3_author_axiom_proposal.json`，然后运行 "
+        "`canon-v3 validate-agent-output author-axiom-proposal` 和 "
+        "`canon-v3 author-axiom-prepare`。\n",
+        encoding="utf-8",
+    )
+    (agents_root / "reviewer.md").write_text(
+        "---\nname: reviewer\ndescription: typed reviewer\ntools: Read\n---\n\n"
+        "运行 `canon-v3 agent-schema reviewer-output`，输出后运行 "
+        "`canon-v3 validate-agent-output reviewer-output`。\n",
+        encoding="utf-8",
+    )
     rule = plugin_root / "rules" / "canon-ledger-canon.mdc"
     rule.parent.mkdir(parents=True, exist_ok=True)
-    rule.write_text("# CanonLedger\n\n真源位于 .story-system，投影位于 .canon-ledger。\n", encoding="utf-8")
+    rule.write_text(
+        "---\n"
+        "description: CanonLedger 长期事实规则\n"
+        "globs: \"**/.story-system/**,**/正文/**/*.md,**/设定集/**/*.md\"\n"
+        "alwaysApply: false\n"
+        "---\n\n"
+        "# CanonLedger\n\n"
+        "## 唯一事实权威\n\n"
+        "只有 `.story-system/v3/CURRENT` 可达的 Canon v3 HEAD 与同代 fresh projection "
+        "是当前真源；`.canon-ledger/state.json` 和 index.db 不能替代当前 HEAD。\n\n"
+        "## 强制一致性范围\n\n"
+        "只约束身份、时间线、知识边界、真实在场、物品持有、世界硬规则等长期事实。\n\n"
+        "## Advisory 范围\n\n"
+        "大纲仅供参考，不是剧情法律，不能因未履约而阻断事实事务；文风等偏好"
+        "不进入 Canon 强制检查。\n",
+        encoding="utf-8",
+    )
 
     entrypoint = plugin_root / "scripts" / "canon_ledger.py"
     entrypoint.parent.mkdir(parents=True, exist_ok=True)
@@ -212,6 +258,10 @@ def _write_minimal_package(
     (frontend / "src").mkdir(parents=True, exist_ok=True)
     (frontend / "src" / "App.jsx").write_text(
         "export default function App() { return <h1>叙典 CANONLEDGER</h1>; }\n",
+        encoding="utf-8",
+    )
+    (frontend / "vite.config.js").write_text(
+        "// CanonLedger Dashboard build config\n",
         encoding="utf-8",
     )
     (frontend / "index.html").write_text("<title>CanonLedger Dashboard</title>\n", encoding="utf-8")
@@ -254,6 +304,20 @@ def _write_minimal_package(
             "lockfileVersion": 3,
             "requires": True,
             "packages": lock_packages,
+        },
+    )
+    dashboard_app = plugin_root / "dashboard" / "app.py"
+    dashboard_app.parent.mkdir(parents=True, exist_ok=True)
+    dashboard_app.write_text(
+        'app = FastAPI(title="CanonLedger Dashboard", version="0.1.0")\n',
+        encoding="utf-8",
+    )
+    _write_json(
+        frontend / "dist" / "build-metadata.json",
+        {
+            "schema_version": "canon-ledger-dashboard-build/v1",
+            "dashboard_version": "0.1.0",
+            "source_digest": _dashboard_source_digest(frontend),
         },
     )
     return plugin_root
@@ -544,6 +608,26 @@ def test_validate_plugin_package_rejects_legacy_dashboard_dist_brand(tmp_path):
     assert any(item["code"] == "identity.dashboard_dist_legacy_brand" for item in report["issues"])
 
 
+def test_validate_plugin_package_rejects_dashboard_host_drift_in_source_and_dist(tmp_path):
+    plugin_root = _write_minimal_package(tmp_path)
+    frontend = plugin_root / "dashboard" / "frontend"
+    (frontend / "src" / "Overview.jsx").write_text(
+        "export const hint = '请在 Codex 中执行';\n",
+        encoding="utf-8",
+    )
+    (frontend / "dist" / "assets" / "overview.js").write_text(
+        "const hint = 'Open this in ChatGPT';\n",
+        encoding="utf-8",
+    )
+
+    report = validate_package(tmp_path)
+
+    codes = {item["code"] for item in report["issues"]}
+    assert report["ok"] is False
+    assert "identity.dashboard_host_drift" in codes
+    assert "identity.dashboard_dist_host_drift" in codes
+
+
 def test_validate_plugin_package_rejects_missing_dashboard_dist_visible_brand(tmp_path):
     plugin_root = _write_minimal_package(tmp_path)
     assets = plugin_root / "dashboard" / "frontend" / "dist" / "assets"
@@ -565,6 +649,43 @@ def test_validate_plugin_package_rejects_legacy_entrypoint(tmp_path):
 
     assert report["ok"] is False
     assert any(item["code"] == "identity.legacy_entrypoint" for item in report["issues"])
+
+
+def test_validate_plugin_package_rejects_codex_manifest_for_cursor_only_package(tmp_path):
+    plugin_root = _write_minimal_package(tmp_path)
+    _write_json(plugin_root / ".codex-plugin" / "plugin.json", {})
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(item["code"] == "identity.codex_manifest" for item in report["issues"])
+
+
+def test_validate_plugin_package_rejects_dashboard_version_drift(tmp_path):
+    plugin_root = _write_minimal_package(tmp_path)
+    package_path = plugin_root / "dashboard" / "frontend" / "package.json"
+    payload = json.loads(package_path.read_text(encoding="utf-8"))
+    payload["version"] = "9.9.9"
+    _write_json(package_path, payload)
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(item["code"] == "version.dashboard" for item in report["issues"])
+
+
+def test_validate_plugin_package_rejects_stale_dashboard_dist(tmp_path):
+    plugin_root = _write_minimal_package(tmp_path)
+    app_path = plugin_root / "dashboard" / "frontend" / "src" / "App.jsx"
+    app_path.write_text(
+        app_path.read_text(encoding="utf-8") + "// source changed after build\n",
+        encoding="utf-8",
+    )
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(item["code"] == "dashboard.build_binding" for item in report["issues"])
 
 
 def test_validate_plugin_package_rejects_fail_open_runtime_hooks(tmp_path):
@@ -637,3 +758,162 @@ def test_validate_plugin_package_rejects_executable_skill_exports(tmp_path):
 
     assert report["ok"] is False
     assert any(item["code"] == "security.skill_bootstrap_execution" for item in report["issues"])
+
+
+@pytest.mark.parametrize(
+    "legacy_text",
+    (
+        "大纲即法律",
+        "canon_ledger.py chapter-commit --chapter 3",
+        "canon_ledger.py projections retry --chapter 3",
+        "canon_ledger.py projections replay --chapter 3",
+        "CHAPTER_COMMIT 是当前真源",
+    ),
+)
+def test_validate_plugin_package_rejects_retired_active_rule_semantics(
+    tmp_path,
+    legacy_text,
+):
+    plugin_root = _write_minimal_package(tmp_path)
+    rule = plugin_root / "rules" / "canon-ledger-canon.mdc"
+    rule.write_text(
+        rule.read_text(encoding="utf-8") + f"\n{legacy_text}\n",
+        encoding="utf-8",
+    )
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "policy.rule_retired_workflow"
+        for item in report["issues"]
+    )
+
+
+def test_validate_plugin_package_rejects_rule_without_head_authority(tmp_path):
+    plugin_root = _write_minimal_package(tmp_path)
+    rule = plugin_root / "rules" / "canon-ledger-canon.mdc"
+    text = rule.read_text(encoding="utf-8")
+    text = text.replace(".story-system/v3/CURRENT", ".story-system/MASTER_SETTING.json")
+    text = text.replace("Canon v3 HEAD", "旧 Story System")
+    text = text.replace("不能替代当前 HEAD", "可作为事实真源")
+    rule.write_text(text, encoding="utf-8")
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "policy.rule_head_authority"
+        for item in report["issues"]
+    )
+
+
+def test_validate_plugin_package_rejects_rule_that_can_block_on_advisory(tmp_path):
+    plugin_root = _write_minimal_package(tmp_path)
+    rule = plugin_root / "rules" / "canon-ledger-canon.mdc"
+    rule.write_text(
+        rule.read_text(encoding="utf-8").replace(
+            "不能因未履约而阻断事实事务",
+            "必须因未履约而阻断事实事务",
+        ),
+        encoding="utf-8",
+    )
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "policy.rule_advisory_boundary"
+        for item in report["issues"]
+    )
+
+
+def test_validate_plugin_package_requires_manuscript_rule_glob(tmp_path):
+    plugin_root = _write_minimal_package(tmp_path)
+    rule = plugin_root / "rules" / "canon-ledger-canon.mdc"
+    rule.write_text(
+        rule.read_text(encoding="utf-8").replace(
+            ",**/正文/**/*.md",
+            "",
+        ),
+        encoding="utf-8",
+    )
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "policy.rule_manuscript_glob"
+        for item in report["issues"]
+    )
+
+
+def test_validate_plugin_package_requires_reference_map_in_every_skill(tmp_path):
+    plugin_root = _write_minimal_package(tmp_path)
+    skill = plugin_root / "skills" / "canon-ledger-query" / "SKILL.md"
+    skill.write_text(
+        skill.read_text(encoding="utf-8").replace(
+            "[reference map](../../references/index/reference-loading-map.md)",
+            "reference map",
+        ),
+        encoding="utf-8",
+    )
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "policy.skill_reference_map"
+        and item["path"].endswith("canon-ledger-query/SKILL.md")
+        for item in report["issues"]
+    )
+
+
+def test_validate_plugin_package_requires_reference_map_target(tmp_path):
+    plugin_root = _write_minimal_package(tmp_path)
+    (
+        plugin_root / "references" / "index" / "reference-loading-map.md"
+    ).unlink()
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "policy.reference_map_missing"
+        for item in report["issues"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("filename", "removed"),
+    (
+        ("data-agent.md", "canon-v3 assemble-proposal"),
+        ("data-agent.md", "canon-v3 agent-schema candidate-draft"),
+        ("data-agent.md", "mode=author_axiom_proposal"),
+        ("data-agent.md", "canon-v3 agent-schema author-axiom-proposal"),
+        ("data-agent.md", "canon-v3 validate-agent-output author-axiom-proposal"),
+        ("data-agent.md", "canon-v3 author-axiom-prepare"),
+        ("reviewer.md", "canon-v3 validate-agent-output reviewer-output"),
+        ("reviewer.md", "canon-v3 agent-schema reviewer-output"),
+    ),
+)
+def test_validate_plugin_package_requires_runtime_agent_helpers(
+    tmp_path,
+    filename,
+    removed,
+):
+    plugin_root = _write_minimal_package(tmp_path)
+    agent = plugin_root / "agents" / filename
+    agent.write_text(
+        agent.read_text(encoding="utf-8").replace(removed, "removed-helper"),
+        encoding="utf-8",
+    )
+
+    report = validate_package(tmp_path)
+
+    assert report["ok"] is False
+    assert any(
+        item["code"] == "policy.agent_runtime_helpers"
+        and item["path"].endswith(filename)
+        for item in report["issues"]
+    )

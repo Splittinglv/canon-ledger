@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -113,16 +114,20 @@ def test_export_cursor_env_prints_json_data(monkeypatch, tmp_path):
                 if k
                 not in {
                     "CANON_LEDGER_PLUGIN_ROOT",
+                    "CANON_LEDGER_PYTHON",
                     "CURSOR_PLUGIN_ROOT",
                 }
             },
+            "CANON_LEDGER_PYTHON": sys.executable,
             "CURSOR_PROJECT_DIR": str(workspace),
         },
     )
     assert proc.returncode == 0
     payload = json.loads(proc.stdout)
     assert payload["schema_version"] == "canon-ledger-cursor-env/v1"
-    assert Path(payload["python_executable"]).is_file()
+    assert Path(payload["python_executable"]) == Path(
+        os.path.abspath(sys.executable)
+    )
     assert payload["environment"] == {
         "CANON_LEDGER_PLUGIN_ROOT": str(PLUGIN_ROOT),
         "CURSOR_PLUGIN_ROOT": str(PLUGIN_ROOT),
@@ -163,6 +168,7 @@ def test_all_skills_parse_cursor_environment_as_data_without_cache_discovery():
 
 def test_skill_bootstrap_preserves_workspace_metacharacters_as_plain_data(tmp_path):
     import subprocess
+    import sys
 
     skill_text = (PLUGIN_ROOT / "references" / "canon-v3-skill-protocol.md").read_text(
         encoding="utf-8"
@@ -177,9 +183,72 @@ def test_skill_bootstrap_preserves_workspace_metacharacters_as_plain_data(tmp_pa
         env={
             **os.environ,
             "CANON_LEDGER_PLUGIN_ROOT": str(PLUGIN_ROOT),
+            "CANON_LEDGER_PYTHON": sys.executable,
             "CURSOR_PROJECT_DIR": str(workspace),
         },
     )
 
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.splitlines()[-1] == str(workspace.resolve())
+
+
+def test_export_cursor_env_works_from_clean_clone_without_repository_venv(
+    tmp_path,
+):
+    import subprocess
+    import sys
+
+    clean_root = tmp_path / "clean-plugin"
+    clean_scripts = clean_root / "scripts"
+    clean_scripts.mkdir(parents=True)
+    for filename in (
+        "export_cursor_env.py",
+        "cursor_paths.py",
+        "python_runtime.py",
+    ):
+        shutil.copy2(SCRIPTS_DIR / filename, clean_scripts / filename)
+    (clean_scripts / "canon_ledger.py").write_text(
+        "# clean-clone marker\n",
+        encoding="utf-8",
+    )
+    manifest = json.loads(
+        (PLUGIN_ROOT / ".cursor-plugin" / "plugin.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    manifest_path = clean_root / ".cursor-plugin" / "plugin.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    workspace = tmp_path / "book"
+
+    proc = subprocess.run(
+        [sys.executable, str(clean_scripts / "export_cursor_env.py"), "--format", "json"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env={
+            **{
+                key: value
+                for key, value in os.environ.items()
+                if key
+                not in {
+                    "CANON_LEDGER_PLUGIN_ROOT",
+                    "CANON_LEDGER_PYTHON",
+                    "CURSOR_PLUGIN_ROOT",
+                }
+            },
+            "CANON_LEDGER_PYTHON": sys.executable,
+            "CURSOR_PROJECT_DIR": str(workspace),
+        },
+    )
+
+    assert not (clean_root / ".venv").exists()
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["environment"]["CANON_LEDGER_PLUGIN_ROOT"] == str(clean_root)
+    assert Path(payload["python_executable"]) == Path(
+        os.path.abspath(sys.executable)
+    )

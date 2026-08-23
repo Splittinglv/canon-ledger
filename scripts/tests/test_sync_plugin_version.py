@@ -107,12 +107,13 @@ def test_release_layout_missing_error_lists_checked_cursor_path(tmp_path):
     assert str(tmp_path / ".cursor-plugin" / "plugin.json") in str(exc_info.value)
 
 
-def test_windows_runner_uses_flat_cursor_repository_paths():
+def test_windows_runner_delegates_to_cross_platform_acceptance():
     runner = (SCRIPTS_DIR / "run_tests.ps1").read_text(encoding="utf-8")
 
-    assert '$env:PYTHONPATH = "scripts"' in runner
     assert '$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path' in runner
     assert 'Join-Path $PSScriptRoot "..\\.."' not in runner
+    assert 'Join-Path $PSScriptRoot "run_acceptance.py"' in runner
+    assert "scripts/data_modules/tests" not in runner
 
 
 def test_scripts_package_does_not_define_a_second_release_version():

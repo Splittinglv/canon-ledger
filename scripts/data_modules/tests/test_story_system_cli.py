@@ -265,8 +265,8 @@ def test_story_system_persist_preserves_complete_outline_directive(
     ]
     assert "潮汐退去前，雾港城门不得开启。" in setting_values
     assert "用三年时间炼成金丹。" in setting_values
-    assert "主角以限知视角经历宗门大比。" in setting_values
-    assert "本书题材是仙侠修真。" in setting_values
+    assert "主角以限知视角经历宗门大比。" not in setting_values
+    assert "本书题材是仙侠修真。" not in setting_values
     assert "北境战争节奏由月相决定。" in setting_values
     assert "常年笼罩死寂氛围。" in setting_values
     assert "契约反转会反噬立约者。" in setting_values

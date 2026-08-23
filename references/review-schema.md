@@ -1,4 +1,4 @@
-# Canon v3 Reviewer Output v2
+# Canon v3 Reviewer Output v3
 
 reviewer 是只读事实扫描器，不是放行者。它读取 exact candidate draft 和 N-1 HEAD，只输出 `ReviewObservation` 与 `ScanAttestation`；不得输出旧 `issues/manual_checks/blocking_count`，不得写 queue/index 或调用事务 API。
 
@@ -6,12 +6,13 @@ reviewer 是只读事实扫描器，不是放行者。它读取 exact candidate 
 
 ```json
 {
-  "schema_version": "canon-v3/reviewer-output/v2",
+  "schema_version": "canon-v3/reviewer-output/v3",
   "chapter": 1,
   "chapter_sha256": "...",
   "parent_head": "...",
   "author_axiom_digest": "...",
   "entity_registry_digest": "...",
+  "candidate_digest_map": {},
   "candidate_digests": [],
   "observations": [],
   "scan_attestations": [],
@@ -19,7 +20,11 @@ reviewer 是只读事实扫描器，不是放行者。它读取 exact candidate 
 }
 ```
 
-所有版本字段必须与调用输入完全一致。reviewer 不得自行重算或替换 candidate。
+所有版本字段必须与调用输入完全一致。`candidate_digest_map` 必须逐项原样回显
+candidate-draft validator 返回的 exact `candidate_id -> candidate_digest`，其 values 的
+唯一有序集合必须等于 `candidate_digests` 和 complete attestation 的 checked set。
+reviewer 不得自行重算、替换或重新配对 candidate；runtime assemble 会与 draft 的
+exact map 比较，因此审核后互换 candidate ID 必须失败。
 
 ## Observation
 
@@ -55,13 +60,75 @@ compiler 根据 observations、typed candidates、active slots 和 policy 生成
 
 ## HistoricalAuditBundle v1
 
-历史审计的最小派生格式固定为：
+历史审计开始前先生成只读的 `canon-v3/historical-revision-export/v1`。
+它只沿审计开始时 CURRENT 的 manifest 祖先链解析 immutable
+commit/transaction，不读取 STAGING。最小权威输入为：
+
+```json
+{
+  "schema_version": "canon-v3/historical-revision-export/v1",
+  "mode": "historical_audit_input",
+  "disposition": "read_only",
+  "authority": {
+    "audited_head": "...",
+    "generation": 1,
+    "parent_head": "...",
+    "commit_hash": "...",
+    "transaction_hash": "...",
+    "decision_hashes": [],
+    "lineage_decision_hashes": []
+  },
+  "commit": {"object_hash": "...", "payload": {}},
+  "transaction": {"object_hash": "...", "payload": {}},
+  "decisions": [{"object_hash": "...", "payload": {}}],
+  "lineage_decisions": [],
+  "chapter": 1,
+  "revision": 1,
+  "chapter_binding": {},
+  "source": {
+    "status": "source_available",
+    "kind": "current_manuscript|revision_archive",
+    "path": "...",
+    "sha256": "...",
+    "bytes": 1,
+    "content": "..."
+  },
+  "candidate_digests": [],
+  "candidates": [],
+  "effects": [],
+  "observations": [],
+  "scan_attestations": [],
+  "scan_attestation_digests": [],
+  "author_axioms": {},
+  "entity_registry": {},
+  "source_workflow_digest": "...",
+  "export_digest": "..."
+}
+```
+
+`source.status=source_available` 只允许两种来源：当前章正文的 SHA/字节数与
+binding 完全一致，或
+`.story-system/v3/revision-archive/manuscripts/<chapter_sha256>.md` 的内容再次
+验证为同一 SHA。否则必须返回 `source_unavailable`、`content=null` 和原因；
+不得从 candidate quote、当前改写正文、legacy index、Git 或模型记忆猜测旧正文。
+
+新发布的 v3 chapter revision 在 HEAD CAS 前把 exact bound manuscript 写入上述
+内容寻址 archive；archive 失败必须阻止发布并保留 STAGING/CURRENT。CAS 冲突
+留下的未引用 archive blob 不具备 Canon 权威，后续同字节重试幂等复用。旧版本
+未归档、作者显式删除或归档损坏时仍返回 `source_unavailable`，不得降级猜测。
+
+`chapter + revision` 在截断后重发的历史中可能对应多个可达 commit；此时导出
+返回 `historical_revision_ambiguous` 和 commit hashes，调用方必须提交其中一个
+exact `commit_hash`。commit hash 只用于消歧，不能导出 CURRENT 祖先链之外的对象。
+
+data-agent/reviewer 只能在上述 export 上追加审查结果，不得修改或重算其
+authority、binding、candidates/effects、axiom、registry 和 source。
+`HistoricalAuditBundle v1` 的最小派生格式固定为：
 
 ```json
 {
   "schema_version": "canon-v3/historical-audit/v1",
   "mode": "historical_audit",
-  "workflow_digest": "...",
   "audited_head": "...",
   "generation": 0,
   "range": {"start_chapter": 1, "end_chapter": 1},
@@ -71,6 +138,9 @@ compiler 根据 observations、typed candidates、active slots 和 policy 生成
       "revision": 1,
       "chapter_binding": {},
       "parent_head": "...",
+      "commit_hash": "...",
+      "revision_export_digest": "...",
+      "source_status": "source_available",
       "candidate_digests": [],
       "scan_attestation_digest": "...",
       "observations": [],
@@ -81,7 +151,11 @@ compiler 根据 observations、typed candidates、active slots 和 policy 生成
 }
 ```
 
-`audited_head/generation/workflow_digest` 固定审计开始时的活动版本；每章记录固定被审 revision、正文 binding 和该 revision 的 parent HEAD。范围内任一章缺少这些绑定或 complete scan attestation 时，bundle 仍可作为不完整诊断保存，但必须保留 `extraction_incomplete`，不得被称为完整审计。
+`audited_head/generation` 固定审计开始时的活动版本；每章记录固定被审
+revision、export digest、正文 binding、parent HEAD、commit hash 和 source
+status。范围内任一章缺少这些绑定、`source_available` 或 complete scan
+attestation 时，bundle 仍可作为不完整诊断保存，但必须保留
+`extraction_incomplete`，不得被称为完整审计。
 
 默认派生文件只有：
 

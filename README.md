@@ -1,7 +1,7 @@
 # 叙典 CanonLedger
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-8.0.0-brightgreen.svg)](.cursor-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-8.1.0-brightgreen.svg)](.cursor-plugin/plugin.json)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 
 记住故事事实，不替你决定文风。
@@ -38,13 +38,21 @@
   -> 按同一 HEAD 重建投影
 ```
 
-data-agent 的唯一事实产物是：
+data-agent 和 reviewer 不再手算 digest 或手拼最终 proposal。运行时产物分为：
 
 ```text
-.canon-ledger/tmp/canon_v3_proposal.json
+.canon-ledger/tmp/canon_v3_candidate_draft.json
+.canon-ledger/tmp/canon_v3_reviewer_output.json
+.canon-ledger/tmp/canon_v3_proposal.json   # 只由 runtime assemble
 ```
 
-它严格使用 `canon-v3/proposal-batch/v2`，除 typed candidates、observations 和 attestations 外，还绑定 parent HEAD、workflow、entity registry、active author axioms 和已有 STAGING 版本。
+调用方先从 `agent-schema` 读取当前 JSON Schema，分别执行
+`validate-agent-output candidate-draft|reviewer-output`，再由 `assemble-proposal`
+计算 candidate digests 并产生严格 `canon-v3/proposal-batch/v2`。Reviewer output v3
+必须逐项回显 runtime 的 `candidate_id -> candidate_digest` map；assemble 与 exact draft
+逐项比较，审核后互换 candidate ID 也会失败。最终
+proposal 绑定 parent HEAD、workflow、entity registry、active author axioms 和已有
+STAGING 版本；Agent 不能绕过 runtime helper 直接填写摘要。
 
 ### 证据要求
 
@@ -110,6 +118,17 @@ setting, timeline, continuity, character, logic
 recertification 则生成完整绑定的 publish request 并调用 `repair-cutover --apply`。
 `correct` 和 `rewrite` 都不会在旧 transaction 上直接发布。
 
+若作者明确放弃当前未发布事务，不直接删除 STAGING 或不可变对象。先从
+status 复制 `transaction_kind + stage_digest`，取得作者确认后执行：
+
+```text
+canon-v3 archive-staging --transaction-kind chapter|author_axiom \
+  --expected-stage-digest <sha256>
+```
+
+指针会移入非权威 `staging-archive`，transaction/decision 对象保留。摘要变化时拒绝，
+exact retry 幂等；之后必须重新 prepare，旧 finalize 不能复活。
+
 ## Workflow snapshot 是唯一门禁
 
 CLI、write gate、报告、context、Skills 和 Dashboard 读取同一个 `canon-v3/workflow-snapshot/v2` 及其 `workflow_digest`。无 CURRENT 时也不得回落 legacy：
@@ -117,12 +136,12 @@ CLI、write gate、报告、context、Skills 和 Dashboard 读取同一个 `cano
 | state | 含义 | 恢复动作 |
 |---|---|---|
 | `ready` | CURRENT 与投影一致 | `can_write_next=true` 时可写下一章 |
-| `ready_to_finalize` | transaction 已满足发布条件 | 运行 `canon-v3 finalize` |
+| `ready_to_finalize` | transaction 已满足发布条件 | 由 `/canon-ledger-confirm` 组装 exact finalize |
 | `awaiting_human` | 有 required case，HEAD 未改变 | 当场 `/canon-ledger-confirm N` |
 | `rewrite_required` | 已确认事实冲突或作者选 rewrite | 修改本章并完整重跑 |
 | `recompile_required` | 正文、HEAD 或候选修订变化 | 重新 binding、scan、prepare |
 | `projection_rebuild_required` | 正史已发布但读模型未追上 | `canon-v3 rebuild-projection` |
-| `migration_required` | 尚未切 v3、旧前缀变化或旧 schema 待重新认证 | 按 `bootstrap_mode` initialize/migrate/audit/repair |
+| `migration_required` | 尚未切 v3、旧前缀/事实边界变化或旧 schema 待重新认证 | 只执行同一 snapshot 的 `primary_action`；不得自行选恢复命令 |
 | `invalid` | 内容寻址对象或引用校验失败 | 停止写作并体检 |
 
 只有 `state=ready`、`can_write_next=true` 且 projection fresh 才能继续下一章。`ready_to_finalize`、暂存 transaction、合同就绪或旧报告里的 blocking 数量都不表示完成。
@@ -142,10 +161,18 @@ CLI、write gate、报告、context、Skills 和 Dashboard 读取同一个 `cano
 剧情定位和生成的设定模板仍是软设计，不自动进入 Canon。后续要把某项设计变成长期硬设定，
 必须走 managed author-axiom 的逐项人工决定：
 
-```bash
-python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
-  --project-root "<PROJECT_ROOT>" canon-v3 initialize
+```text
+/canon-ledger-plan
+→ 生成 managed author-axiom draft
+→ author-axiom-prepare
+→ /canon-ledger-confirm 逐项决定
+→ author-axiom-finalize
 ```
+
+`canon-v3 initialize` 只创建全新项目的 genesis；已有 HEAD 时不能用它保存或更新硬设定。
+`/canon-ledger-init` 同样只接受不存在或严格空的目标；非空目录、已有 v3、
+legacy/malformed 项目或 symlink 目标都在首次写入前拒绝。新项目在同级临时目录完整
+构建并验证后才发布，init 不再兼任升级或就地修复。
 
 ### 写一章
 
@@ -158,6 +185,23 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
 ### 规划与长期硬设定
 
 卷纲、章纲和剧情目标是软计划，不表示事件已经发生。规划过程中新增、修改或删除世界规则、角色永久设定等硬内容时，先保存为 managed author-axiom draft，再执行 author-axiom prepare/decide/finalize；完成前，query 和写作上下文继续使用上一个 active axiom digest。这样 `/canon-ledger-plan` 不会成为第二条事实写入路径。
+
+大纲落盘后，`canon-v3 planning refresh-contracts --chapter N --dry-run`
+只读生成三份 planning-only 合同及共同 `planning_batch_digest`；去掉
+`--dry-run` 后也只能写卷/章/审查合同。它不同步 MASTER/设定集，不读 legacy
+state 决定卷号，不创建 STAGING，并将 review 合同中的大纲履约规则固定为
+advisory。三个文件逐文件原子替换、异常时尝试回滚；共同 batch digest 用于检测
+进程被杀后的混合残留，不声称跨三文件的文件系统事务。
+
+### 审计历史章节
+
+旧章或章节范围默认只读，使用
+`canon-v3 historical-export --chapter N --revision R`。导出只沿审计开始时
+CURRENT 的 manifest 祖先链读取 exact commit/transaction/decisions、当时的
+author axioms 与 entity registry，不读 STAGING、legacy index、Git 或未来事实。发布章节
+在 HEAD CAS 前将其 exact bound manuscript 幂等写入内容寻址 revision archive；
+若历史字节仍不可用，导出明确返回 `source_unavailable`，不从引文或模型记忆重建。
+只有作者明确选择 revise 才进入新的完整事实事务。
 
 ### 自定义长期文风
 
@@ -188,8 +232,19 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
 
 `migrate` 先编译 detached cutover material：所有 event/delta/timeline/entity 输入都转成 typed legacy candidates，真实正文 span、identity resolution、slot transition 和 normalized facts 分别留下 admission receipt。旧 opaque ID 只是 alias，不能直接决定 promise/loop/knowledge/timeline/rule slot；alias 与 namespace 先统一后才折叠状态。首次 cutover 遇到无法证明、未分类或身份冲突的输入会直接报错且不创建 CURRENT；先修复旧来源/证据，再重跑 migrate，不能把缺口交给普通人工 case 掩盖。全部通过后才 CAS 切换 CURRENT。
 
+新 cutover 发布 `legacy-genesis/v3 + legacy-fact-snapshot/v3`：身份、时间、硬规则等
+客观叶子可进入 active facts；已知的文风、欲望、动机、性格、人设和成长弧只留
+exclusion audit receipt，不进 admissions/projection。活动但无法判定的自定义叶子才进
+人工分类；空模板和 placeholder 不阻断。旧 v2 schema 仍按原字节解释校验，
+不用新规则静默改写。只有 `fact_boundary_analysis.state=clean` 才保持 `ready`；其余状态
+一律 `migration_required + can_write_next=false`，普通 query/context 也拒绝消费该投影，
+只能通过只读 analysis 后走 exact author-axiom supersession、人工分类或 clean-target fork。
+
 仅已存在的 `canon-v3/legacy-genesis/v1` 进入 detached
 `migration_required/recertification`：旧 positive decisions 不自动复用，负裁决会转成语义谱系，旧 HEAD 和对象保留只读，修复链完成后才原子切换。未发布的 v1 chapter/author-axiom STAGING 不参加 recertification，而是返回 `recompile_required`，要求按当前 v2 proposal、binding 与 HEAD 重新 prepare；任何 STAGING 存在时都与 legacy recertification 互斥。
+若作者明确放弃该冲突事务，status 会给出带 exact kind/digest 的
+`archive_conflicting_staging` primary action；按上文 `archive-staging` 归档并重读 status 后，
+才可开始 detached recertification。
 
 重新认证先只读生成逐项材料：
 
@@ -211,15 +266,29 @@ partial/stale/concurrent 请求不会切换 CURRENT；响应丢失只能重放�
 
 已有 CURRENT 的冻结 legacy prefix 若后来失绑，会进入 `bootstrap_mode=legacy_repair`。
 此时普通 `migrate` 会安全拒绝；唯一通用下一步是执行 snapshot 指向的只读
-`canon-v3 audit-cutover`，根据稳定 reason code 由作者恢复原冻结来源，或显式重建受影响后缀，
-再重新读取 status。插件不会猜新的 cutover 边界或自动覆盖当前 HEAD。
+`canon-v3 audit-cutover`，根据稳定 reason code 恢复原冻结来源，再重新读取 status。
+对 `legacy-genesis/v2` CURRENT，`audit-cutover` 与 `repair-cutover --dry-run` 另外返回
+只读 `fact_boundary_analysis`：无依赖的旧软字段会给出
+`ready_to_supersede` override fragment，但必须合并进“保留全部当前 author-axiom
+records”的完整 proposal，不能把 fragment 当成整份替换请求。若任一活动下游
+commit/transaction/decision 引用该 genesis fact，结果是 `manual_fork_required`；
+author-axiom prepare 与 finalize 在 CURRENT CAS 前都会复查依赖，禁止原地留下悬空引用。
+若存量自定义叶子不能可靠分类，分析返回 `human_classification_required`，保持只读并
+交作者确认，不由模型猜测它是硬事实还是写作设计。
+存量 active author axiom 若 key/category/value 实际描述文风、文笔、动机、人格、人设或
+成长弧，同样进入 `author_axiom_fact_boundary` 只读状态；只能用保留其它硬记录的 exact
+人工 remove 事务清理。新 proposal 的 validator、prepare、decision 与 finalize 都复用该
+语义边界，不能借 `world_rule` category 或无害 key 把软偏好包装成硬 Canon。
+本版本不在活动项目内自动重写受影响后缀：若作者有意修改冻结前缀且无法恢复 exact bytes，
+应保留原项目只读审计，并在 clean target 中 fork/rebuild。插件不会猜新的 cutover 边界、
+转接旧人工决定或自动覆盖当前 HEAD。
 
 ### cutover 后的规则
 
 - K 以内的 v1/v2 **章节事实 commit** 是只读前缀。
 - K 之后的章节事实只有 `canon-v3 prepare/decide/finalize` 可以写；跨章节的作者硬设定只走独立的 author-axiom prepare/decide/finalize，并成为新的 active axiom digest。
 - 不再支持 v2 `chapter-commit` 写入、`--from-last-commit` replay、旧 `human-review resolve` 或长期双写。
-- 修改 K 以内正文会使迁移来源摘要失效并 fail closed。必须从最早受影响章节重新建立后缀边界，旧人工决定默认重新确认；不能继续在旧 prefix 上写下一章。
+- 修改 K 以内正文会使迁移来源摘要失效并 fail closed。恢复 exact bytes 后可继续；若修改是有意且无法恢复，则从 clean target fork/rebuild，不能继续在旧 prefix 上写下一章。
 
 ## CLI
 
@@ -239,6 +308,7 @@ status
 prepare --input-file .canon-ledger/tmp/canon_v3_proposal.json
 decide --input-file .canon-ledger/tmp/canon_v3_decisions.json
 finalize --input-file .canon-ledger/tmp/canon_v3_finalize.json
+archive-staging --transaction-kind chapter|author_axiom --expected-stage-digest <sha256>
 audit-cutover
 repair-cutover --dry-run
 repair-cutover --apply --input-file .canon-ledger/tmp/canon_v3_recertification_publish.json
@@ -247,7 +317,13 @@ author-axiom-decide --input-file .canon-ledger/tmp/canon_v3_author_axiom_decisio
 author-axiom-finalize --input-file .canon-ledger/tmp/canon_v3_author_axiom_finalize.json
 author-axiom-status
 author-axioms
-history
+query snapshot|entity-state|relationships
+agent-schema candidate-draft|reviewer-output|proposal-batch|author-axiom-proposal
+validate-agent-output candidate-draft|reviewer-output|author-axiom-proposal
+assemble-proposal
+planning refresh-contracts --chapter N [--dry-run]
+historical-export --chapter N --revision R [--commit-hash <sha256>]
+history  # 与 query snapshot 同一净化、HEAD-bound 公开视图
 rebuild-projection
 ```
 
@@ -262,6 +338,12 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r scripts/requirements.txt
 python -m pip install -r dashboard/requirements.txt
+```
+
+开发或发布 Dashboard 还需要 Node.js 18+ 与 npm；干净 checkout 先安装锁定的前端依赖：
+
+```bash
+npm --prefix dashboard/frontend ci
 ```
 
 本地开发推荐把仓库链接到 Cursor 插件目录：
@@ -284,16 +366,16 @@ ln -s "/absolute/path/to/canon-ledger" ~/.cursor/plugins/local/canon-ledger
 当前发布至少执行：
 
 ```bash
-python -m pytest
-python scripts/run_behavior_evals.py --suite fast
-python scripts/sync_plugin_version.py --check --expected-version 8.0.0
-python scripts/validate_plugin_package.py --strict --format json
-python scripts/validate_release_notes.py --version 8.0.0 --previous-tag v7.2.0 --format json
-npm --prefix dashboard/frontend run build
+npm --prefix dashboard/frontend ci
+python scripts/run_acceptance.py --mode full
+python scripts/sync_plugin_version.py --check --expected-version 8.1.0
+python scripts/validate_release_notes.py --version 8.1.0 --previous-tag v8.0.0 --format json
 ```
 
-此外要对全部 9 个 Skill 运行 `skill-creator` 的 `quick_validate.py`，并在干净临时项目中
-做真实初始化、workflow/Doctor 恢复和关键人工节点前向测试。版本号变化时使用 manifest
+此外要对全部 9 个 Skill 运行 `skill-creator` 的 `quick_validate.py`。`full`
+已包含全部当前 pytest testpaths 与 selection audit、真实行为链、文档链接、严格插件包、
+Dashboard 测试/构建；Windows 使用 `scripts/run_tests.ps1 -Mode full`，POSIX 使用
+`scripts/run_tests.sh full`。版本号变化时使用 manifest
 作为唯一版本源同步命令，不把测试硬编码当成第二版本源。
 
 ### 工作区
@@ -318,7 +400,8 @@ workspace/
 
 | 版本 | 说明 |
 |------|------|
-| **v8.0.0 (当前)** | Canon v3 统一正史写入、精确人工决定、managed author-axiom、fail-closed 迁移/重新认证与 HEAD-bound 投影。 |
+| **v8.1.0 (当前)** | 只守长期事实边界；新增 clean-only init、统一 Agent/人工协议、exact STAGING 恢复、planning/history facade、v8 软事实分析与 HEAD-bound Dashboard/验收。 |
+| **v8.0.0** | Canon v3 统一正史写入、精确人工决定、managed author-axiom、fail-closed 迁移/重新认证与 HEAD-bound 投影。 |
 | **v7.2.0** | 堵住正史静默改写与前缀脱节；伏笔、关系和知识边界绑定正文证据。 |
 | **v7.1.0** | 新增对话式人工确认，并收紧章节提交与确认链。 |
 | **v7.0.2** | 收口残留写法口径，同时保留事实型设定。 |

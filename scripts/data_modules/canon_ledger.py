@@ -12,8 +12,8 @@ CanonLedger 统一入口（面向 skills / agents 的稳定 CLI）
   python "<SCRIPTS_DIR>/canon_ledger.py" preflight
   python "<SCRIPTS_DIR>/canon_ledger.py" where
   python "<SCRIPTS_DIR>/canon_ledger.py" use "<PROJECT_ROOT>"
-  python "<SCRIPTS_DIR>/canon_ledger.py" --project-root "<PROJECT_ROOT>" index stats
-  python "<SCRIPTS_DIR>/canon_ledger.py" --project-root "<PROJECT_ROOT>" state get-entity --id xiaoyan
+  python "<SCRIPTS_DIR>/canon_ledger.py" --project-root "<PROJECT_ROOT>" canon-v3 status
+  python "<SCRIPTS_DIR>/canon_ledger.py" --project-root "<PROJECT_ROOT>" canon-v3 query snapshot
 
 也支持（不推荐，容易踩 PYTHONPATH/cd/参数顺序坑）：
   python -m data_modules.canon_ledger where
@@ -31,6 +31,7 @@ from typing import Optional
 
 from runtime_compat import enable_windows_utf8_stdio, normalize_windows_path
 from project_locator import resolve_project_root, write_current_project_pointer, update_global_registry_current_project
+from runtime_command_policy import LEGACY_READ_COMMANDS, evaluate_public_command
 
 from .story_runtime_health import build_story_runtime_health
 
@@ -88,46 +89,7 @@ PASSTHROUGH_TOOLS = {
 }
 
 
-_V3_LEGACY_READ_COMMANDS = {
-    "memory": {"stats", "query", "dump", "conflicts"},
-    "rag": {"stats", "search"},
-    "entity": {"lookup", "lookup-all", "list-aliases"},
-    "state": {"get-progress", "get-entity", "list-entities"},
-    "index": {
-        "stats",
-        "get-chapter",
-        "recent-appearances",
-        "entity-appearances",
-        "search-scenes",
-        "get-entity",
-        "get-core-entities",
-        "get-protagonist",
-        "get-entities-by-type",
-        "get-by-alias",
-        "get-aliases",
-        "get-relationships",
-        "get-relationship-events",
-        "get-relationship-graph",
-        "get-relationship-timeline",
-        "get-state-changes",
-        "list-invalid",
-        "get-recent-review-metrics",
-        "get-review-trend-stats",
-        "get-writing-checklist-score",
-        "get-recent-writing-checklist-scores",
-        "get-writing-checklist-score-trend",
-        "get-debt-summary",
-        "get-recent-reading-power",
-        "get-chapter-reading-power",
-        "get-pattern-usage-stats",
-        "get-hook-type-stats",
-        "get-reader-signals",
-        "get-pending-overrides",
-        "get-overdue-overrides",
-        "get-active-debts",
-        "get-overdue-debts",
-    },
-}
+_V3_LEGACY_READ_COMMANDS = LEGACY_READ_COMMANDS
 
 
 def _v3_legacy_mutation_reason(
@@ -143,16 +105,20 @@ def _v3_legacy_mutation_reason(
     """
     if tool in {"update-state", "chapter-commit", "review-pipeline"}:
         return f"canon_v3_active_legacy_{tool}_write_disabled"
-    allowed = _V3_LEGACY_READ_COMMANDS.get(tool)
-    if allowed is None:
+    if tool not in _V3_LEGACY_READ_COMMANDS:
         return ""
     command = next(
         (token for token in forwarded_args if token and not token.startswith("-")),
         "",
     )
-    if not command or command in allowed:
-        return ""
-    return f"canon_v3_active_legacy_{tool}_write_disabled:{command}"
+    # None of the legacy adapters is a pure read: merely opening an empty or
+    # partial store can initialize a database/schema or record observations.
+    # Keep this second-line blocker even though the shared public policy rejects
+    # them before project resolution.
+    return (
+        f"canon_v3_active_legacy_{tool}_adapter_disabled:"
+        f"{command or 'missing-command'}"
+    )
 
 
 def _passthrough_tail(argv: list[str], tool: str) -> list[str]:
@@ -582,7 +548,7 @@ def _read_project_json(project_root: Path, input_file: str) -> dict:
 def cmd_canon_v3(args: argparse.Namespace) -> int:
     """Operate the breaking v3 prepare/decide/finalize transaction chain."""
 
-    from .canon_v3.projection import read_projection, rebuild_projection
+    from .canon_v3.projection import rebuild_projection
     from .canon_v3.service import CanonV3Service
 
     root = _resolve_root(args.project_root)
@@ -605,6 +571,17 @@ def cmd_canon_v3(args: argparse.Namespace) -> int:
             payload = service.finalize(
                 _read_project_json(root, args.input_file)
             )
+        elif action in {"archive-staging", "cancel"}:
+            request = {
+                "schema_version": "canon-v3/archive-staging-request/v1",
+                "transaction_kind": args.transaction_kind,
+                "expected_stage_digest": args.expected_stage_digest,
+            }
+            payload = (
+                service.archive_staging(request)
+                if action == "archive-staging"
+                else service.cancel_staging(request)
+            )
         elif action == "author-axiom-prepare":
             payload = service.prepare_author_axioms(
                 _read_project_json(root, args.input_file)
@@ -626,7 +603,111 @@ def cmd_canon_v3(args: argparse.Namespace) -> int:
         elif action == "rebuild-projection":
             payload = rebuild_projection(root)
         elif action == "history":
-            payload = read_projection(root, require_fresh=True)
+            from .canon_v3.query import CanonQueryFacade
+
+            # Keep raw projection internals and migration audit receipts out
+            # of the public fact surface.  ``history`` is a compatibility
+            # spelling for the same HEAD-bound, sanitized latest snapshot.
+            payload = CanonQueryFacade(root).snapshot()
+        elif action == "query":
+            from .canon_v3.query import CanonQueryFacade
+
+            query = CanonQueryFacade(root)
+            if args.query_kind == "snapshot":
+                payload = query.snapshot(as_of_chapter=args.as_of_chapter)
+            elif args.query_kind == "entity-state":
+                if not args.entity:
+                    raise ValueError("canon-v3 query entity-state 必须提供 --entity")
+                payload = query.entity_state(
+                    args.entity,
+                    as_of_chapter=args.as_of_chapter,
+                )
+            elif args.query_kind == "relationships":
+                if not args.entity:
+                    raise ValueError("canon-v3 query relationships 必须提供 --entity")
+                payload = query.relationships(
+                    args.entity,
+                    as_of_chapter=args.as_of_chapter,
+                )
+            else:  # pragma: no cover - argparse closes this set.
+                raise ValueError(f"未知 Canon query kind：{args.query_kind}")
+        elif action == "agent-schema":
+            from .canon_v3.agent_protocol import protocol_schema
+
+            payload = protocol_schema(args.artifact_kind)
+        elif action == "validate-agent-output":
+            from .canon_v3.agent_protocol import validate_agent_artifact
+
+            payload = validate_agent_artifact(
+                args.artifact_kind,
+                _read_project_json(root, args.input_file),
+            )
+        elif action == "assemble-proposal":
+            from .canon_v3.agent_protocol import assemble_proposal
+
+            payload = assemble_proposal(
+                _read_project_json(root, args.candidate_file),
+                _read_project_json(root, args.reviewer_file),
+            )
+        elif action == "planning":
+            from .planning_facade import (
+                PlanningContractRefreshError,
+                refresh_contracts,
+            )
+
+            try:
+                if args.planning_action != "refresh-contracts":
+                    raise ValueError(
+                        f"未知 Canon planning action：{args.planning_action}"
+                    )
+                payload = refresh_contracts(
+                    root,
+                    args.chapter,
+                    dry_run=bool(args.dry_run),
+                )
+            except PlanningContractRefreshError as exc:
+                print(
+                    json.dumps(
+                        {
+                            "schema_version": "canon-v3/cli-error/v1",
+                            "ok": False,
+                            "error": exc.code,
+                            "details": exc.details,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    file=sys.stderr,
+                )
+                return 2
+        elif action == "historical-export":
+            from .canon_v3.historical_audit import (
+                HistoricalAuditExportError,
+                export_historical_revision,
+            )
+
+            try:
+                payload = export_historical_revision(
+                    root,
+                    args.chapter,
+                    args.revision,
+                    commit_hash=args.commit_hash or None,
+                )
+            except HistoricalAuditExportError as exc:
+                print(
+                    json.dumps(
+                        {
+                            "schema_version": "canon-v3/cli-error/v1",
+                            "ok": False,
+                            "error": exc.code,
+                            "details": exc.details,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    file=sys.stderr,
+                )
+                return 2
         elif action == "migrate":
             from .canon_v3.migration import migrate_legacy
 
@@ -686,6 +767,14 @@ def cmd_canon_v3(args: argparse.Namespace) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="CanonLedger 统一 CLI")
     parser.add_argument("--project-root", help="书项目根目录或工作区根目录（可选，默认自动检测）")
+    parser.add_argument(
+        "--legacy-read-only",
+        action="store_true",
+        help=(
+            "已退役兼容参数；legacy adapters 可能产生写入，迁移诊断请使用 "
+            "canon-v3 audit-cutover 或 repair-cutover --dry-run"
+        ),
+    )
 
     sub = parser.add_subparsers(dest="tool", required=True)
 
@@ -823,6 +912,30 @@ def main() -> None:
     )
     p_v3_finalize.add_argument("--input-file", required=True)
     p_v3_finalize.set_defaults(func=cmd_canon_v3)
+    for recovery_name, recovery_help in (
+        (
+            "archive-staging",
+            "按 transaction kind 与 exact stage digest 归档未发布事务",
+        ),
+        (
+            "cancel",
+            "archive-staging 的兼容别名；取消只会归档，不删除不可变对象",
+        ),
+    ):
+        p_v3_archive = canon_v3_sub.add_parser(
+            recovery_name,
+            help=recovery_help,
+        )
+        p_v3_archive.add_argument(
+            "--transaction-kind",
+            required=True,
+            choices=["chapter", "author_axiom"],
+        )
+        p_v3_archive.add_argument(
+            "--expected-stage-digest",
+            required=True,
+        )
+        p_v3_archive.set_defaults(func=cmd_canon_v3)
     p_v3_axiom_prepare = canon_v3_sub.add_parser(
         "author-axiom-prepare",
         help="从受管 draft byte-span 创建独立硬设定事务",
@@ -863,6 +976,79 @@ def main() -> None:
         "history", help="读取与当前 HEAD 精确绑定的事实历史"
     )
     p_v3_history.set_defaults(func=cmd_canon_v3)
+    p_v3_query = canon_v3_sub.add_parser(
+        "query", help="从当前 HEAD-bound projection 查询长期事实"
+    )
+    p_v3_query.add_argument(
+        "query_kind",
+        choices=["snapshot", "entity-state", "relationships"],
+    )
+    p_v3_query.add_argument("--entity", default="")
+    p_v3_query.add_argument("--as-of-chapter", type=int, default=None)
+    p_v3_query.set_defaults(func=cmd_canon_v3)
+    p_v3_agent_schema = canon_v3_sub.add_parser(
+        "agent-schema", help="导出 data-agent/reviewer 可执行 JSON Schema"
+    )
+    p_v3_agent_schema.add_argument(
+        "artifact_kind",
+        choices=[
+            "candidate-draft",
+            "reviewer-output",
+            "proposal-batch",
+            "author-axiom-proposal",
+        ],
+    )
+    p_v3_agent_schema.set_defaults(func=cmd_canon_v3)
+    p_v3_validate_agent = canon_v3_sub.add_parser(
+        "validate-agent-output", help="严格校验 Agent artifact 并由 runtime 计算 digest"
+    )
+    p_v3_validate_agent.add_argument(
+        "artifact_kind",
+        choices=[
+            "candidate-draft",
+            "reviewer-output",
+            "author-axiom-proposal",
+        ],
+    )
+    p_v3_validate_agent.add_argument("--input-file", required=True)
+    p_v3_validate_agent.set_defaults(func=cmd_canon_v3)
+    p_v3_assemble = canon_v3_sub.add_parser(
+        "assemble-proposal", help="组合已校验的 candidate draft 与 reviewer output"
+    )
+    p_v3_assemble.add_argument("--candidate-file", required=True)
+    p_v3_assemble.add_argument("--reviewer-file", required=True)
+    p_v3_assemble.set_defaults(func=cmd_canon_v3)
+    p_v3_planning = canon_v3_sub.add_parser(
+        "planning",
+        help="只刷新可丢弃的卷/章/审查规划合同，不写 Canon",
+    )
+    planning_sub = p_v3_planning.add_subparsers(
+        dest="planning_action",
+        required=True,
+    )
+    p_v3_planning_refresh = planning_sub.add_parser(
+        "refresh-contracts",
+        help="从已落盘章纲有界刷新三个 planning-only JSON",
+    )
+    p_v3_planning_refresh.add_argument("--chapter", type=int, required=True)
+    p_v3_planning_refresh.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="返回 exact 变更集但不写入",
+    )
+    p_v3_planning_refresh.set_defaults(func=cmd_canon_v3)
+    p_v3_historical = canon_v3_sub.add_parser(
+        "historical-export",
+        help="只读导出 CURRENT 谱系可达的 exact 章节修订审计输入",
+    )
+    p_v3_historical.add_argument("--chapter", type=int, required=True)
+    p_v3_historical.add_argument("--revision", type=int, required=True)
+    p_v3_historical.add_argument(
+        "--commit-hash",
+        default="",
+        help="仅在同数字 revision 多个可达时用于精确消歧",
+    )
+    p_v3_historical.set_defaults(func=cmd_canon_v3)
     p_v3_migrate = canon_v3_sub.add_parser(
         "migrate", help="在章节边界冻结 v2 前缀并切换到 v3"
     )
@@ -893,19 +1079,19 @@ def main() -> None:
     p_v3_repair.set_defaults(func=cmd_canon_v3)
 
     # Pass-through to data modules
-    p_index = sub.add_parser("index", help="转发到 index_manager")
+    p_index = sub.add_parser("index", help="退役 adapter；生产入口始终拒绝")
     p_index.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_state = sub.add_parser("state", help="转发到 state_manager")
+    p_state = sub.add_parser("state", help="退役 adapter；生产入口始终拒绝")
     p_state.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_rag = sub.add_parser("rag", help="转发到 rag_adapter")
+    p_rag = sub.add_parser("rag", help="退役 adapter；生产入口始终拒绝")
     p_rag.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_entity = sub.add_parser("entity", help="转发到 entity_linker")
+    p_entity = sub.add_parser("entity", help="退役 adapter；生产入口始终拒绝")
     p_entity.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_memory = sub.add_parser("memory", help="转发到 memory.store")
+    p_memory = sub.add_parser("memory", help="退役 adapter；生产入口始终拒绝")
     p_memory.add_argument("args", nargs=argparse.REMAINDER)
 
     # Pass-through to scripts
@@ -915,16 +1101,16 @@ def main() -> None:
     p_update_state = sub.add_parser("update-state", help="转发到 update_state.py")
     p_update_state.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_backup = sub.add_parser("backup", help="转发到 backup_manager.py")
+    p_backup = sub.add_parser("backup", help="退役 writer；所有操作均拒绝")
     p_backup.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_archive = sub.add_parser("archive", help="转发到 archive_manager.py")
+    p_archive = sub.add_parser("archive", help="退役 writer；所有操作均拒绝")
     p_archive.add_argument("args", nargs=argparse.REMAINDER)
 
     p_init = sub.add_parser("init", help="转发到 init_project.py（初始化项目）")
     p_init.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_story_system = sub.add_parser("story-system", help="转发到 story_system.py")
+    p_story_system = sub.add_parser("story-system", help="仅允许 stdout 规划渲染，禁止持久化")
     p_story_system.add_argument("args", nargs=argparse.REMAINDER)
 
     p_story_events = sub.add_parser("story-events", help="转发到 story_events.py")
@@ -984,7 +1170,38 @@ def main() -> None:
     from .cli_args import normalize_global_project_root
 
     argv = normalize_global_project_root(sys.argv[1:])
+    policy_argv = list(argv)
+    # Compatibility: global safety flags may appear before or after the
+    # subcommand, just like --project-root.  Remove and restore the parsed
+    # boolean so passthrough tools never see the wrapper-only option.
+    legacy_read_only_anywhere = "--legacy-read-only" in argv
+    argv = [token for token in argv if token != "--legacy-read-only"]
     args, unknown_args = parser.parse_known_args(argv)
+    args.legacy_read_only = bool(
+        getattr(args, "legacy_read_only", False) or legacy_read_only_anywhere
+    )
+
+    public_command = evaluate_public_command(policy_argv)
+    if not public_command.allowed:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": public_command.error,
+                    "tool": public_command.tool,
+                    "operation": public_command.operation,
+                    "message": (
+                        "该统一 CLI 能力不属于当前生产闭集：旧事实/状态写入口已退役；"
+                        "只能使用 Canon v3 事务、clean init、planning-only、"
+                        "HEAD-bound 辅助或明确只读诊断。"
+                    ),
+                    "replacement": public_command.replacement,
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     # where/use 直接执行
     if hasattr(args, "func"):
@@ -1029,18 +1246,16 @@ def main() -> None:
         )
         raise SystemExit(2)
 
-    if tool == "index":
-        raise SystemExit(_run_data_module("index_manager", [*forward_args, *rest]))
-    if tool == "state":
-        raise SystemExit(_run_data_module("state_manager", [*forward_args, *rest]))
-    if tool == "rag":
-        raise SystemExit(_run_data_module("rag_adapter", [*forward_args, *rest]))
-    if tool == "entity":
-        raise SystemExit(_run_data_module("entity_linker", [*forward_args, *rest]))
-    if tool == "memory":
-        raise SystemExit(_run_data_module("memory.store", [*forward_args, *rest]))
     if tool == "status":
-        raise SystemExit(_run_script("status_reporter.py", [*forward_args, *rest]))
+        from .workflow_authority import WorkflowAuthority
+
+        payload = WorkflowAuthority(project_root).snapshot()
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        raise SystemExit(
+            0
+            if payload.get("state") not in {"invalid", "migration_required"}
+            else 1
+        )
     if tool == "update-state":
         raise SystemExit(_run_script("update_state.py", [*forward_args, *rest]))
     if tool == "backup":
@@ -1102,16 +1317,22 @@ def main() -> None:
         raise SystemExit(_run_script("update_master_outline.py", return_args))
 
     if tool == "knowledge":
-        from .knowledge_query import KnowledgeQuery
-        from .cli_output import print_success
-        kq = KnowledgeQuery(project_root)
+        from .canon_v3.query import CanonQueryFacade
+
+        query = CanonQueryFacade(project_root)
         if args.knowledge_action == "query-entity-state":
-            result = kq.entity_state_at_chapter(args.entity, args.at_chapter)
-            print_success(result, message="entity_state_at_chapter")
+            result = query.entity_state(
+                args.entity,
+                as_of_chapter=args.at_chapter,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
             raise SystemExit(0)
         elif args.knowledge_action == "query-relationships":
-            result = kq.entity_relationships_at_chapter(args.entity, args.at_chapter)
-            print_success(result, message="entity_relationships_at_chapter")
+            result = query.relationships(
+                args.entity,
+                as_of_chapter=args.at_chapter,
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
             raise SystemExit(0)
 
     raise SystemExit(2)

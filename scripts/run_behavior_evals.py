@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -272,6 +274,371 @@ def _eval_dashboard_read_only(root: Path, case: dict[str, Any]) -> dict[str, Any
     )
 
 
+def _public_cli(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    command = [
+        sys.executable,
+        str(_plugin_root(root) / "scripts" / "canon_ledger.py"),
+        *[str(item) for item in args],
+    ]
+    return subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+
+
+def _public_cli_json(root: Path, *args: str) -> dict[str, Any]:
+    result = _public_cli(root, *args)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"public CLI failed ({result.returncode}): "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+    payload = json.loads(result.stdout or "{}")
+    if not isinstance(payload, dict):
+        raise RuntimeError("public CLI did not return a JSON object")
+    return payload
+
+
+def _eval_canon_v3_init_runtime(root: Path, case: dict[str, Any]) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "book"
+        first = _public_cli(
+            root,
+            "init",
+            str(project),
+            "行为评估长篇",
+            "玄幻",
+            "--protagonist-name",
+            "林舟",
+            "--protagonist-desire",
+            "向所有人证明自己",
+            "--protagonist-flaw",
+            "冲动自负",
+            "--protagonist-archetype",
+            "孤狼",
+        )
+        if first.returncode != 0:
+            return _result(
+                case,
+                passed=False,
+                reason="clean init 公共 CLI 失败。",
+                evidence=[first.stderr.strip(), first.stdout.strip()],
+            )
+        status = _public_cli_json(
+            root, "--project-root", str(project), "canon-v3", "status"
+        )
+        query = _public_cli_json(
+            root,
+            "--project-root",
+            str(project),
+            "canon-v3",
+            "query",
+            "snapshot",
+            "--as-of-chapter",
+            "0",
+        )
+        state_path = project / ".canon-ledger" / "state.json"
+        current_path = project / ".story-system" / "v3" / "CURRENT"
+        before_state = state_path.read_bytes()
+        before_current = current_path.read_bytes()
+        second = _public_cli(
+            root,
+            "init",
+            str(project),
+            "不应覆盖",
+            "玄幻",
+            "--protagonist-name",
+            "另一个人",
+        )
+        query_text = json.dumps(query, ensure_ascii=False)
+        soft_absent = all(
+            value not in query_text
+            for value in ("向所有人证明自己", "冲动自负", "孤狼")
+        )
+        ok = (
+            status.get("state") == "ready"
+            and status.get("projection_fresh") is True
+            and query.get("authority") == "canon_v3"
+            and query.get("head_hash") == status.get("head_hash")
+            and second.returncode != 0
+            and state_path.read_bytes() == before_state
+            and current_path.read_bytes() == before_current
+            and soft_absent
+        )
+        return _result(
+            case,
+            passed=ok,
+            reason=(
+                "clean init、权威查询与 dirty re-init 零写入通过。"
+                if ok
+                else "初始化/查询/重入行为不符合 Canon v3 契约。"
+            ),
+            evidence=[
+                f"state={status.get('state')}",
+                f"query_authority={query.get('authority')}",
+                f"reinit_rc={second.returncode}",
+                f"soft_absent={soft_absent}",
+            ],
+        )
+
+
+def _eval_canon_v3_nonempty_transaction(
+    root: Path, case: dict[str, Any]
+) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory() as tmp:
+        project = Path(tmp) / "book"
+        created = _public_cli(
+            root,
+            "init",
+            str(project),
+            "非空事务评估",
+            "玄幻",
+            "--protagonist-name",
+            "林舟",
+        )
+        if created.returncode != 0:
+            return _result(
+                case,
+                passed=False,
+                reason="非空事务项目初始化失败。",
+                evidence=[created.stderr.strip(), created.stdout.strip()],
+            )
+
+        quote = "月门只在夜间开启"
+        chapter_file = project / "正文" / "第0001章.md"
+        chapter_file.write_text(quote, encoding="utf-8")
+        binding_response = _public_cli_json(
+            root,
+            "--project-root",
+            str(project),
+            "chapter-binding",
+            "--chapter",
+            "1",
+            "--out",
+            str(project / ".canon-ledger" / "tmp" / "chapter_binding.json"),
+            "--format",
+            "json",
+        )
+        binding = binding_response["chapter_binding"]
+        status = _public_cli_json(
+            root, "--project-root", str(project), "canon-v3", "status"
+        )
+        candidate_path = project / ".canon-ledger" / "tmp" / "candidate.json"
+        reviewer_path = project / ".canon-ledger" / "tmp" / "reviewer.json"
+        proposal_path = project / ".canon-ledger" / "tmp" / "proposal.json"
+        candidate = {
+            "schema_version": "canon-v3/candidate-draft/v1",
+            "chapter": 1,
+            "chapter_binding": binding,
+            "parent_head": status["head_hash"],
+            "workflow_digest": status["workflow_digest"],
+            "author_axiom_digest": status["author_axiom_digest"],
+            "entity_registry_digest": status["entity_registry_digest"],
+            "expected_stage_digest": None,
+            "candidates": [
+                {
+                    "candidate_id": "rule-moon-gate",
+                    "claim": {
+                        "kind": "world_rule_revealed",
+                        "rule": quote,
+                    },
+                    "sources": [
+                        {
+                            "source_type": "manuscript_span",
+                            "source_id": "source-moon-gate",
+                            "document_sha256": binding["sha256"],
+                            "chapter": 1,
+                            "start": 0,
+                            "end": len(quote.encode("utf-8")),
+                            "quote": quote,
+                            "quote_sha256": hashlib.sha256(
+                                quote.encode("utf-8")
+                            ).hexdigest(),
+                        }
+                    ],
+                    "support_map": {"rule": ["source-moon-gate"]},
+                    "identity_links": {},
+                }
+            ],
+            "extraction_blockers": [],
+        }
+        _write_json(candidate_path, candidate)
+        validated = _public_cli_json(
+            root,
+            "--project-root",
+            str(project),
+            "canon-v3",
+            "validate-agent-output",
+            "candidate-draft",
+            "--input-file",
+            ".canon-ledger/tmp/candidate.json",
+        )
+        digest = validated["candidate_digest_map"]["rule-moon-gate"]
+        reviewer = {
+            "schema_version": "canon-v3/reviewer-output/v3",
+            "chapter": 1,
+            "chapter_sha256": binding["sha256"],
+            "parent_head": status["head_hash"],
+            "author_axiom_digest": status["author_axiom_digest"],
+            "entity_registry_digest": status["entity_registry_digest"],
+            "candidate_digest_map": {"rule-moon-gate": digest},
+            "candidate_digests": [digest],
+            "observations": [
+                {
+                    "observation_id": "checkpoint-moon-gate",
+                    "candidate_id": "rule-moon-gate",
+                    "kind": "checkpoint",
+                    "level": "human_required",
+                    "reason": "世界硬规则需要作者确认",
+                    "prior_fact_digests": [],
+                }
+            ],
+            "scan_attestations": [
+                {
+                    "attestation_id": "scan-moon-gate",
+                    "scanner": "reviewer",
+                    "scanner_version": "canon-v3-reviewer-v3",
+                    "chapter_sha256": binding["sha256"],
+                    "parent_head": status["head_hash"],
+                    "author_axiom_digest": status["author_axiom_digest"],
+                    "entity_registry_digest": status["entity_registry_digest"],
+                    "dimensions": [
+                        "setting",
+                        "timeline",
+                        "continuity",
+                        "character",
+                        "logic",
+                    ],
+                    "status": "complete",
+                    "checked_candidate_digests": [digest],
+                }
+            ],
+            "extraction_incomplete": [],
+        }
+        _write_json(reviewer_path, reviewer)
+        _public_cli_json(
+            root,
+            "--project-root",
+            str(project),
+            "canon-v3",
+            "validate-agent-output",
+            "reviewer-output",
+            "--input-file",
+            ".canon-ledger/tmp/reviewer.json",
+        )
+        proposal = _public_cli_json(
+            root,
+            "--project-root",
+            str(project),
+            "canon-v3",
+            "assemble-proposal",
+            "--candidate-file",
+            ".canon-ledger/tmp/candidate.json",
+            "--reviewer-file",
+            ".canon-ledger/tmp/reviewer.json",
+        )
+        _write_json(proposal_path, proposal)
+        _public_cli_json(
+            root,
+            "--project-root",
+            str(project),
+            "canon-v3",
+            "prepare",
+            "--input-file",
+            ".canon-ledger/tmp/proposal.json",
+        )
+        awaiting = _public_cli_json(
+            root, "--project-root", str(project), "canon-v3", "status"
+        )
+        human_case = (awaiting.get("cases") or [])[0]
+        binding_fields = dict(human_case["decision_binding"])
+        decision_path = project / ".canon-ledger" / "tmp" / "decision.json"
+        decision = {
+            "schema_version": "canon-v3/decision-request/v2",
+            "expected_stage_digest": awaiting["stage_digest"],
+            "transaction_hash": awaiting["transaction_hash"],
+            "decisions": [
+                {
+                    "case_key": human_case["case_key"],
+                    **binding_fields,
+                    "action": "approve",
+                }
+            ],
+        }
+        _write_json(decision_path, decision)
+        _public_cli_json(
+            root,
+            "--project-root",
+            str(project),
+            "canon-v3",
+            "decide",
+            "--input-file",
+            ".canon-ledger/tmp/decision.json",
+        )
+        finalizable = _public_cli_json(
+            root, "--project-root", str(project), "canon-v3", "status"
+        )
+        finalize_path = project / ".canon-ledger" / "tmp" / "finalize.json"
+        _write_json(
+            finalize_path,
+            {
+                "schema_version": "canon-v3/finalize-request/v2",
+                "expected_stage_digest": finalizable["stage_digest"],
+                "transaction_hash": finalizable["transaction_hash"],
+                "finalize_token": finalizable["finalize_token"],
+            },
+        )
+        _public_cli_json(
+            root,
+            "--project-root",
+            str(project),
+            "canon-v3",
+            "finalize",
+            "--input-file",
+            ".canon-ledger/tmp/finalize.json",
+        )
+        ready = _public_cli_json(
+            root, "--project-root", str(project), "canon-v3", "status"
+        )
+        query = _public_cli_json(
+            root,
+            "--project-root",
+            str(project),
+            "canon-v3",
+            "query",
+            "snapshot",
+            "--as-of-chapter",
+            "1",
+        )
+        encoded = json.dumps(query, ensure_ascii=False)
+        ok = (
+            awaiting.get("state") == "awaiting_human"
+            and "approve" in human_case.get("allowed_actions", [])
+            and finalizable.get("state") == "ready_to_finalize"
+            and ready.get("state") == "ready"
+            and ready.get("latest_chapter") == 1
+            and quote in encoded
+        )
+        return _result(
+            case,
+            passed=ok,
+            reason=(
+                "非空候选、人工确认、发布与 HEAD-bound 查询全链通过。"
+                if ok
+                else "真实 Canon v3 非空事务未完成。"
+            ),
+            evidence=[
+                f"awaiting={awaiting.get('state')}",
+                f"allowed={human_case.get('allowed_actions')}",
+                f"finalizable={finalizable.get('state')}",
+                f"ready={ready.get('state')}",
+            ],
+        )
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -533,6 +900,8 @@ EVALUATORS = {
     "commit_projection_runtime": _eval_commit_projection_runtime,
     "dashboard_read_only": _eval_dashboard_read_only,
     "user_report_probe": _eval_user_report_probe,
+    "canon_v3_init_runtime": _eval_canon_v3_init_runtime,
+    "canon_v3_nonempty_transaction": _eval_canon_v3_nonempty_transaction,
 }
 
 

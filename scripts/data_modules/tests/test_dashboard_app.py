@@ -534,11 +534,6 @@ def test_dashboard_fact_pages_ignore_legacy_index_and_return_exact_binding(
 
     client = _create_dashboard_client(monkeypatch, project_root)
     workflow = client.get("/api/canon-v3/workflow").json()
-    expected_binding = {
-        "schema_version": "canon-v3/projection-binding/v1",
-        "head_hash": workflow["head_hash"],
-        "generation": workflow["generation"],
-    }
     for path in (
         "/api/canon-v3/entities",
         "/api/canon-v3/relationships",
@@ -548,11 +543,20 @@ def test_dashboard_fact_pages_ignore_legacy_index_and_return_exact_binding(
         assert response.status_code == 200
         payload = response.json()
         assert payload["source"] == "canon_v3_head"
-        assert payload["binding"] == expected_binding
+        binding = payload["binding"]
+        assert binding["schema_version"] == "canon-v3/dashboard-binding/v1"
+        assert binding["authority"] == "canon_v3"
+        assert binding["head_hash"] == workflow["head_hash"]
+        assert binding["generation"] == workflow["generation"]
+        assert binding["workflow_digest"] == workflow["workflow_digest"]
+        assert len(binding["projection_digest"]) == 64
+        assert binding["as_of_chapter"] == 0
         assert payload["items"] == []
 
     # Compatibility aliases remain read-only and return the same exact view.
-    assert client.get("/api/entities").json()["binding"] == expected_binding
+    alias_binding = client.get("/api/entities").json()["binding"]
+    assert alias_binding["head_hash"] == workflow["head_hash"]
+    assert alias_binding["generation"] == workflow["generation"]
 
 
 def test_dashboard_fact_pages_return_409_before_head_or_when_projection_stale(

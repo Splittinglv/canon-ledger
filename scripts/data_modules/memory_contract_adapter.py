@@ -878,15 +878,28 @@ class MemoryContractAdapter:
         """Export an immutable as-of snapshot for reviewer / data-agent."""
         from .workflow_authority import WorkflowAuthority
 
-        workflow, projection = WorkflowAuthority(
-            self.config.project_root
-        ).require_fresh_projection()
+        authority = WorkflowAuthority(self.config.project_root)
+        workflow, projection = authority.require_fresh_projection()
         payload = export_asof_snapshot(
             self.config.project_root,
             chapter=chapter,
             as_of_chapter=as_of_chapter,
         )
+        from .canon_v3.query import (
+            bound_workflow_unchanged,
+            public_author_axiom_view,
+        )
+
+        payload["author_axioms"] = public_author_axiom_view(
+            workflow, projection
+        )
+        after = authority.snapshot()
+        if not bound_workflow_unchanged(workflow, after):
+            raise ValueError("canon_v3_authority_changed_during_asof_export")
         payload["source"] = "canon_v3_head"
         payload["canon_binding"] = dict(projection.get("binding") or {})
         payload["workflow_digest"] = workflow.get("workflow_digest")
+        payload["author_axiom_digest"] = workflow.get(
+            "author_axiom_digest"
+        )
         return payload
