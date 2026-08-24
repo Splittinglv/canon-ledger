@@ -190,10 +190,14 @@ def test_query_surface_never_falls_back_to_legacy_fact_stores(tmp_path: Path) ->
     summary.write_text("旧摘要声称角色已经知道秘密。", encoding="utf-8")
     adapter = MemoryContractAdapter(DataModulesConfig.from_project_root(tmp_path))
 
-    assert adapter.query_entity("旧角色", as_of_chapter=1) is None
-    assert adapter.query_rules(as_of_chapter=1) == []
-    assert adapter.get_open_loops(as_of_chapter=1) == []
-    assert adapter.get_timeline(1, 10, as_of_chapter=1) == []
+    with pytest.raises(ValueError, match="canon_v3_head_projection_unavailable"):
+        adapter.query_entity("旧角色", as_of_chapter=1)
+    with pytest.raises(ValueError, match="canon_v3_head_projection_unavailable"):
+        adapter.query_rules(as_of_chapter=1)
+    with pytest.raises(ValueError, match="canon_v3_head_projection_unavailable"):
+        adapter.get_open_loops(as_of_chapter=1)
+    with pytest.raises(ValueError, match="canon_v3_head_projection_unavailable"):
+        adapter.get_timeline(1, 10, as_of_chapter=1)
     assert adapter.read_summary(1) == ""
     with pytest.raises(ValueError, match="canon_v3_head_projection_unavailable"):
         adapter.export_asof_snapshot(chapter=1, as_of_chapter=0)

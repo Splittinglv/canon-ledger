@@ -339,7 +339,7 @@ def test_legacy_setting_soft_design_is_excluded_before_v3_admission(
     ]
     assert {row["source_fact"]["field"] for row in exclusions} == soft_fields
     assert all(
-        row["policy_version"] == "canon-v3/fact-boundary/v1"
+        row["policy_version"] == "canon-v3/fact-boundary/v2"
         and row["receipt_digest"]
         for row in exclusions
     )
@@ -358,6 +358,153 @@ def test_legacy_setting_soft_design_is_excluded_before_v3_admission(
         for row in projection["legacy_fact_records"]
     )
     assert projection["binding"]["head_hash"] == result["head_hash"]
+
+
+def test_clean_init_allowlisted_field_cannot_launder_writing_style(
+    tmp_path: Path,
+) -> None:
+    master = tmp_path / ".story-system" / "MASTER_SETTING.json"
+    master.parent.mkdir(parents=True, exist_ok=True)
+    master.write_text(
+        json.dumps(
+            {
+                "meta": {"contract_type": "MASTER_SETTING"},
+                "initial_canon": {"world": {"scale": "禁止华丽修辞"}},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    migrate_legacy(tmp_path, cutover_chapter=0)
+    metadata = _genesis_metadata(tmp_path)
+    facts = metadata["legacy_snapshot"]["facts"]
+    assert facts.get("initial_canon") in ({}, None)
+    exclusions = metadata["legacy_snapshot"]["fact_boundary"][
+        "excluded_known_soft"
+    ]
+    assert any(
+        row["source_fact"].get("field") == "scale"
+        and row["source_fact"].get("value") == "禁止华丽修辞"
+        for row in exclusions
+    )
+
+
+def test_existing_new_project_genesis_is_rechecked_under_current_boundary(
+    tmp_path: Path,
+) -> None:
+    master = tmp_path / ".story-system" / "MASTER_SETTING.json"
+    master.parent.mkdir(parents=True, exist_ok=True)
+    master.write_text(
+        json.dumps(
+            {
+                "meta": {"contract_type": "MASTER_SETTING"},
+                "initial_canon": {"world": {"scale": "禁止华丽修辞"}},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    # Reproduce a pre-v2-boundary v3 CURRENT: the genesis is already active,
+    # came from ``new_project`` rather than ``v2_accepted_commits``, and still
+    # contains the allow-listed free-text value.
+    material = _build_material(
+        tmp_path,
+        0,
+        apply_fact_boundary=False,
+    )
+    metadata = material.genesis_metadata()
+    assert metadata["source"] == "new_project"
+    repository = CanonV3Repository(tmp_path)
+    repository.initialize(expected_head=None, genesis_metadata=metadata)
+    rebuild_projection(tmp_path)
+
+    workflow = WorkflowAuthority(tmp_path).snapshot()
+    assert workflow["state"] == "migration_required"
+    assert workflow["can_write_next"] is False
+    assert workflow["primary_action"]["code"] == (
+        "supersede_legacy_soft_facts"
+    )
+    assert workflow["fact_boundary_analysis"]["state"] == (
+        "ready_to_supersede"
+    )
+    with pytest.raises(CanonQueryError, match="head_projection_unavailable"):
+        CanonQueryFacade(tmp_path).snapshot()
+    adapter = MemoryContractAdapter(DataModulesConfig.from_project_root(tmp_path))
+    with pytest.raises(ValueError, match="head_projection_unavailable"):
+        adapter.query_rules()
+    with pytest.raises(ValueError, match="head_projection_unavailable"):
+        adapter.get_open_loops()
+
+    service = CanonV3Service(tmp_path)
+    analysis = workflow["fact_boundary_analysis"]
+    staged = service.prepare_author_axioms(
+        {
+            "schema_version": "canon-v3/author-axiom-proposal/v2",
+            "parent_head": workflow["head_hash"],
+            "workflow_digest": workflow["workflow_digest"],
+            "active_author_axiom_digest": workflow[
+                "author_axiom_digest"
+            ],
+            "expected_stage_digest": workflow.get("stage_digest"),
+            "records": [],
+            "genesis_overrides": analysis["override_plan"][
+                "genesis_overrides"
+            ],
+        }
+    )
+    decided = service.record_author_axiom_decisions(
+        {
+            "schema_version": "canon-v3/author-axiom-decision-request/v2",
+            "expected_stage_digest": staged["stage_digest"],
+            "transaction_hash": staged["transaction_hash"],
+            "decisions": [
+                {
+                    "case_key": case["case_key"],
+                    **case["decision_binding"],
+                    "action": "approve",
+                }
+                for case in staged["cases"]
+            ],
+        }
+    )
+    service.finalize_author_axioms(
+        {
+            "schema_version": "canon-v3/author-axiom-finalize-request/v2",
+            "expected_stage_digest": decided["stage_digest"],
+            "transaction_hash": decided["transaction_hash"],
+            "finalize_token": decided["finalize_token"],
+        }
+    )
+    ready = WorkflowAuthority(tmp_path).snapshot()
+    assert ready["state"] == "ready"
+    assert ready["can_write_next"] is True
+    public = CanonQueryFacade(tmp_path).snapshot()["data"]
+    assert public.get("initial_canon") in ({}, None)
+
+
+def test_current_clean_init_keeps_objective_world_scale_ready(
+    tmp_path: Path,
+) -> None:
+    master = tmp_path / ".story-system" / "MASTER_SETTING.json"
+    master.parent.mkdir(parents=True, exist_ok=True)
+    master.write_text(
+        json.dumps(
+            {
+                "meta": {"contract_type": "MASTER_SETTING"},
+                "initial_canon": {"world": {"scale": "九州大陆"}},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    migrate_legacy(tmp_path, cutover_chapter=0)
+    workflow = WorkflowAuthority(tmp_path).snapshot()
+    assert workflow["state"] == "ready"
+    assert workflow["can_write_next"] is True
+    public = CanonQueryFacade(tmp_path).snapshot()["data"]
+    assert public["initial_canon"]["world"]["scale"] == "九州大陆"
 
 
 def test_new_filtered_setting_snapshot_still_records_source_exclusions(
@@ -614,6 +761,54 @@ def test_v2_pollution_with_downstream_reference_requires_manual_fork(
             report["known_soft_admission_digests"],
             head_hash=sealed.manifest_hash,
         )
+
+
+def test_v2_event_derived_soft_fact_blocks_workflow_and_public_query(
+    tmp_path: Path,
+) -> None:
+    _persist_accepted_commit(
+        tmp_path,
+        1,
+        body="林舟的愿望从归乡变为复仇。",
+        extraction_result={
+            "accepted_events": [
+                {
+                    "event_id": "legacy-soft-wish",
+                    "event_type": "character_state_changed",
+                    "subject": "林舟",
+                    "payload": {
+                        "field": "愿望",
+                        "old": "归乡",
+                        "new": "复仇",
+                        "evidence_quote": "林舟的愿望从归乡变为复仇。",
+                    },
+                }
+            ]
+        },
+    )
+    material = _build_material(
+        tmp_path,
+        None,
+        apply_fact_boundary=False,
+    )
+    repository = CanonV3Repository(tmp_path)
+    repository.initialize(
+        expected_head=None,
+        genesis_metadata=material.genesis_metadata(),
+    )
+    rebuild_projection(tmp_path)
+
+    workflow = WorkflowAuthority(tmp_path).snapshot()
+    assert workflow["state"] == "migration_required"
+    assert workflow["can_write_next"] is False
+    assert workflow["primary_action"]["code"] == (
+        "fork_legacy_fact_boundary"
+    )
+    analysis = workflow["fact_boundary_analysis"]
+    assert analysis["state"] == "manual_fork_required"
+    assert analysis["event_derived_soft_admission_digests"]
+    with pytest.raises(CanonQueryError, match="head_projection_unavailable"):
+        CanonQueryFacade(tmp_path).snapshot()
 
 
 def test_v2_soft_fact_cleanup_is_exact_human_axiom_transaction(
@@ -994,7 +1189,7 @@ def test_cutover_validates_every_linked_alias_and_timeline_field(
     assert "linked.entity.aliases" in details or "linked.timeline.event" in details
 
 
-def test_cutover_keeps_overwritten_relationships_as_sanitized_fact_history(
+def test_cutover_requires_boundary_classification_for_free_form_relationships(
     tmp_path: Path,
 ) -> None:
     _persist_accepted_commit(
@@ -1038,30 +1233,21 @@ def test_cutover_keeps_overwritten_relationships_as_sanitized_fact_history(
         },
     )
 
-    migrate_legacy(tmp_path)
-    history = load_canonical_history(tmp_path, 2)
-    audit_values = {
-        fact.get("value")
-        for audit in history.long_term_event_audit
-        for fact in audit.get("normalized_facts") or []
-        if isinstance(fact, dict)
-    }
-    assert {"朋友", "敌人"}.issubset(audit_values)
-    assert all("source_event" not in row for row in history.long_term_event_audit)
-
-    snapshot = MemoryContractAdapter(
-        DataModulesConfig.from_project_root(tmp_path)
-    ).export_asof_snapshot(chapter=3)
-    context_values = {
-        fact.get("value")
-        for audit in snapshot["long_term_event_audit"]
-        for fact in audit.get("normalized_facts") or []
-        if isinstance(fact, dict)
-    }
-    assert {"朋友", "敌人"}.issubset(context_values)
+    with pytest.raises(LegacyMigrationError) as raised:
+        migrate_legacy(tmp_path)
+    assert raised.value.code == "legacy_fact_boundary_human_review_required"
+    material = raised.value.review_material or {}
+    assert material["required_human_action"] == (
+        "classify_legacy_setting_leaf"
+    )
+    assert any(
+        item["fact"].get("category") == "relationship"
+        for item in material["items"]
+    )
+    assert CanonV3Repository(tmp_path).current_head(validate=False) is None
 
 
-def test_exact_v2_human_decision_can_admit_nonliteral_legacy_semantics(
+def test_exact_v2_human_decision_does_not_reclassify_soft_event_as_fact(
     tmp_path: Path,
 ) -> None:
     _chapter, commit_path, commit = _persist_accepted_commit(
@@ -1132,6 +1318,20 @@ def test_exact_v2_human_decision_can_admit_nonliteral_legacy_semantics(
     assert admissions[0]["verified_event_sha256"] == event_sha
     assert admissions[0]["linked_field_evidence"]["mode"] == (
         "linked_field_evidence"
+    )
+    facts = metadata["legacy_snapshot"]["facts"]
+    for channel in ("canonical_facts", "hard_constraints", "state_changes"):
+        assert all(
+            str(row.get("field") or "") != "愿望"
+            for row in facts.get(channel) or ()
+            if isinstance(row, dict)
+        )
+    exclusions = metadata["legacy_snapshot"]["fact_boundary"][
+        "excluded_known_soft"
+    ]
+    assert any(
+        str(row["source_fact"].get("field") or "") == "愿望"
+        for row in exclusions
     )
 
 
@@ -1695,18 +1895,18 @@ def test_v1_recertification_partial_decisions_never_switch_current(
     _persist_accepted_commit(
         tmp_path,
         1,
-        body="林舟与苏月成为朋友。",
+        body="林舟以 physical 方式抵达北城。",
         extraction_result={
             "accepted_events": [
                 {
-                    "event_id": "recert-relationship",
-                    "event_type": "relationship_changed",
+                    "event_id": "recert-presence",
+                    "event_type": "presence_observed",
+                    "sequence": 1,
                     "subject": "林舟",
                     "payload": {
-                        "from_entity": "林舟",
-                        "to_entity": "苏月",
-                        "relationship_type": "朋友",
-                        "evidence_quote": "林舟与苏月成为朋友。",
+                        "location_id": "北城",
+                        "presence_kind": "physical",
+                        "evidence_quote": "林舟以 physical 方式抵达北城。",
                     },
                 }
             ]
@@ -1776,18 +1976,18 @@ def test_v1_recertification_locked_second_material_cannot_publish_different_sour
     _chapter, commit_path, _payload = _persist_accepted_commit(
         tmp_path,
         1,
-        body="林舟与苏月成为朋友。",
+        body="林舟以 physical 方式抵达北城。",
         extraction_result={
             "accepted_events": [
                 {
-                    "event_id": "race-relationship",
-                    "event_type": "relationship_changed",
+                    "event_id": "race-presence",
+                    "event_type": "presence_observed",
+                    "sequence": 1,
                     "subject": "林舟",
                     "payload": {
-                        "from_entity": "林舟",
-                        "to_entity": "苏月",
-                        "relationship_type": "朋友",
-                        "evidence_quote": "林舟与苏月成为朋友。",
+                        "location_id": "北城",
+                        "presence_kind": "physical",
+                        "evidence_quote": "林舟以 physical 方式抵达北城。",
                     },
                 }
             ]
@@ -1904,18 +2104,18 @@ def test_v1_recertification_is_one_public_workflow_with_one_next_action(
     _persist_accepted_commit(
         tmp_path,
         1,
-        body="林舟与苏月成为朋友。",
+        body="林舟以 physical 方式抵达北城。",
         extraction_result={
             "accepted_events": [
                 {
-                    "event_id": "workflow-relationship",
-                    "event_type": "relationship_changed",
+                    "event_id": "workflow-presence",
+                    "event_type": "presence_observed",
+                    "sequence": 1,
                     "subject": "林舟",
                     "payload": {
-                        "from_entity": "林舟",
-                        "to_entity": "苏月",
-                        "relationship_type": "朋友",
-                        "evidence_quote": "林舟与苏月成为朋友。",
+                        "location_id": "北城",
+                        "presence_kind": "physical",
+                        "evidence_quote": "林舟以 physical 方式抵达北城。",
                     },
                 }
             ]

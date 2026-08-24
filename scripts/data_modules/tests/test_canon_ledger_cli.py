@@ -87,8 +87,9 @@ def test_v3_current_freezes_every_side_effecting_legacy_fact_adapter(tmp_path):
     ) == "canon_v3_active_legacy_update-state_write_disabled"
 
 
-def test_init_does_not_resolve_existing_project_root(monkeypatch):
+def test_init_does_not_resolve_existing_project_root(monkeypatch, tmp_path):
     module = _load_canon_ledger_module()
+    target = tmp_path / "proj-dir"
 
     called = {}
 
@@ -103,14 +104,18 @@ def test_init_does_not_resolve_existing_project_root(monkeypatch):
     monkeypatch.setenv("CANON_LEDGER_PROJECT_ROOT", r"D:\invalid\root")
     monkeypatch.setattr(module, "_run_script", _fake_run_script)
     monkeypatch.setattr(module, "_resolve_root", _fail_resolve)
-    monkeypatch.setattr(sys, "argv", ["canon-ledger", "init", "proj-dir", "测试书", "修仙"])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["canon-ledger", "init", str(target), "测试书", "修仙"],
+    )
 
     with pytest.raises(SystemExit) as exc:
         module.main()
 
     assert int(exc.value.code or 0) == 0
     assert called["script_name"] == "init_project.py"
-    assert called["argv"] == ["proj-dir", "测试书", "修仙"]
+    assert called["argv"] == [str(target), "测试书", "修仙"]
 
 
 def test_memory_contract_forwards_context_budget(monkeypatch, tmp_path):
@@ -383,19 +388,16 @@ def test_canon_ledger_commit_forwards(monkeypatch, tmp_path):
     assert called["script_name"] == "chapter_commit.py"
 
 
-def test_canon_ledger_story_events_forwards(monkeypatch, tmp_path):
+def test_canon_ledger_story_events_returns_stable_retirement(monkeypatch, tmp_path, capsys):
     module = _load_canon_ledger_module()
     project_root = tmp_path / "book"
     (project_root / ".canon-ledger").mkdir(parents=True, exist_ok=True)
     (project_root / ".canon-ledger" / "state.json").write_text("{}", encoding="utf-8")
-    called = {}
-
-    def _fake_run_script(script_name, argv):
-        called["script_name"] = script_name
-        called["argv"] = list(argv)
-        return 0
-
-    monkeypatch.setattr(module, "_run_script", _fake_run_script)
+    monkeypatch.setattr(
+        module,
+        "_run_script",
+        lambda *_args, **_kwargs: pytest.fail("retired story-events must not dispatch"),
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -405,8 +407,57 @@ def test_canon_ledger_story_events_forwards(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as exc:
         module.main()
 
-    assert int(exc.value.code or 0) == 0
-    assert called["script_name"] == "story_events.py"
+    captured = capsys.readouterr()
+    assert int(exc.value.code or 0) == 2
+    payload = json.loads(captured.err)
+    assert payload["error"] == "canon_v3_public_command_disabled"
+    assert payload["tool"] == "story-events"
+    assert payload["replacement"].endswith("canon-v3 query snapshot")
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        ["chapter-binding", "--chapter", "3"],
+        ["memory-contract", "export-asof", "--chapter", "3"],
+    ],
+)
+def test_unified_cli_rejects_derived_output_over_current(
+    monkeypatch,
+    tmp_path,
+    capsys,
+    tail,
+):
+    module = _load_canon_ledger_module()
+    project_root = tmp_path / "book"
+    (project_root / ".canon-ledger").mkdir(parents=True)
+    (project_root / ".canon-ledger" / "state.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    current = project_root / ".story-system" / "v3" / "CURRENT"
+    current.parent.mkdir(parents=True)
+    current.write_text("head-before\n", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "canon-ledger",
+            "--project-root",
+            str(project_root),
+            *tail,
+            "--out",
+            str(current),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+
+    captured = capsys.readouterr()
+    assert int(exc.value.code or 0) == 2
+    assert json.loads(captured.err)["error"] == "canon_v3_public_command_disabled"
+    assert current.read_text(encoding="utf-8") == "head-before\n"
 
 
 def test_preflight_succeeds_for_valid_project_root(monkeypatch, tmp_path, capsys):

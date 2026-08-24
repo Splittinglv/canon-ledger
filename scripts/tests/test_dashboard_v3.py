@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from scripts.data_modules.chapter_content_binding import build_chapter_binding
 from scripts.data_modules.canon_v3.evidence import candidate_digest
 from scripts.data_modules.canon_v3.projection import projection_path
+from scripts.data_modules.canon_v3.query import CanonQueryFacade
 from scripts.data_modules.canon_v3.schema import FactCandidate, OpenLoopCreatedClaim
 from scripts.data_modules.canon_v3.service import CanonV3Service
 from scripts.data_modules.tests.canon_v3_protocol_helpers import (
@@ -33,6 +34,32 @@ def _dashboard_module(monkeypatch):
 
 def _initialized_project(tmp_path: Path) -> Path:
     root = tmp_path / "book"
+    CanonV3Service(root).initialize_new_project()
+    return root
+
+
+def _initialized_project_with_genesis(tmp_path: Path) -> Path:
+    root = tmp_path / "book"
+    state = root / ".canon-ledger" / "state.json"
+    master = root / ".story-system" / "MASTER_SETTING.json"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    master.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(
+        '{"project_info":{"title":"Dashboard Genesis","genre":"玄幻"},'
+        '"progress":{"current_chapter":0}}',
+        encoding="utf-8",
+    )
+    master.write_text(
+        '{"initial_canon":{"protagonist":{"name":"林舟"},'
+        '"world":{"scale":"九州大陆"}},"setting_canon":{}}',
+        encoding="utf-8",
+    )
+    style = root / "设定集" / "文风提示词.md"
+    style.parent.mkdir(parents=True, exist_ok=True)
+    style.write_text(
+        "# 文风提示词\n\n## 作者提示词\n\n- STYLE_SENTINEL_SHORT_SENTENCES\n",
+        encoding="utf-8",
+    )
     CanonV3Service(root).initialize_new_project()
     return root
 
@@ -84,6 +111,42 @@ def test_dashboard_fact_surfaces_share_exact_head_binding_and_are_read_only(
         assert len(payload["binding"]["projection_digest"]) == 64
 
     assert _file_fingerprint(root) == before
+
+
+def test_dashboard_active_facts_match_public_query_and_include_genesis(
+    monkeypatch,
+    tmp_path,
+):
+    root = _initialized_project_with_genesis(tmp_path)
+    module = _dashboard_module(monkeypatch)
+    query = CanonQueryFacade(root).snapshot(as_of_chapter=0)
+    expected = query["data"]["active_facts"]
+
+    with TestClient(module.create_app(root)) as client:
+        facts_response = client.get("/api/canon-v3/facts")
+        history_response = client.get("/api/canon-v3/history")
+
+    assert facts_response.status_code == 200
+    assert history_response.status_code == 200
+    facts = facts_response.json()
+    history = history_response.json()
+    assert facts["schema_version"] == "canon-v3/dashboard-facts/v2"
+    assert facts["authority_layer"] == "active_canon"
+    assert facts["items"] == expected
+    assert history["schema_version"] == "canon-v3/dashboard-history/v2"
+    assert history["authority_layer"] == "head_bound_canon_bundle"
+    assert history["facts_authority_layer"] == "active_canon"
+    assert history["history_authority_layer"] == "canon_history"
+    assert history["facts"] == expected
+    assert history["initial_canon"]["world"]["scale"] == "九州大陆"
+    assert history["author_axioms"] == query["data"]["author_axioms"]
+    assert facts["binding"]["head_hash"] == query["head_hash"]
+    assert facts["binding"]["workflow_digest"] == query["workflow_digest"]
+    assert facts["binding"]["projection_digest"] == query["projection_digest"]
+    assert facts["binding"]["as_of_chapter"] == 0
+    serialized = str(history)
+    assert "legacy_base" not in serialized
+    assert "STYLE_SENTINEL_SHORT_SENTENCES" not in serialized
 
 
 def test_dashboard_facts_fail_closed_when_projection_is_stale(
@@ -177,6 +240,10 @@ def test_dashboard_obligations_are_derived_from_a_real_canon_commit(
 
     with TestClient(module.create_app(root)) as client:
         response = client.get("/api/canon-v3/obligations")
+        facts_response = client.get("/api/canon-v3/facts")
+        history_response = client.get(
+            "/api/canon-v3/facts?include_history=true"
+        )
 
     assert response.status_code == 200
     payload = response.json()
@@ -184,6 +251,26 @@ def test_dashboard_obligations_are_derived_from_a_real_canon_commit(
     assert payload["items"][0]["category"] == "open_loop_created"
     assert payload["items"][0]["payload"]["loop"] == "谁偷走了灵钥"
     assert payload["binding"]["as_of_chapter"] == 1
+    assert facts_response.status_code == 200
+    chapter_fact = next(
+        row
+        for row in facts_response.json()["items"]
+        if row["category"] == "open_loop_created"
+    )
+    assert chapter_fact["origin"] == "chapter_commit"
+    assert chapter_fact["source_chapter"] == 1
+    assert chapter_fact["payload"]["loop"] == "谁偷走了灵钥"
+    assert history_response.status_code == 200
+    historical = history_response.json()
+    assert historical["authority_layer"] == "canon_history"
+    assert historical["authority_state"] == "historical"
+    assert historical["view"] == "history"
+    assert historical["items"]
+    assert all(
+        row["authority_state"] == "historical"
+        and row["usable_as_active_fact"] is False
+        for row in historical["items"]
+    )
 
 
 def test_dashboard_legacy_index_analytics_are_explicitly_retired(
@@ -234,6 +321,7 @@ def test_dashboard_primary_frontend_does_not_call_legacy_fact_surfaces():
             "App.jsx",
             "api.js",
             "pages/OverviewPage.jsx",
+            "pages/FactsPage.jsx",
             "pages/SystemPage.jsx",
             "pages/ForeshadowingPage.jsx",
         )
@@ -246,5 +334,7 @@ def test_dashboard_primary_frontend_does_not_call_legacy_fact_surfaces():
     assert "Fallback" not in primary_sources
     assert "projectInfo?.plot_threads" not in primary_sources
     assert "/api/canon-v3/obligations" in primary_sources
+    assert "/api/canon-v3/facts" in primary_sources
+    assert "STAGING、旧索引和文风偏好不会进入本页" in primary_sources
     assert "allowed_actions" in primary_sources
     assert "primary_action" in primary_sources

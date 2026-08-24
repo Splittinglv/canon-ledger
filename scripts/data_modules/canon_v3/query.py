@@ -16,6 +16,7 @@ from typing import Any, Mapping
 from ..canonical_history import export_asof_snapshot
 from ..workflow_authority import CanonReadModelUnavailable, WorkflowAuthority
 from .author_axiom import record_digest
+from .public_read import active_fact_rows
 from .schema import AuthorAxiomRecord, AuthorAxiomSource, canonical_digest
 
 
@@ -239,11 +240,25 @@ class CanonQueryFacade:
     def snapshot(self, *, as_of_chapter: int | None = None) -> dict[str, Any]:
         bound = self._bound_snapshot(as_of_chapter)
         actual = int(bound.as_of.get("as_of_chapter") or 0)
+        data = dict(bound.as_of)
+        data["active_facts"] = active_fact_rows(data)
         return {
             **self._binding(bound, actual),
             "query": "snapshot",
-            "data": bound.as_of,
+            "data": data,
         }
+
+    def bound_snapshot(
+        self, *, as_of_chapter: int | None = None
+    ) -> _BoundSnapshot:
+        """Expose one validated bundle to trusted public adapters.
+
+        Dashboard adapters need the sanitized snapshot and the exact
+        projection chapter ledger in one read.  Returning the already-checked
+        bundle prevents them from rebuilding a second authority path.
+        """
+
+        return self._bound_snapshot(as_of_chapter)
 
     def entity_state(
         self,

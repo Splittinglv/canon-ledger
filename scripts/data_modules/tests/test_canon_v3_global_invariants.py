@@ -11,6 +11,7 @@ from scripts.data_modules.tests.canon_v3_protocol_helpers import (
 )
 
 from scripts.data_modules.canon_v3.evidence import candidate_digest
+from scripts.data_modules.canon_v3.compiler import CompileError
 from scripts.data_modules.canon_v3.entity_registry import (
     EntityRegistryConflict,
     build_approved_entity_registry,
@@ -125,6 +126,56 @@ def _approve(service: CanonV3Service, snapshot: dict) -> None:
     ]
     if decisions:
         record_decisions_v2(service, decisions, snapshot=snapshot)
+
+
+def test_known_soft_chapter_candidate_is_rejected_before_staging(tmp_path):
+    root = tmp_path / "book"
+    path, binding = _write(root, 1, "林舟的愿望从归乡变为复仇。\n")
+    candidate = _candidate(
+        path,
+        binding,
+        "soft-wish",
+        CharacterStateChangedClaim(
+            subject="林舟", attribute="愿望", before="归乡", after="复仇"
+        ),
+        "林舟的愿望从归乡变为复仇。",
+    )
+    service = CanonV3Service(root)
+
+    with pytest.raises(
+        CompileError,
+        match="canon_v3_candidate_known_soft_semantics_forbidden",
+    ):
+        service.prepare(_batch(service, binding, [candidate]))
+
+    assert service.workflow_snapshot()["state"] == "ready"
+
+
+def test_free_form_world_rule_requires_exact_boundary_classification(tmp_path):
+    root = tmp_path / "book"
+    path, binding = _write(root, 1, "午夜后任何人都不能施法。\n")
+    candidate = _candidate(
+        path,
+        binding,
+        "custom-world-rule",
+        WorldRuleRevealedClaim(rule="午夜后任何人都不能施法"),
+        "午夜后任何人都不能施法。",
+    )
+    service = CanonV3Service(root)
+
+    staged = service.prepare(_batch(service, binding, [candidate]))
+    assert staged["state"] == "awaiting_human"
+    assert len(staged["cases"]) == 1
+    assert staged["cases"][0]["kind"] == "ambiguity"
+    assert "fact_boundary:human_classification_required" in staged[
+        "cases"
+    ][0]["reasons"]
+    assert "omit" in staged["cases"][0]["allowed_actions"]
+    _approve(service, staged)
+    finalize_v2(service)
+    assert read_projection(root)["facts"][0]["claim"]["rule"] == (
+        "午夜后任何人都不能施法"
+    )
 
 
 def test_same_wording_creates_distinct_promise_and_timeline_instances(tmp_path):
@@ -299,15 +350,15 @@ def test_rule_remains_active_while_each_violation_is_preserved(tmp_path):
 
 def test_state_slot_keeps_canonical_field_when_display_wording_changes(tmp_path):
     root = tmp_path / "book"
-    path1, binding1 = _write(root, 1, "林舟的愿望从归乡变为复仇。\n")
+    path1, binding1 = _write(root, 1, "林舟的生死从存活变为失踪。\n")
     first_candidate = _candidate(
         path1,
         binding1,
         "state-first",
         CharacterStateChangedClaim(
-            subject="林舟", attribute="愿望", before="归乡", after="复仇"
+            subject="林舟", attribute="生死", before="存活", after="失踪"
         ),
-        "林舟的愿望从归乡变为复仇。",
+        "林舟的生死从存活变为失踪。",
     )
     service = CanonV3Service(root)
     first = service.prepare(_batch(service, binding1, [first_candidate]))
@@ -315,7 +366,7 @@ def test_state_slot_keeps_canonical_field_when_display_wording_changes(tmp_path)
     finalize_v2(service)
     prior = read_projection(root)["facts"][0]
 
-    path2, binding2 = _write(root, 2, "林舟的夙愿从复仇变为守护故乡。\n")
+    path2, binding2 = _write(root, 2, "林舟的生命状态从失踪变为死亡。\n")
     second_candidate = _candidate(
         path2,
         binding2,
@@ -323,15 +374,15 @@ def test_state_slot_keeps_canonical_field_when_display_wording_changes(tmp_path)
         CharacterStateChangedClaim(
             slot_id=prior["claim"]["slot_id"],
             subject="林舟",
-            attribute="夙愿",
-            before="复仇",
-            after="守护故乡",
+            attribute="生命状态",
+            before="失踪",
+            after="死亡",
         ),
-        "林舟的夙愿从复仇变为守护故乡。",
+        "林舟的生命状态从失踪变为死亡。",
     )
     second = service.prepare(_batch(service, binding2, [second_candidate]))
     compiled = second["cases"][0]["review_material"]["compiled_effects"][0]
-    assert compiled["claim"]["canonical_field"] == "愿望"
+    assert compiled["claim"]["canonical_field"] == "生死"
     assert compiled["prior_fact_digest"] == prior["fact_digest"]
     _approve(service, second)
     finalize_v2(service)
@@ -344,10 +395,10 @@ def test_state_slot_keeps_canonical_field_when_display_wording_changes(tmp_path)
         if row.get("category") == "character_state_changed"
     ]
     assert len(active_states) == 1
-    assert active_states[0]["field"] == "愿望"
-    assert active_states[0]["value"] == "守护故乡"
+    assert active_states[0]["field"] == "生死"
+    assert active_states[0]["value"] == "死亡"
 
-    path3, binding3 = _write(root, 3, "苏月的愿望从复仇变为归隐。\n")
+    path3, binding3 = _write(root, 3, "苏月的生死从存活变为死亡。\n")
     hijack = _candidate(
         path3,
         binding3,
@@ -355,11 +406,11 @@ def test_state_slot_keeps_canonical_field_when_display_wording_changes(tmp_path)
         CharacterStateChangedClaim(
             slot_id=read_projection(root)["facts"][0]["claim"]["slot_id"],
             subject="苏月",
-            attribute="愿望",
-            before="复仇",
-            after="归隐",
+            attribute="生死",
+            before="存活",
+            after="死亡",
         ),
-        "苏月的愿望从复仇变为归隐。",
+        "苏月的生死从存活变为死亡。",
     )
     with pytest.raises(
         PreparedTransactionInvalid,
@@ -518,15 +569,15 @@ def test_negative_decision_cannot_be_erased_by_reprepare_or_public_seal_subset(t
 
 def test_public_seal_rejects_non_authoritative_old_decision_subset(tmp_path):
     root = tmp_path / "book"
-    path, binding = _write(root, 1, "林舟的愿望从归乡变为复仇。\n")
+    path, binding = _write(root, 1, "林舟的生死从存活变为死亡。\n")
     candidate = _candidate(
         path,
         binding,
         "state-review",
         CharacterStateChangedClaim(
-            subject="林舟", attribute="愿望", before="归乡", after="复仇"
+            subject="林舟", attribute="生死", before="存活", after="死亡"
         ),
-        "林舟的愿望从归乡变为复仇。",
+        "林舟的生死从存活变为死亡。",
     )
     service = CanonV3Service(root)
     staged = service.prepare(_batch(service, binding, [candidate]))

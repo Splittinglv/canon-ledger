@@ -189,9 +189,18 @@ candidate/record/effect/transaction digest 或根据文档猜 strict schema。
   删除，active authority 也不回读 live 文件。
 - add/update/remove 都生成 exact 人工 case；旧 active record 未提及会形成
   remove case，不能静默删除。同语义更换 source 不会绕过负裁决谱系。
-- runtime 同时检查 axiom key、closed category 与实际 value；文风、文笔、动机、人格、
-  人设、成长弧等软内容即使用 `world_rule` 或无害 key 包装也必须拒绝。存量软 record
-  会让 workflow 保持只读，清理 proposal 只能精确保留其它硬 records 并逐项人工 remove。
+- runtime 使用 `fact-boundary/v2` 同时检查章节 candidate、legacy event、初始化/设定
+  leaf 与 author axiom。已知文风、文笔、动机、人格、人设、成长弧等软内容即使用
+  `world_rule`、`规则` 或无害 key 包装也必须拒绝；未能由闭合结构证明的自由字段是
+  `ambiguous`，必须以 exact case 明确分类或改写，不能因“未命中软关键词”自动变成
+  硬事实。普通 conflict/checkpoint 批准不能覆盖这条边界。
+- author-axiom 或章节 case 的 review material 若标记
+  `fact_boundary_human_classification_required=true` 或 reason code
+  `fact_boundary:human_classification_required`，`approve` 的精确含义仅是把该版本的
+  proposed value 分类为客观故事事实；candidate/source/digest 变化后必须重新分类。
+- 存量软或旧 policy record/effect 会让 workflow 保持只读。能够安全精确清理的走
+  recertification/supersession；有活动下游依赖或无法原地重认证时保留原 HEAD 只读，
+  按 primary action 在 clean target 重建，不能静默过滤事实后继续写作。
 - 未重新认证的设定不得进入事实查询或写作上下文。
 - `设定集/文风提示词.md` 永远属于 style-only；修改它不得改变 HEAD、workflow、migration digest、projection 或人工 case。
 
@@ -206,16 +215,35 @@ STAGING、Git、legacy index 或未来事实。只读 audit 不生成人工决�
 
 ## Legacy 边界
 
-生产 Skill 禁止调用：`chapter-commit`、`chapter-commit --from-last-commit`、旧 `human-review resolve`、旧 `review-pipeline` 写队列、事实型 `update-state`，以及全部 state/index/memory/rag/entity adapters。这些 adapters 即使执行查询也可能建库或写 observation。
+生产 Skill 禁止调用：`chapter-commit`、`chapter-commit --from-last-commit`、旧 `human-review resolve`、旧 `review-pipeline` 写队列、事实型 `update-state`、公开
+`story-events`，以及全部 state/index/memory/rag/entity adapters。这些 adapters 即使执行
+查询也可能建库、读取失绑事件或写 observation。
 
 legacy 数据只允许迁移编译器以及纯读 `audit-cutover` / `repair-cutover --dry-run` 读取；退役参数 `--legacy-read-only` 不再开放 adapter 查询。legacy 不能成为写作上下文或发布依据。
 
-新 cutover 只把客观长期事实收入 `legacy-genesis/v3 + legacy-fact-snapshot/v3`；
+新 cutover 只把通过 `fact-boundary/v2` 的客观长期事实收入
+`legacy-genesis/v3 + legacy-fact-snapshot/v3`；
 已知文风/动机/性格/人设/成长弧只留 exclusion receipt，不进 active Canon。旧 v2
 按原字节语义校验，`audit-cutover|repair-cutover --dry-run` 附带只读
 `fact_boundary_analysis`。`ready_to_supersede` fragment 必须合并进保留全部当前
 author-axiom records 的完整 proposal；`manual_fork_required` 或人工分类未完成时保持只读。
 只有 `clean` 才能继续写作；其它 state 不得通过 query/context 消费污染投影。
+
+## 派生工件与 CLI capability
+
+可信 `canon_ledger.py` 不是任意项目文件写权限。正文 binding 与 N-1 快照只能分别
+写入 `.canon-ledger/tmp/chapter_binding.json` 和
+`.canon-ledger/tmp/asof_snapshot.json`；其它 `--out`、CURRENT/STAGING/objects、正文、
+项目外路径或符号链接目标必须拒绝。prepare/decide/finalize 也只消费各 Skill 约定的
+项目内 tmp JSON，不读取 raw v3 object 或 legacy cache 猜协议。
+
+`init` target 不得位于已有书项目、插件根、`.story-system`、`.canon-ledger`、`.cursor`
+或 `.git` 内部。Hook 负责提前拒绝，CLI/runtime 必须再次执行同一 capability/path 校验；
+不能因 Hook 缺失而获得更宽权限。
+
+`memory-contract query-*`、`get-open-loops|get-obligations|get-timeline` 也属于事实读取面。
+当 HEAD/projection 不可用、迁移未完成、历史来源无效或读中 workflow 变化时必须非零退出并
+返回 `usable_for_writing=false`；禁止用空数组、`not_found` 或空时间线伪装成“当前没有事实”。
 
 ## 报告与恢复
 

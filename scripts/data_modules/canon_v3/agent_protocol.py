@@ -180,7 +180,7 @@ def validate_agent_artifact(kind: str, raw: Mapping[str, Any]) -> dict[str, Any]
                 category=record.category,
                 value=record.source.value,
             )
-            is not FactBoundaryClass.HARD_FACT
+            is FactBoundaryClass.KNOWN_SOFT
         )
         if non_fact_keys:
             raise ValueError(

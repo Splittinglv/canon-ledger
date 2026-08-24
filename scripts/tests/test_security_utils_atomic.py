@@ -8,7 +8,13 @@ from pathlib import Path
 import pytest
 
 import security_utils
-from security_utils import AtomicWriteError, atomic_write_json, read_json_safe, resolve_inside_project
+from security_utils import (
+    AtomicWriteError,
+    atomic_write_json,
+    atomic_write_project_json_role,
+    read_json_safe,
+    resolve_inside_project,
+)
 
 
 def test_atomic_write_retries_transient_permission_error(tmp_path, monkeypatch):
@@ -147,3 +153,71 @@ def test_resolve_inside_project_accepts_real_file_inside(tmp_path):
     resolved = resolve_inside_project(project, target, reject_leaf_symlink=True)
     assert resolved == target.resolve()
     resolved.relative_to(project.resolve())
+
+
+def test_fixed_project_output_role_cannot_overwrite_authority(tmp_path):
+    project = tmp_path / "book"
+    (project / ".canon-ledger").mkdir(parents=True)
+    current = project / ".story-system" / "v3" / "CURRENT"
+    current.parent.mkdir(parents=True)
+    current.write_text("head-before\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="安全派生文件"):
+        atomic_write_project_json_role(
+            project,
+            current,
+            {"bad": True},
+            expected_relative=".canon-ledger/tmp/asof_snapshot.json",
+        )
+
+    assert current.read_text(encoding="utf-8") == "head-before\n"
+
+
+def test_fixed_project_output_role_is_atomic_and_rejects_symlink_parent(tmp_path):
+    project = tmp_path / "book"
+    runtime = project / ".canon-ledger"
+    runtime.mkdir(parents=True)
+    expected = runtime / "tmp" / "asof_snapshot.json"
+
+    written = atomic_write_project_json_role(
+        project,
+        expected,
+        {"ok": True},
+        expected_relative=".canon-ledger/tmp/asof_snapshot.json",
+    )
+    assert written == expected
+    assert read_json_safe(expected) == {"ok": True}
+    assert not list(expected.parent.glob("*.tmp"))
+
+    expected.unlink()
+    expected.parent.rmdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _symlink_or_skip(outside, expected.parent, target_is_directory=True)
+    with pytest.raises(ValueError, match="符号链接"):
+        atomic_write_project_json_role(
+            project,
+            expected,
+            {"bad": True},
+            expected_relative=".canon-ledger/tmp/asof_snapshot.json",
+        )
+    assert not (outside / "asof_snapshot.json").exists()
+
+
+def test_fixed_project_output_role_accepts_the_project_root_symlink_spelling(
+    tmp_path,
+):
+    project = tmp_path / "real-book"
+    (project / ".canon-ledger").mkdir(parents=True)
+    alias = tmp_path / "book-alias"
+    _symlink_or_skip(project, alias, target_is_directory=True)
+
+    written = atomic_write_project_json_role(
+        alias,
+        alias / ".canon-ledger" / "tmp" / "asof_snapshot.json",
+        {"ok": True},
+        expected_relative=".canon-ledger/tmp/asof_snapshot.json",
+    )
+
+    assert written == project / ".canon-ledger" / "tmp" / "asof_snapshot.json"
+    assert read_json_safe(written) == {"ok": True}

@@ -1,7 +1,7 @@
 # 叙典 CanonLedger
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-8.1.0-brightgreen.svg)](.cursor-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-9.0.0-brightgreen.svg)](.cursor-plugin/plugin.json)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 
 记住故事事实，不替你决定文风。
@@ -29,6 +29,7 @@
 ```text
 正文 + 作者硬设定
   -> FactCandidate（逐字段 SourceRef + support_map）
+  -> fact-boundary/v2（objective / advisory / ambiguous）
   -> ReviewObservation + 完整 ScanAttestation
   -> canon-v3 prepare
   -> 必要时 canon-v3 decide
@@ -66,6 +67,11 @@ STAGING 版本；Agent 不能绕过 runtime helper 直接填写摘要。
 只有“引文在正文里出现”并不足以入正史；角色、物品、地点、持有人、前后状态等 claim 字段必须由它绑定的来源实际支持。无法可靠判断时转人工，不能猜。
 
 模型不再提交 `accepted_events`、`state_deltas`、`entity_deltas` 或 `timeline_events`。运行时只从通过证据验证和人工策略的 typed candidates 派生 CanonEffects。
+
+schema 合法不等于已获事实准入。已知文风、文笔、节奏、人物动机、人格、人设、
+成长弧和一般因果直接留在 advisory/style；自由状态、关系或世界规则如果不能由闭合结构
+证明，会生成与 exact candidate/record digest 绑定的人工分类 case。没有命中软关键词
+绝不自动等于硬事实，旧版本 active fact 缺少当前 policy 证明时项目保持只读。
 
 所有可变事实统一经过 Active Slot Registry：跨章更新绑定 exact `prior_fact_digest`，同章连续变化绑定 `prior_effect_id`；承诺兑现、伏笔关闭必须命中 active prior。状态字段、知识命题与正文显示词分离；新承诺、新伏笔、新时间事件和规则违反按 candidate+evidence 生成独立实例，因此相同措辞不会相互覆盖。`omit/rewrite/correct` 的负裁决会随不可变 commit/manifest 谱系保留，重新 prepare 不能让它们消失。
 
@@ -171,7 +177,8 @@ CLI、write gate、报告、context、Skills 和 Dashboard 读取同一个 `cano
 
 `canon-v3 initialize` 只创建全新项目的 genesis；已有 HEAD 时不能用它保存或更新硬设定。
 `/canon-ledger-init` 同样只接受不存在或严格空的目标；非空目录、已有 v3、
-legacy/malformed 项目或 symlink 目标都在首次写入前拒绝。新项目在同级临时目录完整
+legacy/malformed 项目、symlink 目标，以及已有书项目、插件根、`.story-system`、
+`.canon-ledger`、`.cursor` 或 `.git` 内部目标都在首次写入前拒绝。新项目在同级临时目录完整
 构建并验证后才发布，init 不再兼任升级或就地修复。
 
 ### 写一章
@@ -327,6 +334,12 @@ history  # 与 query snapshot 同一净化、HEAD-bound 公开视图
 rebuild-projection
 ```
 
+派生写入只有两个固定公开目标：chapter binding 写
+`.canon-ledger/tmp/chapter_binding.json`，N-1 snapshot 写
+`.canon-ledger/tmp/asof_snapshot.json`。其它 `--out`、CURRENT/STAGING/objects、正文或
+项目外路径都会由 CLI 和 Hook 同时拒绝。公开 `story-events` 已退役；活动事件事实使用
+`canon-v3 query/history`，legacy event 只能在 cutover/repair audit 中查看。
+
 v3 不可变对象、活动 manifest、CURRENT 和 projection binding 位于 `.story-system/v3/`。派生投影可以删除重建，不能反向成为正史来源。
 
 ## 安装
@@ -368,8 +381,8 @@ ln -s "/absolute/path/to/canon-ledger" ~/.cursor/plugins/local/canon-ledger
 ```bash
 npm --prefix dashboard/frontend ci
 python scripts/run_acceptance.py --mode full
-python scripts/sync_plugin_version.py --check --expected-version 8.1.0
-python scripts/validate_release_notes.py --version 8.1.0 --previous-tag v8.0.0 --format json
+python scripts/sync_plugin_version.py --check --expected-version 9.0.0
+python scripts/validate_release_notes.py --version 9.0.0 --previous-tag v8.1.0 --format json
 ```
 
 此外要对全部 9 个 Skill 运行 `skill-creator` 的 `quick_validate.py`。`full`
@@ -400,7 +413,8 @@ workspace/
 
 | 版本 | 说明 |
 |------|------|
-| **v8.1.0 (当前)** | 只守长期事实边界；新增 clean-only init、统一 Agent/人工协议、exact STAGING 恢复、planning/history facade、v8 软事实分析与 HEAD-bound Dashboard/验收。 |
+| **v9.0.0 (当前)** | 统一事实准入证明、存量重认证、CLI/Hook capability 与完整 HEAD-bound 公共读取面；退役无绑定 legacy story-events。 |
+| **v8.1.0** | 只守长期事实边界；新增 clean-only init、统一 Agent/人工协议、exact STAGING 恢复、planning/history facade、v8 软事实分析与 HEAD-bound Dashboard/验收。 |
 | **v8.0.0** | Canon v3 统一正史写入、精确人工决定、managed author-axiom、fail-closed 迁移/重新认证与 HEAD-bound 投影。 |
 | **v7.2.0** | 堵住正史静默改写与前缀脱节；伏笔、关系和知识边界绑定正文证据。 |
 | **v7.1.0** | 新增对话式人工确认，并收紧章节提交与确认链。 |

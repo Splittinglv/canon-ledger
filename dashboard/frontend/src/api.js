@@ -56,6 +56,10 @@ export function fetchCanonObligations() {
     return fetchJSON('/api/canon-v3/obligations')
 }
 
+export function fetchCanonFacts() {
+    return fetchJSON('/api/canon-v3/facts')
+}
+
 export function fetchCommits(params = {}) {
     return fetchJSON('/api/commits', params)
 }

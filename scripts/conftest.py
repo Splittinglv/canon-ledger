@@ -13,6 +13,7 @@ import pytest
 
 _ORIGINAL_SQLITE_CONNECT = sqlite3.connect
 _ORIGINAL_TEMPORARY_DIRECTORY = tempfile.TemporaryDirectory
+_SYSTEM_TEMP_ROOT = Path(tempfile.gettempdir()).resolve()
 _TEMPORARY_DIRECTORY_SUPPORTS_DELETE = (
     "delete" in inspect.signature(_ORIGINAL_TEMPORARY_DIRECTORY).parameters
 )
@@ -121,7 +122,12 @@ def _repo_root() -> Path:
 
 
 def _tmp_root() -> Path:
-    root = _repo_root() / ".tmp" / "pytest"
+    configured = os.environ.get("CANON_LEDGER_TEST_TEMP_ROOT", "").strip()
+    if configured:
+        root = Path(configured).expanduser().resolve()
+    else:
+        identity = uuid.uuid5(uuid.NAMESPACE_URL, str(_repo_root())).hex[:12]
+        root = _SYSTEM_TEMP_ROOT / f"canon-ledger-pytest-{identity}"
     root.mkdir(parents=True, exist_ok=True)
     return root
 

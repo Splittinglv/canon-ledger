@@ -7,6 +7,7 @@ import pytest
 from data_modules.canon_v3.fact_boundary import (
     FactBoundaryClass,
     classify_author_axiom_leaf,
+    classify_legacy_fact_row,
     classify_setting_leaf,
 )
 
@@ -45,7 +46,7 @@ def test_known_soft_fields_never_become_canon(field: str) -> None:
 
 @pytest.mark.parametrize(
     "field",
-    ["姓名", "身份", "生死", "地点", "境界", "规则", "代价", "持有者"],
+    ["姓名", "身份", "生死", "地点", "境界", "代价", "持有者"],
 )
 def test_explicit_objective_fields_are_hard_facts(field: str) -> None:
     assert (
@@ -75,6 +76,50 @@ def test_custom_setting_field_is_ambiguous_instead_of_guessed() -> None:
         )
         == FactBoundaryClass.AMBIGUOUS
     )
+
+
+@pytest.mark.parametrize("field", ["状态", "规则", "硬约束", "限制", "禁忌"])
+def test_open_ended_container_fields_require_human_classification(
+    field: str,
+) -> None:
+    assert (
+        classify_setting_leaf(
+            {
+                "source": "设定集/自定义.md",
+                "section": "自定义",
+                "field": field,
+                "value": "未知自由语义",
+                "category": "world_rule",
+            }
+        )
+        == FactBoundaryClass.AMBIGUOUS
+    )
+
+
+def test_legacy_free_form_relationship_requires_human_classification() -> None:
+    assert classify_legacy_fact_row(
+        {
+            "id": "relationship-1",
+            "category": "relationship",
+            "subject": "林舟",
+            "field": "苏月",
+            "value": "信任",
+            "source_event_id": "relationship-1",
+        }
+    ) == FactBoundaryClass.AMBIGUOUS
+
+
+def test_closed_genesis_character_names_remain_objective_after_source_sanitizing() -> None:
+    assert classify_legacy_fact_row(
+        {
+            "id": "setup-characters-heroine_names",
+            "category": "story_fact",
+            "subject": "characters",
+            "field": "heroine_names",
+            "value": "苏云",
+            "source_chapter": 0,
+        }
+    ) == FactBoundaryClass.HARD_FACT
 
 
 @pytest.mark.parametrize(
@@ -251,6 +296,7 @@ def test_custom_writing_rules_cannot_be_promoted_by_world_rule_category(
         ("immutable_law", "world_rule", "全书文风冷峻，短句为主"),
         ("dialogue_law", "world_rule", "对白要简短"),
         ("rule_17", "world_rule", "每段最多三句话"),
+        ("rule_18", "world_rule", "禁止华丽修辞"),
     ],
 )
 def test_author_axiom_boundary_checks_key_category_and_actual_value(
@@ -263,9 +309,21 @@ def test_author_axiom_boundary_checks_key_category_and_actual_value(
     ) == FactBoundaryClass.KNOWN_SOFT
 
 
-def test_author_axiom_boundary_keeps_objective_world_rule() -> None:
+def test_open_ended_author_axiom_world_rule_requires_exact_human_classification() -> None:
     assert classify_author_axiom_leaf(
         axiom_key="death_is_irreversible",
         category="world_rule",
         value="死者不能复生",
-    ) == FactBoundaryClass.HARD_FACT
+    ) == FactBoundaryClass.AMBIGUOUS
+
+
+def test_allowlisted_initial_field_cannot_launder_writing_style_value() -> None:
+    assert classify_setting_leaf(
+        {
+            "source": "legacy:initial_canon",
+            "subject": "initial_world",
+            "field": "scale",
+            "value": "禁止华丽修辞",
+            "category": "world_rule",
+        }
+    ) == FactBoundaryClass.KNOWN_SOFT

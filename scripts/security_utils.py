@@ -374,6 +374,169 @@ def resolve_inside_project(
     return resolved
 
 
+def resolve_exact_project_role_path(
+    project_root: Union[str, Path],
+    path: Union[str, Path],
+    *,
+    expected_relative: Union[str, Path],
+) -> Path:
+    """Resolve one exact project path role without following link aliases.
+
+    ``resolve_inside_project`` is appropriate for bounded input documents, but
+    an output capability must be narrower: a caller cannot choose another file
+    merely because it is somewhere below the project root.  This helper also
+    rejects symlinked parents so a fixed scratch spelling cannot be redirected
+    onto Canon v3 authority storage.
+    """
+
+    root_input = Path(project_root).expanduser()
+    root_lexical = Path(os.path.abspath(os.fspath(root_input)))
+    root = root_input.resolve()
+    if not root.is_dir():
+        raise ValueError(f"项目根目录不存在或不是目录：{root}")
+    relative = Path(expected_relative)
+    if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+        raise ValueError("invalid fixed project path role")
+
+    supplied = Path(path).expanduser()
+    if not supplied.is_absolute():
+        supplied = root / supplied
+    # abspath removes lexical '.'/'..' without following links.  Compare the
+    # exact role before any parent directory is created.
+    supplied_lexical = Path(os.path.abspath(os.fspath(supplied)))
+    expected = root.joinpath(*relative.parts)
+    accepted_lexical_targets = {
+        os.path.normcase(os.fspath(expected)),
+        os.path.normcase(
+            os.fspath(root_lexical.joinpath(*relative.parts))
+        ),
+    }
+    if os.path.normcase(os.fspath(supplied_lexical)) not in accepted_lexical_targets:
+        try:
+            supplied_resolved = supplied.resolve(strict=False)
+        except OSError as exc:
+            raise ValueError("无法解析安全派生输出路径") from exc
+        if os.path.normcase(os.fspath(supplied_resolved)) != os.path.normcase(
+            os.fspath(expected)
+        ):
+            raise ValueError(
+                "输出路径不属于该命令的安全派生文件："
+                f"expected={relative.as_posix()}"
+            )
+
+    role_root = root / relative.parts[0]
+    if (
+        not role_root.is_dir()
+        or role_root.is_symlink()
+    ):
+        raise ValueError(f"项目路径角色根目录不存在或不安全：{role_root}")
+
+    cursor = root
+    for part in relative.parts:
+        cursor = cursor / part
+        try:
+            if cursor.is_symlink():
+                raise ValueError(f"拒绝符号链接输出路径：{cursor}")
+            cursor.lstat()
+        except FileNotFoundError:
+            # Once one component is absent, no descendant can exist yet.
+            break
+        except OSError as exc:
+            raise ValueError(f"无法安全检查输出路径：{cursor}") from exc
+
+    resolved_parent = expected.parent.resolve(strict=False)
+    try:
+        resolved_parent.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("输出目录必须位于项目内") from exc
+    return expected
+
+
+def atomic_write_project_json_role(
+    project_root: Union[str, Path],
+    path: Union[str, Path],
+    payload: Any,
+    *,
+    expected_relative: Union[str, Path],
+    indent: int = 2,
+) -> Path:
+    """Atomically write JSON to one command-owned, non-authoritative path."""
+
+    target = resolve_exact_project_role_path(
+        project_root,
+        path,
+        expected_relative=expected_relative,
+    )
+    relative_parent = Path(expected_relative).parent
+    parent_cursor = Path(project_root).expanduser().resolve()
+    for part in relative_parent.parts:
+        parent_cursor = parent_cursor / part
+        if parent_cursor.exists():
+            if parent_cursor.is_symlink() or not parent_cursor.is_dir():
+                raise ValueError(f"安全派生输出目录不安全：{parent_cursor}")
+            continue
+        # Each component is fixed by the command role.  Create one level at a
+        # time so ``parents=True`` cannot follow a newly swapped arbitrary
+        # ancestor and materialize a runtime tree elsewhere.
+        parent_cursor.mkdir()
+    # Revalidate after mkdir: another process must not have exchanged the
+    # newly-created scratch directory for a link between validation and use.
+    target = resolve_exact_project_role_path(
+        project_root,
+        path,
+        expected_relative=expected_relative,
+    )
+    if target.exists() and (target.is_symlink() or not target.is_file()):
+        raise ValueError(f"安全派生输出不是普通文件：{target}")
+
+    try:
+        content = json.dumps(payload, ensure_ascii=False, indent=indent) + "\n"
+    except (TypeError, ValueError) as exc:
+        raise AtomicWriteError(f"JSON 序列化失败: {exc}") from exc
+
+    descriptor, temp_name = tempfile.mkstemp(
+        suffix=".tmp",
+        prefix=target.stem + "_",
+        dir=target.parent,
+    )
+    temp_path: Optional[str] = temp_name
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # Recheck both the exact role and the destination leaf immediately
+        # before replace.  os.replace replaces a link entry rather than its
+        # target, but rejecting it keeps the capability contract unambiguous.
+        resolve_exact_project_role_path(
+            project_root,
+            path,
+            expected_relative=expected_relative,
+        )
+        if target.is_symlink():
+            raise ValueError(f"拒绝符号链接输出路径：{target}")
+        _replace_with_retry(temp_name, target)
+        temp_path = None
+        if os.name != "nt":
+            try:
+                directory_fd = os.open(target.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            except OSError:
+                # The file replacement is already complete; directory fsync
+                # is not supported by every mounted filesystem.
+                pass
+        return target
+    finally:
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+
 # ============================================================================
 # 原子化文件写入（防止并发冲突和数据损坏）
 # ============================================================================

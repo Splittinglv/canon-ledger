@@ -302,23 +302,29 @@ def cmd_write_gate(args: argparse.Namespace) -> int:
 
 def cmd_chapter_binding(args: argparse.Namespace) -> int:
     from .chapter_content_binding import ChapterBindingError, build_chapter_binding
+    from security_utils import (
+        atomic_write_project_json_role,
+        resolve_exact_project_role_path,
+    )
 
     try:
         project_root = _resolve_root(args.project_root)
+        expected_output = (
+            Path(".canon-ledger") / "tmp" / "chapter_binding.json"
+        )
+        if args.out:
+            resolve_exact_project_role_path(
+                project_root,
+                args.out,
+                expected_relative=expected_output,
+            )
         payload = build_chapter_binding(project_root, args.chapter)
         if args.out:
-            out_path = Path(args.out).expanduser()
-            if not out_path.is_absolute():
-                out_path = project_root / out_path
-            out_path = out_path.resolve()
-            try:
-                out_path.relative_to(project_root.resolve())
-            except ValueError as exc:
-                raise ValueError("chapter binding output must stay inside project_root") from exc
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
+            atomic_write_project_json_role(
+                project_root,
+                args.out,
+                payload,
+                expected_relative=expected_output,
             )
     except (ChapterBindingError, FileNotFoundError, OSError, ValueError) as exc:
         code = getattr(exc, "code", "chapter_binding_error")
@@ -804,11 +810,21 @@ def main() -> None:
 
     p_chapter_binding = sub.add_parser("chapter-binding", help="绑定当前章节正文的精确字节内容")
     p_chapter_binding.add_argument("--chapter", type=int, required=True, help="目标章节号")
-    p_chapter_binding.add_argument("--out", default="", help="可选 JSON 输出文件（必须位于项目内）")
+    p_chapter_binding.add_argument(
+        "--out",
+        default="",
+        help="可选：仅可写入 .canon-ledger/tmp/chapter_binding.json",
+    )
     p_chapter_binding.add_argument("--format", choices=["json", "text"], default="json")
     p_chapter_binding.set_defaults(func=cmd_chapter_binding)
 
-    p_projections = sub.add_parser("projections", help="从已有 commit 补跑或重放 projection")
+    p_projections = sub.add_parser(
+        "projections",
+        help="已退役；改用 canon-v3 rebuild-projection",
+        description=(
+            "旧 projection retry/replay 写入口已退役；参数仅保留用于稳定拒绝。"
+        ),
+    )
     projections_sub = p_projections.add_subparsers(dest="projection_action", required=True)
     p_projection_retry = projections_sub.add_parser("retry", help="补跑单章 projection")
     p_projection_retry.add_argument("--chapter", type=int, required=True, help="目标章节号")
@@ -1098,7 +1114,10 @@ def main() -> None:
     p_status = sub.add_parser("status", help="转发到 status_reporter.py")
     p_status.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_update_state = sub.add_parser("update-state", help="转发到 update_state.py")
+    p_update_state = sub.add_parser(
+        "update-state",
+        help="已退役；事实变更必须走 canon-v3 transaction",
+    )
     p_update_state.add_argument("args", nargs=argparse.REMAINDER)
 
     p_backup = sub.add_parser("backup", help="退役 writer；所有操作均拒绝")
@@ -1113,12 +1132,24 @@ def main() -> None:
     p_story_system = sub.add_parser("story-system", help="仅允许 stdout 规划渲染，禁止持久化")
     p_story_system.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_story_events = sub.add_parser("story-events", help="转发到 story_events.py")
-    p_story_events.add_argument("--chapter", type=int, default=0, help="目标章节号")
-    p_story_events.add_argument("--limit", type=int, default=200, help="查询条数")
-    p_story_events.add_argument("--health", action="store_true", help="输出事件链健康信息")
+    p_story_events = sub.add_parser(
+        "story-events",
+        help="已退役；活动事实改用 canon-v3 query snapshot",
+        description=(
+            "无 HEAD 绑定的 story-events 已退役；调用时只返回稳定拒绝与替代命令。"
+        ),
+    )
+    p_story_events.add_argument("--chapter", type=int, default=0, help="退役兼容参数")
+    p_story_events.add_argument("--limit", type=int, default=200, help="退役兼容参数")
+    p_story_events.add_argument("--health", action="store_true", help="改用 canon-v3 status")
 
-    p_commit = sub.add_parser("chapter-commit", help="转发到 chapter_commit.py")
+    p_commit = sub.add_parser(
+        "chapter-commit",
+        help="已退役；章节发布必须走 canon-v3 prepare/decide/finalize",
+        description=(
+            "旧 chapter-commit 写入口已退役；参数仅保留用于稳定拒绝。"
+        ),
+    )
     p_commit.add_argument("--chapter", type=int, required=True, help="目标章节号")
     p_commit.add_argument(
         "--from-last-commit",
@@ -1136,7 +1167,13 @@ def main() -> None:
     p_style_memory = sub.add_parser("style-memory", help="转发到 style_memory.py")
     p_style_memory.add_argument("args", nargs=argparse.REMAINDER)
 
-    p_review_pipeline = sub.add_parser("review-pipeline", help="转发到 review_pipeline.py")
+    p_review_pipeline = sub.add_parser(
+        "review-pipeline",
+        help="已退役；改用 reviewer artifact + canon-v3 transaction",
+        description=(
+            "旧 review-pipeline 写入口已退役；参数仅保留用于稳定拒绝。"
+        ),
+    )
     p_review_pipeline.add_argument("--chapter", type=int, required=True, help="目标章节号")
     p_review_pipeline.add_argument("--review-results", required=True, help="reviewer 原始结果 JSON 文件")
     p_review_pipeline.add_argument("--chapter-binding", required=True, help="审查开始前生成的正文内容绑定 JSON")
@@ -1150,7 +1187,13 @@ def main() -> None:
     p_placeholder_scan = sub.add_parser("placeholder-scan", help="扫描大纲/设定集未补齐占位")
     p_placeholder_scan.add_argument("--format", choices=["json", "text"], default="json", help="输出格式")
 
-    p_master_outline_sync = sub.add_parser("master-outline-sync", help="当前卷规划完成后写回 V+1 最小总纲锚点")
+    p_master_outline_sync = sub.add_parser(
+        "master-outline-sync",
+        help="已退役；改用 canon-v3 planning refresh-contracts",
+        description=(
+            "旧大纲写回入口已退役；参数仅保留用于稳定拒绝。"
+        ),
+    )
     p_master_outline_sync.add_argument("--volume", type=int, required=True, help="当前已完成规划的卷号")
     p_master_outline_sync.add_argument("--writeback-file", default="", help="显式结构化写回 JSON")
     p_master_outline_sync.add_argument("--format", choices=["json", "text"], default="json", help="输出格式")
@@ -1219,6 +1262,14 @@ def main() -> None:
     if rest[:1] == ["--"]:
         rest = rest[1:]
     rest = _strip_project_root_args(rest)
+
+    if any(token in {"-h", "--help"} for token in rest):
+        help_scripts = {
+            "memory-contract": "memory_cli.py",
+            "style-memory": "style_memory.py",
+        }
+        if tool in help_scripts:
+            raise SystemExit(_run_script(help_scripts[tool], rest))
 
     # init 是创建项目，不应该依赖/注入已存在 project_root
     if tool == "init":

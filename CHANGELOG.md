@@ -1,5 +1,30 @@
 # 更新日志
 
+## v9.0.0 - Canon 事实准入、能力与读取闭包
+
+发版范围：`v8.1.0..v9.0.0`。
+
+### Breaking changes
+
+- 章节候选、legacy event、初始化设定与 managed author axioms 统一执行事实准入；
+  未知自由语义不再默认提升为硬事实，旧人工 receipt 也不能替代当前事实分类。
+- 可信 CLI 改为完整 capability/path 授权；派生导出只允许固定 tmp 工件，clean init
+  不能嵌入已有项目或运行时保留目录。
+- 公开 `story-events` 退役；活动事实统一从 HEAD-bound public read facade 查询。
+- v8.1 活动事实若不满足新 boundary policy，会 fail closed 并要求按 workflow 的
+  primary action 重新认证；旧不可变对象仍完整保留。
+
+### Canon 与产品边界
+
+- 文风、文笔、节奏、口吻、人物动机、人格、人设、成长弧、一般因果和软大纲
+  继续只属于 advisory/style，不生成 Canon effect 或强制事实检查。
+- Dashboard、Query 与 Context 对 genesis、已认证迁移基础事实、章节事实和 author
+  axioms 使用同一 HEAD/generation/as-of 绑定。
+- stale projection、迁移、重新认证或读中 authority 变化不再降级为空结果或 legacy
+  index/state/event 数据。
+
+详见 [`releases/v9.0.0.md`](releases/v9.0.0.md)。
+
 ## v8.1.0 - 长期事实边界、恢复与公开协议全面收口
 
 发版范围：`v8.0.0..v8.1.0`。

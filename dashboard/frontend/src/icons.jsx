@@ -43,6 +43,17 @@ export function BookmarkIcon(props) {
     )
 }
 
+export function LedgerIcon(props) {
+    return (
+        <IconBase {...props}>
+            <rect x="4" y="3" width="16" height="18" />
+            <rect x="7" y="7" width="10" height="2" />
+            <rect x="7" y="11" width="10" height="2" />
+            <rect x="7" y="15" width="7" height="2" />
+        </IconBase>
+    )
+}
+
 export function FolderIcon(props) {
     return (
         <IconBase {...props}>

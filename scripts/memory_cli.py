@@ -25,7 +25,10 @@ def _ensure_scripts_path() -> None:
 _ensure_scripts_path()
 
 from data_modules.config import DataModulesConfig
-from data_modules.memory_contract_adapter import MemoryContractAdapter
+from data_modules.memory_contract_adapter import (
+    CanonMemoryReadUnavailable,
+    MemoryContractAdapter,
+)
 
 
 def _adapter(project_root: str) -> MemoryContractAdapter:
@@ -86,15 +89,32 @@ def cmd_get_obligations(args: argparse.Namespace) -> None:
 
 
 def cmd_export_asof(args: argparse.Namespace) -> None:
+    expected_output = Path(".canon-ledger") / "tmp" / "asof_snapshot.json"
+    if args.out:
+        # Validate the complete output capability before loading any runtime
+        # store.  An unsafe target must never be masked by an unrelated project
+        # health error, and direct memory_cli.py invocation remains fail-closed.
+        from security_utils import resolve_exact_project_role_path
+
+        resolve_exact_project_role_path(
+            args.project_root,
+            args.out,
+            expected_relative=expected_output,
+        )
     adapter = _adapter(args.project_root)
     snapshot = adapter.export_asof_snapshot(
         chapter=args.chapter,
         as_of_chapter=args.as_of_chapter,
     )
     if args.out:
-        from data_modules.story_contracts import write_json
+        from security_utils import atomic_write_project_json_role
 
-        write_json(Path(args.out), snapshot)
+        atomic_write_project_json_role(
+            args.project_root,
+            args.out,
+            snapshot,
+            expected_relative=expected_output,
+        )
     _json_out(snapshot)
 
 
@@ -169,7 +189,11 @@ def main() -> None:
         default=None,
         help="直接指定截止章节；缺省为 chapter-1",
     )
-    p_asof.add_argument("--out", default="", help="可选：把快照写入该 JSON 路径")
+    p_asof.add_argument(
+        "--out",
+        default="",
+        help="可选：仅可写入 .canon-ledger/tmp/asof_snapshot.json",
+    )
 
     args = parser.parse_args()
     if not args.command:
@@ -189,7 +213,23 @@ def main() -> None:
     if args.command == "export-asof":
         if args.chapter is None and args.as_of_chapter is None:
             parser.error("export-asof 需要 --chapter 或 --as-of-chapter")
-    dispatch[args.command](args)
+    try:
+        dispatch[args.command](args)
+    except CanonMemoryReadUnavailable as exc:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": str(exc),
+                    "authority": "canon_v3",
+                    "usable_for_writing": False,
+                    "replacement": "canon_ledger.py canon-v3 status",
+                },
+                ensure_ascii=False,
+            ),
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from exc
 
 
 if __name__ == "__main__":

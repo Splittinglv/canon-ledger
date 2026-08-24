@@ -5,6 +5,7 @@ import {
     BookmarkIcon,
     ChartBarIcon,
     FolderIcon,
+    LedgerIcon,
     SlidersIcon,
     UsersIcon,
     WifiIcon,
@@ -13,6 +14,7 @@ import {
 
 const NAV_ITEMS = [
     { to: '/', label: '总览', icon: ChartBarIcon, end: true },
+    { to: '/facts', label: 'Canon 事实', icon: LedgerIcon },
     { to: '/characters', label: '角色图鉴', icon: UsersIcon },
     { to: '/foreshadowing', label: '开放问题', icon: BookmarkIcon },
     { to: '/files', label: '文档浏览', icon: FolderIcon },

@@ -19,6 +19,11 @@ STAGING，或 legacy recertification detached plan。作者看到版本 A，只�
 - 人工展示只来自 `cases[].review_material`。
 - 作者必须逐条亲自选择；禁止默认批准、批量猜测或从旧 queue/proposal 拼装材料。
 - author-axiom material 必须直接展示 `proposed_category/proposed_value`。若内容实际是文风、文笔、节奏、口吻或写作偏好，不得建议 `approve` 为硬设定；说明它不属于 Canon，请作者选择 `omit|rewrite`，需要长期保存时改走 `/canon-ledger-learn`。
+- 若 review material 标记 `fact_boundary_human_classification_required=true`，或章节
+  requirement 含 `fact_boundary:human_classification_required`，必须向作者明确询问“是否把
+  这个 exact value 作为后续章节强制依赖的客观故事事实”。此时 `approve` 是绑定当前
+  candidate/record digest 的事实分类，不是普通无冲突放行；不属于客观事实时选择
+  `omit|correct|rewrite`，不能因为作者愿意保留该写法就提升为 Canon。
 - 只提交 case 返回的 `allowed_actions`。普通 checkpoint 通常为 `approve|rewrite`；ambiguity 通常为 `approve|omit|correct|rewrite`。
 - 禁止旧 `confirm|ignore|replace`、`human-review resolve` 和 `chapter-commit --from-last-commit`。
 - `projection_rebuild_required|invalid` 时不创建决定。

@@ -8,6 +8,10 @@ from collections import defaultdict
 from collections.abc import Iterable
 from typing import Any
 
+from .fact_boundary import (
+    FactBoundaryClass,
+    classify_candidate_claim,
+)
 from .evidence import (
     candidate_digest,
     source_digest,
@@ -342,20 +346,37 @@ def _build_requirement(
     digest: str,
     kind: FactKind,
     observations: list[ReviewObservation],
+    boundary_class: FactBoundaryClass,
 ) -> ReviewRequirement | None:
-    checkpoint = kind in CHECKPOINT_KINDS or any(
-        observation.kind == ObservationKind.CHECKPOINT
-        for observation in observations
+    boundary_classification_required = (
+        boundary_class is FactBoundaryClass.AMBIGUOUS
+    )
+    # A boundary case is intentionally an AMBIGUITY case, not a generic key
+    # checkpoint.  Its approve/omit/correct/rewrite decision is therefore an
+    # exact classification of this candidate's semantics.  Treating it as a
+    # checkpoint would make a plain conflict approval silently promote the
+    # free-form value into Canon.
+    checkpoint = not boundary_classification_required and (
+        kind in CHECKPOINT_KINDS or any(
+            observation.kind == ObservationKind.CHECKPOINT
+            for observation in observations
+        )
     )
     factual_observations = [
         observation
         for observation in observations
         if observation.kind not in {ObservationKind.STYLE, ObservationKind.PROSE}
     ]
-    if not checkpoint and not factual_observations:
+    if (
+        not boundary_classification_required
+        and not checkpoint
+        and not factual_observations
+    ):
         return None
 
     levels = [observation.level for observation in factual_observations]
+    if boundary_classification_required:
+        levels.append(ReviewLevel.HUMAN_REQUIRED)
     if checkpoint:
         levels.append(ReviewLevel.HUMAN_REQUIRED)
     level = _strongest(levels)
@@ -373,6 +394,8 @@ def _build_requirement(
     }
     if checkpoint:
         reason_codes.add(f"checkpoint:{kind.value}")
+    if boundary_classification_required:
+        reason_codes.add("fact_boundary:human_classification_required")
     observation_digests = tuple(
         sorted(
             {
@@ -443,9 +466,16 @@ def compile_transaction(
 
     by_runtime_id: dict[str, str] = {}
     by_digest: dict[str, FactCandidate] = {}
+    boundary_by_digest: dict[str, FactBoundaryClass] = {}
     for candidate in candidates:
         validate_candidate_evidence(candidate)
         digest = candidate_digest(candidate)
+        boundary_class = classify_candidate_claim(candidate.claim)
+        if boundary_class is FactBoundaryClass.KNOWN_SOFT:
+            raise CompileError(
+                "canon_v3_candidate_known_soft_semantics_forbidden:"
+                + candidate.candidate_id
+            )
         previous = by_runtime_id.get(candidate.candidate_id)
         if previous is not None and previous != digest:
             raise CompileError(
@@ -453,6 +483,7 @@ def compile_transaction(
             )
         by_runtime_id[candidate.candidate_id] = digest
         by_digest.setdefault(digest, candidate)
+        boundary_by_digest[digest] = boundary_class
 
     observations_by_digest: dict[str, list[ReviewObservation]] = defaultdict(list)
     for observation in observations:
@@ -500,6 +531,7 @@ def compile_transaction(
                         digest=digest,
                         kind=_kind(by_digest[digest].claim),
                         observations=observations_by_digest.get(digest, []),
+                        boundary_class=boundary_by_digest[digest],
                     )
                 )
                 is not None

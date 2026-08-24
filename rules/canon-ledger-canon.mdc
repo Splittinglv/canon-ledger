@@ -17,6 +17,10 @@ alwaysApply: false
 - 只检查后续章节必须依赖的客观长期事实：身份、时间线、永久状态、关系、知识边界、真实在场、物品持有、世界硬规则、承诺与开放问题。
 - 已有正文或 active Canon 没有锚点的极低概率猜测可以忽略。
 - 证据不足但可能影响长期事实时，交给人工确认；不得由模型猜测后直接发布。
+- `fact-boundary/v2` 适用于章节候选、legacy 迁移、初始化设定和 author axioms。
+  已知 advisory 不得生成 Canon effect；自由状态、关系或规则无法由闭合结构证明时，
+  必须对 exact candidate/record 做人工分类，不能因字段名像“规则”或未命中软关键词
+  就默认当作硬事实。旧 policy 的 active fact 未完成重认证前不得继续写作或事实查询。
 
 ## Advisory 范围
 

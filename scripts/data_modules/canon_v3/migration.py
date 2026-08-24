@@ -42,6 +42,7 @@ from ..story_contracts import (
 from .fact_boundary import (
     FACT_BOUNDARY_POLICY_VERSION,
     FactBoundaryClass,
+    classify_legacy_fact_row,
     classify_setting_leaf,
 )
 from .projection import projection_is_fresh, rebuild_projection
@@ -707,6 +708,7 @@ def _boundary_review_material(
         "required_human_action": "classify_legacy_setting_leaf",
         "allowed_resolutions": [
             "rewrite_as_explicit_hard_fact_field",
+            "move_to_managed_author_axiom_for_exact_human_classification",
             "keep_in_advisory_source",
         ],
         "items": rows,
@@ -861,6 +863,102 @@ def _apply_legacy_fact_boundary(
     elif initial_canon not in (None, {}):
         raise LegacyMigrationError("legacy_initial_canon_invalid")
 
+    active_locations: dict[str, list[str]] = {
+        fact_id: [] for fact_id in decisions
+    }
+    active_digests: dict[str, set[str]] = {
+        fact_id: set() for fact_id in decisions
+    }
+    def classify_active_row(
+        raw: Mapping[str, Any], source_location: str
+    ) -> tuple[str, FactBoundaryClass]:
+        declared_id = str(raw.get("id") or "").strip()
+        if declared_id and declared_id in decisions:
+            return declared_id, decisions[declared_id]
+        fact_digest = content_hash(raw)
+        fact_id = "legacy-active:" + fact_digest
+        channel = source_location.lstrip("/").split("/", 1)[0]
+        classification = (
+            FactBoundaryClass.HARD_FACT
+            if channel
+            in {
+                "timeline",
+                "presence_history",
+                "custody_history",
+                "information",
+                "presence",
+                "custody",
+            }
+            else classify_legacy_fact_row(raw)
+        )
+        previous = decisions.get(fact_id)
+        if previous is not None and previous is not classification:
+            raise LegacyMigrationError(
+                "legacy_fact_boundary_classification_conflict",
+                source_location,
+            )
+        decisions[fact_id] = classification
+        source_rows.setdefault(fact_id, copy.deepcopy(dict(raw)))
+        source_locations.setdefault(fact_id, source_location)
+        active_locations.setdefault(fact_id, [])
+        active_digests.setdefault(fact_id, set())
+        if classification is FactBoundaryClass.AMBIGUOUS:
+            ambiguous.append(
+                {
+                    "source_location": source_location,
+                    "fact_content_sha256": fact_digest,
+                    "fact": copy.deepcopy(dict(raw)),
+                }
+            )
+        return fact_id, classification
+
+    for channel in _LEGACY_LIST_FACT_CHANNELS:
+        raw_rows = facts.get(channel) or []
+        if not isinstance(raw_rows, list):
+            continue
+        retained_rows: list[Any] = []
+        for index, raw in enumerate(raw_rows):
+            if not isinstance(raw, Mapping):
+                retained_rows.append(raw)
+                continue
+            location = f"/{channel}/{index}"
+            fact_id, classification = classify_active_row(raw, location)
+            if classification is not FactBoundaryClass.KNOWN_SOFT:
+                retained_rows.append(raw)
+                continue
+            active_locations[fact_id].append(location)
+            active_digests[fact_id].add(content_hash(raw))
+        facts[channel] = retained_rows
+
+    for channel in _LEGACY_MAP_FACT_CHANNELS:
+        raw_rows = facts.get(channel) or {}
+        if not isinstance(raw_rows, Mapping):
+            continue
+        retained_map: dict[str, Any] = {}
+        for key, raw in sorted(raw_rows.items()):
+            if not isinstance(raw, Mapping):
+                retained_map[str(key)] = raw
+                continue
+            location = f"/{channel}/{key}"
+            fact_id, classification = classify_active_row(raw, location)
+            if classification is FactBoundaryClass.KNOWN_SOFT:
+                active_locations[fact_id].append(location)
+                active_digests[fact_id].add(content_hash(raw))
+            else:
+                retained_map[str(key)] = raw
+        facts[channel] = retained_map
+
+    # A single legacy fact is often copied into several reducer views.  Human
+    # material is keyed by exact content/location, while duplicate visits to
+    # the same view must not create unstable case counts.
+    ambiguous_by_key = {
+        (
+            str(item.get("source_location") or ""),
+            str(item.get("fact_content_sha256") or ""),
+        ): item
+        for item in ambiguous
+    }
+    ambiguous = [ambiguous_by_key[key] for key in sorted(ambiguous_by_key)]
     if ambiguous:
         material = _boundary_review_material(ambiguous)
         raise LegacyMigrationError(
@@ -869,31 +967,6 @@ def _apply_legacy_fact_boundary(
             f"item_count={len(ambiguous)}",
             review_material=material,
         )
-
-    active_locations: dict[str, list[str]] = {
-        fact_id: [] for fact_id in decisions
-    }
-    active_digests: dict[str, set[str]] = {
-        fact_id: set() for fact_id in decisions
-    }
-    for channel in _LEGACY_LIST_FACT_CHANNELS:
-        raw_rows = facts.get(channel) or []
-        if not isinstance(raw_rows, list):
-            continue
-        retained_rows: list[Any] = []
-        for index, raw in enumerate(raw_rows):
-            fact_id = (
-                str(raw.get("id") or "").strip()
-                if isinstance(raw, Mapping)
-                else ""
-            )
-            classification = decisions.get(fact_id)
-            if classification is not FactBoundaryClass.KNOWN_SOFT:
-                retained_rows.append(raw)
-                continue
-            active_locations[fact_id].append(f"/{channel}/{index}")
-            active_digests[fact_id].add(content_hash(raw))
-        facts[channel] = retained_rows
 
     exclusions: list[dict[str, Any]] = []
     for fact_id in sorted(decisions):
@@ -2387,10 +2460,7 @@ def analyze_legacy_fact_boundary(
     )
     candidates: list[dict[str, Any]] = []
     for admission in facts.get("cutover_fact_admissions") or ():
-        if (
-            not isinstance(admission, Mapping)
-            or admission.get("mode") != "author_axiom_snapshot"
-        ):
+        if not isinstance(admission, Mapping):
             continue
         admission_digest = str(admission.get("admission_digest") or "")
         if admission_digest in superseded:
@@ -2401,10 +2471,11 @@ def analyze_legacy_fact_boundary(
             admission=admission,
         )
         fact = copy.deepcopy(record["fact"])
-        classification = classify_setting_leaf(fact)
+        classification = classify_legacy_fact_row(fact)
         candidates.append(
             {
                 "admission_digest": admission_digest,
+                "admission_mode": str(admission.get("mode") or ""),
                 "fact_content_sha256": str(
                     admission.get("fact_content_sha256") or ""
                 ),
@@ -2425,6 +2496,16 @@ def analyze_legacy_fact_boundary(
         for item in candidates
         if item["classification"] == FactBoundaryClass.AMBIGUOUS.value
     ]
+    supersedable_soft = [
+        item
+        for item in soft
+        if item["admission_mode"] == "author_axiom_snapshot"
+    ]
+    requires_recertification = [
+        item
+        for item in soft
+        if item["admission_mode"] != "author_axiom_snapshot"
+    ]
     dependencies = legacy_genesis_supersession_dependencies(
         root,
         [item["admission_digest"] for item in soft],
@@ -2432,6 +2513,11 @@ def analyze_legacy_fact_boundary(
     )
     if ambiguous:
         state = "human_classification_required"
+    elif requires_recertification:
+        # Event-derived and reducer-derived facts cannot be removed through
+        # the author-axiom override channel.  Preserve a deterministic,
+        # executable recovery state instead of pretending they are clean.
+        state = "manual_fork_required"
     elif dependencies["has_dependencies"]:
         state = "manual_fork_required"
     elif soft:
@@ -2450,7 +2536,7 @@ def analyze_legacy_fact_boundary(
                     "fact_content_sha256": item["fact_content_sha256"],
                     "replacement_axiom_key": None,
                 }
-                for item in soft
+                for item in supersedable_soft
             ],
             "dependency_report_digest": dependencies["report_digest"],
         }
@@ -2468,6 +2554,9 @@ def analyze_legacy_fact_boundary(
         "candidates": candidates,
         "known_soft_admission_digests": [
             item["admission_digest"] for item in soft
+        ],
+        "event_derived_soft_admission_digests": [
+            item["admission_digest"] for item in requires_recertification
         ],
         "ambiguous_admission_digests": [
             item["admission_digest"] for item in ambiguous

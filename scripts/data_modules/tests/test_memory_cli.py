@@ -122,7 +122,7 @@ def test_load_context_cli_passes_budget_tokens(tmp_path, capsys):
     assert output["schema_version"] == "canon-ledger-context-pack/v3"
 
 
-def test_query_entity_not_found(tmp_path, capsys):
+def test_query_entity_without_head_fails_closed(tmp_path, capsys):
     _ensure_scripts_on_path()
     import memory_cli
 
@@ -130,12 +130,15 @@ def test_query_entity_not_found(tmp_path, capsys):
     old_argv = sys.argv
     sys.argv = ["memory_cli", "--project-root", str(project), "query-entity", "--id", "nobody"]
     try:
-        memory_cli.main()
+        with pytest.raises(SystemExit) as failed:
+            memory_cli.main()
     finally:
         sys.argv = old_argv
 
-    output = json.loads(capsys.readouterr().out)
-    assert output["error"] == "not_found"
+    assert failed.value.code == 2
+    output = json.loads(capsys.readouterr().err)
+    assert output["error"] == "canon_v3_head_projection_unavailable"
+    assert output["usable_for_writing"] is False
 
 
 def test_query_entity_found(tmp_path, capsys):
@@ -156,7 +159,7 @@ def test_query_entity_found(tmp_path, capsys):
     assert output["name"] == "萧炎"
 
 
-def test_query_rules_empty(tmp_path, capsys):
+def test_query_rules_without_head_fails_closed(tmp_path, capsys):
     _ensure_scripts_on_path()
     import memory_cli
 
@@ -164,12 +167,14 @@ def test_query_rules_empty(tmp_path, capsys):
     old_argv = sys.argv
     sys.argv = ["memory_cli", "--project-root", str(project), "query-rules"]
     try:
-        memory_cli.main()
+        with pytest.raises(SystemExit) as failed:
+            memory_cli.main()
     finally:
         sys.argv = old_argv
 
-    output = json.loads(capsys.readouterr().out)
-    assert output == []
+    assert failed.value.code == 2
+    output = json.loads(capsys.readouterr().err)
+    assert output["error"] == "canon_v3_head_projection_unavailable"
 
 
 def test_read_summary_missing(tmp_path, capsys):
@@ -207,7 +212,7 @@ def test_read_summary_exists(tmp_path, capsys):
     assert "第5章摘要" in output["summary"]
 
 
-def test_get_open_loops_empty(tmp_path, capsys):
+def test_get_open_loops_without_head_fails_closed(tmp_path, capsys):
     _ensure_scripts_on_path()
     import memory_cli
 
@@ -215,15 +220,17 @@ def test_get_open_loops_empty(tmp_path, capsys):
     old_argv = sys.argv
     sys.argv = ["memory_cli", "--project-root", str(project), "get-open-loops"]
     try:
-        memory_cli.main()
+        with pytest.raises(SystemExit) as failed:
+            memory_cli.main()
     finally:
         sys.argv = old_argv
 
-    output = json.loads(capsys.readouterr().out)
-    assert output == []
+    assert failed.value.code == 2
+    output = json.loads(capsys.readouterr().err)
+    assert output["error"] == "canon_v3_head_projection_unavailable"
 
 
-def test_get_obligations_empty(tmp_path, capsys):
+def test_get_obligations_without_head_fails_closed(tmp_path, capsys):
     _ensure_scripts_on_path()
     import memory_cli
 
@@ -231,15 +238,17 @@ def test_get_obligations_empty(tmp_path, capsys):
     old_argv = sys.argv
     sys.argv = ["memory_cli", "--project-root", str(project), "get-obligations"]
     try:
-        memory_cli.main()
+        with pytest.raises(SystemExit) as failed:
+            memory_cli.main()
     finally:
         sys.argv = old_argv
 
-    output = json.loads(capsys.readouterr().out)
-    assert output == []
+    assert failed.value.code == 2
+    output = json.loads(capsys.readouterr().err)
+    assert output["error"] == "canon_v3_head_projection_unavailable"
 
 
-def test_get_timeline_empty(tmp_path, capsys):
+def test_get_timeline_without_head_fails_closed(tmp_path, capsys):
     _ensure_scripts_on_path()
     import memory_cli
 
@@ -247,12 +256,14 @@ def test_get_timeline_empty(tmp_path, capsys):
     old_argv = sys.argv
     sys.argv = ["memory_cli", "--project-root", str(project), "get-timeline", "--from", "1", "--to", "100"]
     try:
-        memory_cli.main()
+        with pytest.raises(SystemExit) as failed:
+            memory_cli.main()
     finally:
         sys.argv = old_argv
 
-    output = json.loads(capsys.readouterr().out)
-    assert output == []
+    assert failed.value.code == 2
+    output = json.loads(capsys.readouterr().err)
+    assert output["error"] == "canon_v3_head_projection_unavailable"
 
 
 def test_export_asof_empty_project(tmp_path, capsys):
@@ -290,3 +301,32 @@ def test_export_asof_empty_project(tmp_path, capsys):
         "presence": "none",
         "custody": "none",
     }
+
+
+def test_export_asof_rejects_authority_or_external_output(tmp_path):
+    _ensure_scripts_on_path()
+    import memory_cli
+
+    project = _make_project(tmp_path)
+    current = project / ".story-system" / "v3" / "CURRENT"
+
+    for unsafe in (current, tmp_path / "outside.json"):
+        old_argv = sys.argv
+        sys.argv = [
+            "memory_cli",
+            "--project-root",
+            str(project),
+            "export-asof",
+            "--chapter",
+            "1",
+            "--out",
+            str(unsafe),
+        ]
+        try:
+            with pytest.raises(ValueError, match="安全派生文件"):
+                memory_cli.main()
+        finally:
+            sys.argv = old_argv
+
+    assert not current.exists()
+    assert not (tmp_path / "outside.json").exists()

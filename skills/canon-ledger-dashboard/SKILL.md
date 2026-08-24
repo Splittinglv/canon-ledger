@@ -35,13 +35,22 @@ fi
 ```text
 /api/canon-v3/workflow
 /api/canon-v3/history
+/api/canon-v3/facts
 /api/canon-v3/entities
 /api/canon-v3/relationships
 /api/canon-v3/state-changes
 /api/canon-v3/obligations
 ```
 
-所有事实响应必须携带同一 `{authority, head_hash, generation, workflow_digest, projection_digest, as_of_chapter}`。人物、关系、状态、知识、在场、持有、时间线和 obligations 从 fresh canon projection/history 派生，不能读取 legacy `index.db`、`state.json` 中的事实缓存或旧 commit/projection 作为当前事实。
+所有事实响应必须携带同一 `{authority, head_hash, generation, workflow_digest, projection_digest, as_of_chapter}`。公共 active facts 是已经准入的 genesis、legacy cutover
+基础事实、章节 effects 和 active author axioms 的去重并集；`origin=legacy_cutover` 只表示
+历史来源，仍属于 active Canon，不能与未迁移的 `legacy_read_only` 混淆。人物、关系、
+状态、知识、在场、持有、时间线和 obligations 从同一 public read bundle 派生，不能读取 legacy `index.db`、`state.json` 中的事实缓存或旧 commit/projection 作为当前事实。
+
+`/api/canon-v3/facts` 默认只返回 `authority_layer=active_canon`。显式
+`include_history=true` 时顶层与每条记录必须标记 `canon_history/historical` 和
+`usable_as_active_fact=false`；`/api/canon-v3/history` 则分别声明 active facts 与 history
+的 authority layer，不能用一个 `active_canon` 标签包住已覆盖历史。
 
 projection stale 时事实接口返回结构化 409，包含 exact workflow、`projection_rebuild_required` 和 `primary_action`；前端不能把失败静默转换为空列表。退役的 legacy/index 分析接口返回结构化 410，并明确标记 `authority=legacy_read_only`、`usable_for_writing=false`，主导航不得调用。
 
@@ -63,4 +72,6 @@ Dashboard 只展示 `primary_action`、命令和人工审核材料，不提供 d
 - stale/migration/invalid 状态被明确展示，不泄漏旧 index 数据。
 - 首页显示 exact workflow、STAGING、cases、`can_write_next` 和 `primary_action`。
 - 伏笔页的数据源为 `/api/canon-v3/obligations`。
+- Canon 事实页的数据源为 `/api/canon-v3/facts`，能显示 genesis/cutover/chapter/axiom
+  origin，且不会把 STAGING、style 或 raw legacy 合入。
 - Dashboard 全程只提供 GET/只读接口。

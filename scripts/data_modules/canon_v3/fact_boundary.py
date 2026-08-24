@@ -15,7 +15,7 @@ import re
 from typing import Any, Mapping
 
 
-FACT_BOUNDARY_POLICY_VERSION = "canon-v3/fact-boundary/v1"
+FACT_BOUNDARY_POLICY_VERSION = "canon-v3/fact-boundary/v2"
 
 
 class FactBoundaryClass(str, Enum):
@@ -212,6 +212,8 @@ _SETTING_CRAFT_VALUE_RE = re.compile(
     r"(?:第一|第二|第三|有限|全知|单一|多重)人称|"
     r"(?:感叹号|问号|逗号|句号|标点|自然段|段落长度|句子长度|句长|字数)|"
     r"(?:多用|少用|避免使用|不要使用|禁用).{0,12}(?:形容词|副词|成语|四字|标点|比喻|排比|短句|长句)|"
+    r"(?:避免|禁止|不得|不要|少用|多用).{0,16}(?:修辞|描写|叙述|形容词|副词|成语|比喻|排比|短句|长句|标点)|"
+    r"(?:华丽|朴素|冷峻|克制|简洁).{0,8}(?:文风|文笔|修辞|措辞|语言|行文|描写)|"
     r"(?:对白|旁白|描写).{0,8}(?:简短|克制|冷峻|口语|书面|精炼|冗长)|"
     r"留白|阅读体验|可读性|目标读者|作品卖点|爽点|"
     r"\b(?:writing\s+style|prose|narrative\s+style|tone|voice|pacing|"
@@ -228,6 +230,8 @@ _AUTHOR_AXIOM_SOFT_VALUE_RE = re.compile(
     r"(?:第一|第二|第三|有限|全知|单一|多重)人称|"
     r"(?:感叹号|问号|逗号|句号|标点|自然段|段落长度|句子长度|句长|字数)|"
     r"(?:多用|少用|避免使用|不要使用|禁用).{0,12}(?:形容词|副词|成语|四字|标点|比喻|排比|短句|长句)|"
+    r"(?:避免|禁止|不得|不要|少用|多用).{0,16}(?:修辞|描写|叙述|形容词|副词|成语|比喻|排比|短句|长句|标点)|"
+    r"(?:华丽|朴素|冷峻|克制|简洁).{0,8}(?:文风|文笔|修辞|措辞|语言|行文|描写)|"
     r"(?:对白|旁白|描写).{0,8}(?:简短|克制|冷峻|口语|书面|精炼|冗长)|"
     r"留白|阅读体验|可读性|"
     r"目标读者|作品卖点|爽点|人物动机|角色动机|性格|人格|人设|"
@@ -237,7 +241,13 @@ _AUTHOR_AXIOM_SOFT_VALUE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_HARD_FIELDS = frozenset(
+# These are closed, objective field *identities*, not words searched in prose.
+# Broad containers such as ``状态``/``规则``/``限制`` are intentionally absent:
+# their values may just as easily be character design or writing preferences,
+# so they require an exact human classification instead of being promoted by
+# their label.  ``建筑风格`` remains objective because it describes a fictional
+# place, not the author's prose style.
+_OBJECTIVE_FIELDS = frozenset(
     {
         "姓名",
         "身份",
@@ -246,22 +256,16 @@ _HARD_FIELDS = frozenset(
         "种族",
         "阵营",
         "生死",
-        "状态",
         "境界",
         "等级",
         "地点",
         "位置",
         "持有者",
         "归属",
-        "关系",
         "时间",
         "日期",
-        "规则",
-        "硬约束",
-        "限制",
         "代价",
         "冷却",
-        "禁忌",
         "货币",
         "职业",
         "称号",
@@ -344,11 +348,11 @@ def classify_author_axiom_leaf(
     category: Any,
     value: Any,
 ) -> FactBoundaryClass:
-    """Keep the managed axiom channel fact-only across key/category/value.
+    """Classify a managed axiom across key/category/value.
 
-    The category taxonomy is intentionally hard-only, so a soft key or an
-    actual craft/persona value cannot be laundered through ``world_rule`` and
-    then approved into Canon.
+    Known craft/persona leaves are forbidden.  Every other open-ended value
+    remains ambiguous until the managed author-axiom review explicitly
+    classifies that exact digest as an objective fictional fact.
     """
 
     key = _text(axiom_key).casefold().replace("-", " ")
@@ -360,7 +364,13 @@ def classify_author_axiom_leaf(
         return FactBoundaryClass.KNOWN_SOFT
     if _AUTHOR_AXIOM_SOFT_VALUE_RE.search(value_text):
         return FactBoundaryClass.KNOWN_SOFT
-    return FactBoundaryClass.HARD_FACT
+    # Author axioms are deliberately open-ended JSON leaves.  A closed
+    # category such as ``world_rule`` cannot prove that an arbitrary string is
+    # a fictional-world law rather than a prose instruction.  The managed
+    # author-axiom channel already has an exact human decision transaction, so
+    # unknown values are surfaced there as an explicit boundary
+    # classification rather than guessed here.
+    return FactBoundaryClass.AMBIGUOUS
 
 
 def classify_setting_leaf(fact: Mapping[str, Any]) -> FactBoundaryClass:
@@ -414,10 +424,154 @@ def classify_setting_leaf(fact: Mapping[str, Any]) -> FactBoundaryClass:
         if source == "legacy:initial_canon"
         else ""
     )
+    setup_section = "world" if subject == "initial_world" else subject
+    setup_id = _text(fact.get("id"))
+    try:
+        source_chapter = int(fact.get("source_chapter") or 0)
+    except (TypeError, ValueError):
+        source_chapter = -1
+    if (
+        source_chapter == 0
+        and field_key in _INITIAL_HARD_FIELDS.get(setup_section, ())
+        and setup_id == f"setup-{setup_section}-{field_key}"
+    ):
+        # Public genesis/cutover snapshots intentionally omit the source path
+        # after admission.  Their deterministic setup ID preserves the same
+        # closed initial_canon field identity for later policy rechecks.
+        return FactBoundaryClass.HARD_FACT
     if field_key in _INITIAL_HARD_FIELDS.get(initial_section, ()):
         return FactBoundaryClass.HARD_FACT
-    if category == "world_rule" or field in _HARD_FIELDS or field_key in _HARD_FIELDS:
+    if field in _OBJECTIVE_FIELDS or field_key in _OBJECTIVE_FIELDS:
         return FactBoundaryClass.HARD_FACT
+    return FactBoundaryClass.AMBIGUOUS
+
+
+_STRUCTURAL_OBJECTIVE_CLAIM_KINDS = frozenset(
+    {
+        "power_breakthrough",
+        "artifact_obtained",
+        "entity_observed",
+        "timeline_observed",
+        "knowledge_state_changed",
+        "presence_observed",
+        "custody_changed",
+        "promise_created",
+        "promise_paid_off",
+        "open_loop_created",
+        "open_loop_closed",
+    }
+)
+
+
+def _claim_payload(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        raw = dump(mode="python", exclude_none=True)
+        if isinstance(raw, Mapping):
+            return raw
+    return {}
+
+
+def classify_candidate_claim(value: Any) -> FactBoundaryClass:
+    """Classify one chapter claim by its closed structure.
+
+    This is the authority-facing counterpart to ``classify_setting_leaf``.
+    It never promotes an unknown free-form attribute or rule.  Known writing
+    design is rejected; genuinely custom objective semantics are represented
+    as ``AMBIGUOUS`` so the compiler creates a dedicated human-classification
+    case bound to the exact candidate digest.
+    """
+
+    claim = _claim_payload(value)
+    kind = _text(claim.get("kind"))
+    if kind == "character_state_changed":
+        field = _text(claim.get("canonical_field") or claim.get("attribute"))
+        field_key = _field_key(field)
+        if (
+            field in _SOFT_FIELDS
+            or field_key in _SOFT_FIELDS
+            or _contains_part(field, _SOFT_FIELD_PARTS)
+        ):
+            return FactBoundaryClass.KNOWN_SOFT
+        if field in _OBJECTIVE_FIELDS or field_key in _OBJECTIVE_FIELDS:
+            return FactBoundaryClass.HARD_FACT
+        return FactBoundaryClass.AMBIGUOUS
+    if kind == "relationship_changed":
+        # Legal/kinship/affiliation relations are objective, while affection,
+        # trust and narrative role are not.  The current free-form claim has
+        # no structural discriminator, therefore it must be classified by a
+        # human instead of by vocabulary.
+        return FactBoundaryClass.AMBIGUOUS
+    if kind == "world_rule_revealed":
+        rule = _text(claim.get("rule"))
+        if _AUTHOR_AXIOM_SOFT_VALUE_RE.search(rule):
+            return FactBoundaryClass.KNOWN_SOFT
+        return FactBoundaryClass.AMBIGUOUS
+    if kind == "world_rule_broken":
+        # A violation cannot introduce a rule: service slot validation binds
+        # it to an already-active certified rule.
+        return FactBoundaryClass.HARD_FACT
+    if kind in _STRUCTURAL_OBJECTIVE_CLAIM_KINDS:
+        return FactBoundaryClass.HARD_FACT
+    return FactBoundaryClass.AMBIGUOUS
+
+
+_STRUCTURAL_OBJECTIVE_LEGACY_CATEGORIES = frozenset(
+    {
+        "power_breakthrough",
+        "artifact_obtained",
+        "entity_observed",
+        "timeline",
+        "timeline_observed",
+        "knowledge",
+        "knowledge_information",
+        "knowledge_state_changed",
+        "presence",
+        "presence_observed",
+        "custody",
+        "custody_changed",
+        "promise_created",
+        "promise_paid_off",
+        "open_loop_created",
+        "open_loop_closed",
+    }
+)
+
+
+def classify_legacy_fact_row(fact: Mapping[str, Any]) -> FactBoundaryClass:
+    """Classify every legacy active/reducer fact, including event-derived rows.
+
+    Legacy event receipts prove evidence and prior approval, but they predate
+    the objective/advisory product boundary.  Free-form event categories are
+    therefore not grandfathered into Canon.
+    """
+
+    setting_class = classify_setting_leaf(fact)
+    if setting_class is FactBoundaryClass.KNOWN_SOFT:
+        return setting_class
+    if (
+        _text(fact.get("namespace")) in {"actor", "item", "location"}
+        and _text(fact.get("id") or fact.get("name"))
+    ):
+        # Reducer-produced identity projections are closed structural records,
+        # not arbitrary setting leaves.
+        return FactBoundaryClass.HARD_FACT
+    payload = _payload(fact)
+    category = _text(
+        fact.get("category")
+        or fact.get("event_type")
+        or payload.get("kind")
+    )
+    if category in _STRUCTURAL_OBJECTIVE_LEGACY_CATEGORIES:
+        return FactBoundaryClass.HARD_FACT
+    if category in {"character_state", "character_state_changed"}:
+        return setting_class
+    if setting_class is FactBoundaryClass.HARD_FACT:
+        return setting_class
+    if category in {"relationship", "relationship_changed", "world_rule", "world_rule_revealed"}:
+        return FactBoundaryClass.AMBIGUOUS
     return FactBoundaryClass.AMBIGUOUS
 
 
@@ -429,6 +583,8 @@ __all__ = [
     "FACT_BOUNDARY_POLICY_VERSION",
     "FactBoundaryClass",
     "classify_author_axiom_leaf",
+    "classify_candidate_claim",
+    "classify_legacy_fact_row",
     "classify_setting_leaf",
     "is_known_soft_setting",
 ]

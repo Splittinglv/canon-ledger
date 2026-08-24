@@ -181,9 +181,12 @@ runtime assemble proposal；author axiom 使用独立 `author-axiom-proposal` sc
 Reviewer output v3 逐项绑定 validator 返回的 `candidate_id -> candidate_digest`，assemble
 与 exact draft map 比较后才生成 proposal；digest 集合相同但 ID 被互换也会失败。
 Agent 不计算权威 digest，也不根据文档猜 strict payload。
-Author-axiom 的事实边界同时检查 key、closed category 与实际 leaf value，并在 validator、
-prepare、decision、finalize 重复执行；无害 key 或 `world_rule` category 都不能洗白文风、
-动机、人格、人设与成长弧。旧软 record 只可由 exact 全快照人工 remove 事务清理。
+`fact-boundary/v2` 是章节 candidate、legacy event、setting/initial 与 author-axiom 的
+共同准入层。已知 advisory 不能生成 effect；闭合结构可证明的客观事实直接准入；自由
+字段、关系或规则语义为 ambiguous，必须绑定 exact candidate/record 的人工分类 case。
+未命中软关键词不再等于硬事实，普通 conflict/checkpoint approve 也不能绕过分类。
+准入在 validator/prepare/compiler、迁移、workflow 与 public read 重复验证；缺少当前
+policy 证明的 active effect 会让项目保持只读，不能在 projection 中静默略过。
 
 `planning refresh-contracts` 仅在 ready/fresh 下从已落盘大纲生成卷/章/审查三份
 planning-only JSON。输入、HEAD 和共同 `planning_batch_digest` 使混合版本可检测；它不写
@@ -205,7 +208,7 @@ exact digest，将 pointer 移入非权威 archive，保留不可变 transaction
 v1/v2 在切换后只读。迁移先生成 detached cutover transaction：所有 event、state/entity/timeline delta、appearance、scene 和旧人工决定都转成 typed legacy candidates；正文 span、identity resolution、slot transition 和 normalized facts 分别留下 admission receipt。全部通过后才在章节边界 K CAS 发布新 genesis；随后只有 v3 能写。
 
 新迁移使用 `legacy-genesis/v3 + legacy-fact-snapshot/v3` 与版本化
-`fact-boundary/v1`。已知软设计（文风、欲望、动机、性格、人设、成长弧等）从
+`fact-boundary/v2`。已知软设计（文风、欲望、动机、性格、人设、成长弧等）从
 active facts/admissions/initial-setting Canon 中真正移除，仅在 snapshot 顶层保留 exclusion
 receipt；空模板和 placeholder 不生成 blocker。未知自定义字段只在它实际活动时
 返回确定性人工分类材料，不由模型猜。

@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 from typing import Sequence
@@ -127,7 +128,11 @@ def main() -> int:
 
     try:
         root = _resolve_root(args.project_root or None)
-        temp_root = root / ".tmp" / "pytest"
+        identity = uuid.uuid5(uuid.NAMESPACE_URL, str(root)).hex[:12]
+        temp_root = (
+            Path(tempfile.gettempdir()).resolve()
+            / f"canon-ledger-acceptance-{identity}"
+        )
         temp_root.mkdir(parents=True, exist_ok=True)
         base_temp = temp_root / f"acceptance-{args.mode}-{uuid.uuid4().hex}"
         npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
@@ -148,6 +153,7 @@ def main() -> int:
     environment = dict(os.environ)
     for key in ("TMP", "TEMP", "TMPDIR"):
         environment[key] = str(temp_root)
+    environment["CANON_LEDGER_TEST_TEMP_ROOT"] = str(temp_root)
     scripts_path = str(root / "scripts")
     existing_pythonpath = environment.get("PYTHONPATH", "")
     environment["PYTHONPATH"] = (

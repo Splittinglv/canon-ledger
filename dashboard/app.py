@@ -142,16 +142,18 @@ def _build_env_status(project_root: Path) -> dict:
 def _canon_dashboard_view() -> dict[str, Any]:
     """Build one disposable dashboard view from an exact fresh Canon HEAD."""
 
-    from data_modules.canonical_history import load_canonical_history
-    from data_modules.workflow_authority import (
-        CanonReadModelUnavailable,
-        WorkflowAuthority,
-    )
+    from data_modules.canon_v3.public_read import PublicReadError, active_fact_rows
+    from data_modules.canon_v3.query import CanonQueryError, CanonQueryFacade
+    from data_modules.workflow_authority import WorkflowAuthority
 
     authority = WorkflowAuthority(_get_project_root())
     try:
-        workflow, projection = authority.require_fresh_projection()
-    except CanonReadModelUnavailable as exc:
+        bound = CanonQueryFacade(_get_project_root()).bound_snapshot()
+        workflow = bound.workflow
+        projection = bound.projection
+        snapshot = bound.as_of
+        active_facts = active_fact_rows(snapshot)
+    except (CanonQueryError, PublicReadError) as exc:
         workflow = authority.snapshot()
         state = str(workflow.get("state") or "invalid")
         raise HTTPException(
@@ -177,30 +179,6 @@ def _canon_dashboard_view() -> dict[str, Any]:
                 "primary_action": workflow.get("primary_action"),
             },
         ) from exc
-    latest = int(workflow.get("latest_chapter") or 0)
-    history = load_canonical_history(_get_project_root(), latest)
-    post_read_workflow = authority.snapshot()
-    if post_read_workflow.get("workflow_digest") != workflow.get("workflow_digest"):
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "canon_v3_workflow_changed_during_dashboard_read",
-                "authority": "canon_v3",
-                "usable_for_writing": False,
-                "workflow": post_read_workflow,
-            },
-        )
-    if history.invalid_sources:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "canon_v3_compatibility_view_invalid",
-                "authority": "canon_v3",
-                "usable_for_writing": False,
-                "invalid_sources": list(history.invalid_sources),
-                "workflow": workflow,
-            },
-        )
     from data_modules.canon_v3.schema import canonical_digest
 
     binding = {
@@ -209,13 +187,15 @@ def _canon_dashboard_view() -> dict[str, Any]:
         "head_hash": workflow.get("head_hash"),
         "generation": int(workflow.get("generation") or 0),
         "workflow_digest": workflow.get("workflow_digest"),
+        "author_axiom_digest": workflow.get("author_axiom_digest"),
         "projection_digest": canonical_digest(projection),
-        "as_of_chapter": latest,
+        "as_of_chapter": int(snapshot.get("as_of_chapter") or 0),
     }
     return {
         "workflow": workflow,
         "projection": projection,
-        "history": history,
+        "snapshot": snapshot,
+        "active_facts": active_facts,
         "binding": binding,
     }
 
@@ -226,6 +206,21 @@ def _bound_items(view: dict[str, Any], items: list[dict[str, Any]]) -> dict[str,
         "source": "canon_v3_head",
         "items": items,
     }
+
+
+def _historical_fact_rows(items: Any) -> list[dict[str, Any]]:
+    """Label HEAD-bound history without presenting it as current active Canon."""
+
+    rows: list[dict[str, Any]] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        row["authority_layer"] = "canon_history"
+        row["authority_state"] = "historical"
+        row["usable_as_active_fact"] = False
+        rows.append(row)
+    return rows
 
 
 def _legacy_dashboard_endpoint_retired(
@@ -249,12 +244,15 @@ def _legacy_dashboard_endpoint_retired(
 
 
 def _dashboard_entities(view: dict[str, Any]) -> list[dict[str, Any]]:
-    history = view["history"]
+    snapshot = view["snapshot"]
     protagonist = str(
-        ((history.initial_canon.get("protagonist") or {}).get("name") or "")
+        ((snapshot.get("initial_canon") or {}).get("protagonist") or {}).get(
+            "name"
+        )
+        or ""
     )
     rows: list[dict[str, Any]] = []
-    for stable_id, raw in sorted(history.entities.items()):
+    for stable_id, raw in sorted((snapshot.get("entities") or {}).items()):
         if not isinstance(raw, dict):
             continue
         entity_id = str(raw.get("id") or stable_id)
@@ -340,7 +338,7 @@ def _dashboard_state_changes(
 ) -> list[dict[str, Any]]:
     lookup = _entity_id_lookup(view)
     rows: list[dict[str, Any]] = []
-    for raw in view["history"].state_changes:
+    for raw in view["snapshot"].get("state_changes") or []:
         if not isinstance(raw, dict):
             continue
         claim = raw.get("payload") if isinstance(raw.get("payload"), dict) else {}
@@ -473,14 +471,21 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
     @app.get("/api/canon-v3/history")
     def canon_v3_history():
         view = _canon_dashboard_view()
+        snapshot = view["snapshot"]
         projection = view["projection"]
         return {
+            "schema_version": "canon-v3/dashboard-history/v2",
             "binding": dict(view["binding"]),
             "source": "canon_v3_head",
+            "authority_layer": "head_bound_canon_bundle",
+            "facts_authority_layer": "active_canon",
+            "history_authority_layer": "canon_history",
             "chapters": list(projection.get("chapters") or []),
-            "author_axioms": dict(projection.get("author_axioms") or {}),
-            "facts": list(projection.get("facts") or []),
-            "history": list(projection.get("history") or []),
+            "initial_canon": dict(snapshot.get("initial_canon") or {}),
+            "setting_canon": dict(snapshot.get("setting_canon") or {}),
+            "author_axioms": dict(snapshot.get("author_axioms") or {}),
+            "facts": list(view["active_facts"]),
+            "history": _historical_fact_rows(projection.get("history")),
         }
 
     @app.get("/api/canon-v3/facts")
@@ -491,19 +496,34 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         """Return active or historical facts from one exact HEAD binding."""
 
         view = _canon_dashboard_view()
-        source_rows = (
-            view["projection"].get("history")
-            if include_history
-            else view["projection"].get("facts")
-        ) or []
-        rows = [dict(item) for item in source_rows if isinstance(item, dict)]
+        if include_history:
+            rows = _historical_fact_rows(view["projection"].get("history"))
+        else:
+            rows = [
+                dict(item)
+                for item in view["active_facts"]
+                if isinstance(item, dict)
+            ]
         if family:
             rows = [
                 row
                 for row in rows
-                if str((row.get("claim") or {}).get("kind") or "") == family
+                if str(
+                    row.get("category")
+                    or (row.get("claim") or {}).get("kind")
+                    or (row.get("payload") or {}).get("kind")
+                    or ""
+                )
+                == family
             ]
         payload = _bound_items(view, rows)
+        payload["schema_version"] = "canon-v3/dashboard-facts/v2"
+        payload["authority_layer"] = (
+            "canon_history" if include_history else "active_canon"
+        )
+        payload["authority_state"] = (
+            "historical" if include_history else "active"
+        )
         payload["view"] = "history" if include_history else "active"
         return payload
 
@@ -515,7 +535,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         lookup = _entity_id_lookup(view)
         relationships = [
             normalized
-            for raw in view["history"].canonical_facts
+            for raw in view["snapshot"].get("canonical_facts") or []
             if isinstance(raw, dict)
             and (normalized := _relationship_row(raw, lookup)) is not None
         ]
@@ -548,12 +568,12 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
             "latest_chapter": int(view["workflow"].get("latest_chapter") or 0),
             "items": [
                 dict(item)
-                for item in view["history"].obligations
+                for item in view["snapshot"].get("obligations") or []
                 if isinstance(item, dict)
             ],
             "lifecycle_history": [
                 dict(item)
-                for item in view["history"].lifecycle_history
+                for item in view["snapshot"].get("lifecycle_history") or []
                 if isinstance(item, dict)
             ],
         }
@@ -599,7 +619,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         lookup = _entity_id_lookup(view)
         rows = [
             normalized
-            for raw in view["history"].canonical_facts
+            for raw in view["snapshot"].get("canonical_facts") or []
             if isinstance(raw, dict)
             and (normalized := _relationship_row(raw, lookup)) is not None
         ]

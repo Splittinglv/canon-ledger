@@ -43,6 +43,10 @@ if sys.platform == "win32":
 
 
 _ASCII_LETTER_RE = re.compile(r"[A-Za-z]")
+_INIT_RESERVED_COMPONENTS = frozenset(
+    {".story-system", ".canon-ledger", ".cursor", ".git"}
+)
+_PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 
 
 _RUNTIME_LOCK_GITIGNORE = """# Runtime lock files are process-local and never project history.
@@ -107,10 +111,48 @@ def _assert_no_symlink_components(path: Path) -> None:
             )
 
 
+def _assert_init_target_scope(project_path: Path) -> None:
+    """Reject targets that could turn clean init into a runtime tree writer."""
+
+    resolved_target = project_path.resolve(strict=False)
+    try:
+        resolved_target.relative_to(_PLUGIN_ROOT)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit(
+            "init_target_forbidden: 初始化目标不能位于 CanonLedger 插件目录中。"
+        )
+
+    if any(
+        part.casefold() in _INIT_RESERVED_COMPONENTS
+        for part in project_path.parts
+    ):
+        raise SystemExit(
+            "init_target_forbidden: 初始化目标不能位于 .story-system、"
+            ".canon-ledger、.cursor 或 .git 保留目录中。"
+        )
+
+    # A normal workspace may contain several sibling books.  Only ancestors of
+    # this exact target matter; a different child project does not block init.
+    for ancestor in (project_path.parent, *project_path.parent.parents):
+        legacy_root = ancestor / ".canon-ledger"
+        story_root = ancestor / ".story-system"
+        if (
+            legacy_root.exists()
+            or legacy_root.is_symlink()
+            or story_root.exists()
+            or story_root.is_symlink()
+        ):
+            raise SystemExit(
+                "init_target_inside_project: 初始化目标位于已有或不完整书项目内部；"
+                "请选择该项目之外的兄弟目录。"
+            )
+
+
 def _preflight_init_target(project_path: Path) -> _InitTargetSnapshot:
     """Validate a clean target without creating or modifying any filesystem entry."""
-    if ".cursor" in project_path.parts:
-        raise SystemExit("init_target_forbidden: 不能在 .cursor 内初始化小说项目，请选择其他目录。")
+    _assert_init_target_scope(project_path)
     _assert_no_symlink_components(project_path)
 
     if not project_path.exists():
@@ -197,6 +239,7 @@ def _cleanup_created_parents(paths: list[Path]) -> None:
 
 def _target_still_matches_preflight(project_path: Path, snapshot: _InitTargetSnapshot) -> bool:
     try:
+        _assert_init_target_scope(project_path)
         _assert_no_symlink_components(project_path)
     except SystemExit:
         return False

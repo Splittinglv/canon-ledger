@@ -67,7 +67,10 @@ def _bootstrap_mode(snapshot: Mapping[str, Any]) -> str:
         "audit_legacy_fact_boundary",
     }:
         return "legacy_fact_boundary"
-    if action == "supersede_active_soft_author_axioms":
+    if action in {
+        "supersede_active_soft_author_axioms",
+        "recertify_active_author_axioms",
+    }:
         return "author_axiom_fact_boundary"
     if state == "migration_required" and head:
         return "recertification"
@@ -228,11 +231,29 @@ def _primary_action(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             transaction_kind="author_axiom",
         )
     if state == "migration_required" and recovery == (
+        "recertify_active_author_axioms"
+    ):
+        return _structured_action(
+            code=recovery,
+            label="旧 author axioms 缺少当前事实边界证明；逐项重新分类并认证",
+            command="/canon-ledger-plan",
+            transaction_kind="author_axiom",
+        )
+    if state == "migration_required" and recovery == (
         "fork_legacy_fact_boundary"
     ):
         return _structured_action(
             code=recovery,
             label="活动后缀依赖旧软 admission；保留原项目只读并在 clean target 建立分支",
+            command="/canon-ledger-init",
+            transaction_kind=transaction_kind,
+        )
+    if state == "migration_required" and recovery == (
+        "fork_active_fact_boundary"
+    ):
+        return _structured_action(
+            code=recovery,
+            label="活动章节含旧策略事实；保留原 HEAD 只读并在 clean target 重认证",
             command="/canon-ledger-init",
             transaction_kind=transaction_kind,
         )

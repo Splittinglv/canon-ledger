@@ -79,10 +79,11 @@ def test_canon_v3_prepare_rejects_input_outside_project(
     )
     with pytest.raises(SystemExit) as failed:
         canon_ledger.main()
-    assert failed.value.code == 1
+    assert failed.value.code == 2
     error = json.loads(capsys.readouterr().err)
     assert error["ok"] is False
-    assert "项目内" in error["message"]
+    assert error["error"] == "canon_v3_public_command_disabled"
+    assert error["operation"] == "prepare:unsafe-path"
 
 
 @pytest.mark.parametrize(

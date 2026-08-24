@@ -47,6 +47,10 @@ _OPEN_LOOP_RESOLVED_CATEGORIES = frozenset({"open_loop_closed"})
 _ENTITY_NAMESPACES = ("actor", "item", "location")
 
 
+class CanonMemoryReadUnavailable(ValueError):
+    """A public memory query cannot bind to one usable Canon v3 HEAD."""
+
+
 def _entity_namespace(stable_key: str, row: Dict[str, Any]) -> str:
     explicit = str(row.get("namespace") or "").strip().lower()
     if explicit in _ENTITY_NAMESPACES:
@@ -254,13 +258,19 @@ class MemoryContractAdapter:
             exact_projection = read_projection(
                 self.config.project_root, require_fresh=True
             )
-            axiom_projection = exact_projection.get("author_axioms") or {}
-            if isinstance(axiom_projection, dict):
-                active_author_axioms = [
-                    dict(item)
-                    for item in axiom_projection.get("records") or []
-                    if isinstance(item, dict)
-                ]
+            from .canon_v3.query import public_author_axiom_view
+
+            # Context and public query/Dashboard use the same sanitized active
+            # author-axiom representation.  Immutable draft spans remain
+            # publication evidence and are never injected as writing facts.
+            active_author_axioms = [
+                dict(item)
+                for item in public_author_axiom_view(
+                    canon_v3_workflow, exact_projection
+                ).get("records")
+                or []
+                if isinstance(item, dict)
+            ]
             post_read_workflow = authority.snapshot()
             if post_read_workflow.get("workflow_digest") != canon_v3_workflow.get(
                 "workflow_digest"
@@ -674,20 +684,25 @@ class MemoryContractAdapter:
         authority = WorkflowAuthority(self.config.project_root)
         try:
             workflow, _projection = authority.require_fresh_projection()
-        except CanonReadModelUnavailable:
-            blocked = CanonicalHistory(as_of_chapter=max(0, int(as_of_chapter)))
-            blocked.invalid_sources.append("canon_v3_head_projection_unavailable")
-            return blocked
+        except CanonReadModelUnavailable as exc:
+            raise CanonMemoryReadUnavailable(
+                "canon_v3_head_projection_unavailable"
+            ) from exc
         history = load_canonical_history(
             self.config.project_root,
             max(0, int(as_of_chapter)),
         )
+        if history.invalid_sources:
+            raise CanonMemoryReadUnavailable(
+                "canon_v3_history_invalid_sources:"
+                + ",".join(sorted(set(history.invalid_sources)))
+            )
         if authority.snapshot().get("workflow_digest") != workflow.get(
             "workflow_digest"
         ):
-            blocked = CanonicalHistory(as_of_chapter=max(0, int(as_of_chapter)))
-            blocked.invalid_sources.append("canon_v3_workflow_changed_during_query")
-            return blocked
+            raise CanonMemoryReadUnavailable(
+                "canon_v3_workflow_changed_during_query"
+            )
         return history
 
     def query_entity(
@@ -893,6 +908,9 @@ class MemoryContractAdapter:
         payload["author_axioms"] = public_author_axiom_view(
             workflow, projection
         )
+        from .canon_v3.public_read import active_fact_rows
+
+        payload["active_facts"] = active_fact_rows(payload)
         after = authority.snapshot()
         if not bound_workflow_unchanged(workflow, after):
             raise ValueError("canon_v3_authority_changed_during_asof_export")

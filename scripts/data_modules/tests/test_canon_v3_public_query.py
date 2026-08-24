@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import sys
 from pathlib import Path
@@ -10,7 +11,11 @@ from pathlib import Path
 import pytest
 
 from data_modules.canon_v3.query import CanonQueryError, CanonQueryFacade
+from data_modules.canon_v3.public_read import active_fact_rows
+from data_modules.canon_v3.schema import canonical_digest
 from data_modules.canon_v3.service import CanonV3Service
+from data_modules.config import DataModulesConfig
+from data_modules.memory_contract_adapter import MemoryContractAdapter
 
 
 def _project(root: Path) -> Path:
@@ -48,6 +53,111 @@ def _tree_snapshot(root: Path) -> dict[str, tuple[str, bytes | str]]:
     return snapshot
 
 
+def _project_with_genesis(root: Path) -> Path:
+    for rel in (".canon-ledger", ".story-system", "正文", "设定集", "大纲"):
+        (root / rel).mkdir(parents=True, exist_ok=True)
+    (root / ".canon-ledger" / "state.json").write_text(
+        json.dumps(
+            {
+                "project_info": {"title": "Genesis 查询测试", "genre": "玄幻"},
+                "progress": {"current_chapter": 0},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (root / ".story-system" / "MASTER_SETTING.json").write_text(
+        json.dumps(
+            {
+                "initial_canon": {
+                    "protagonist": {"name": "林舟"},
+                    "world": {"scale": "九州大陆"},
+                },
+                "setting_canon": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    CanonV3Service(root).initialize_new_project()
+    return root
+
+
+def _author_axiom_record(root: Path) -> dict:
+    relative = Path(".canon-ledger/tmp/author_axioms/query-world.json")
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    value = "死者不能复生"
+    payload = {
+        "schema_version": "canon-v3/author-axiom-draft/v1",
+        "author_axioms": {"death_is_irreversible": value},
+    }
+    raw = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    path.write_bytes(raw)
+    quote = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    quote_raw = quote.encode("utf-8")
+    start = raw.index(quote_raw)
+    return {
+        "axiom_key": "death_is_irreversible",
+        "category": "world_rule",
+        "source": {
+            "source_type": "author_axiom_draft_span",
+            "source_id": "query-world-rule",
+            "document_path": relative.as_posix(),
+            "document_sha256": hashlib.sha256(raw).hexdigest(),
+            "start": start,
+            "end": start + len(quote_raw),
+            "quote": quote,
+            "quote_sha256": hashlib.sha256(quote_raw).hexdigest(),
+            "json_pointer": "/author_axioms/death_is_irreversible",
+            "value": value,
+            "value_sha256": canonical_digest(value),
+        },
+    }
+
+
+def _publish_author_axiom(service: CanonV3Service, record: dict) -> None:
+    workflow = service.workflow_snapshot()
+    service.prepare_author_axioms(
+        {
+            "schema_version": "canon-v3/author-axiom-proposal/v2",
+            "parent_head": workflow["head_hash"],
+            "workflow_digest": workflow["workflow_digest"],
+            "active_author_axiom_digest": workflow["author_axiom_digest"],
+            "expected_stage_digest": workflow.get("stage_digest"),
+            "records": [record],
+            "genesis_overrides": [],
+        }
+    )
+    status = service.author_axiom_status()
+    service.record_author_axiom_decisions(
+        {
+            "schema_version": "canon-v3/author-axiom-decision-request/v2",
+            "expected_stage_digest": status["stage_digest"],
+            "transaction_hash": status["transaction_hash"],
+            "decisions": [
+                {
+                    "case_key": case["case_key"],
+                    **case["decision_binding"],
+                    "action": "approve",
+                }
+                for case in status["cases"]
+            ],
+        }
+    )
+    status = service.author_axiom_status()
+    service.finalize_author_axioms(
+        {
+            "schema_version": "canon-v3/author-axiom-finalize-request/v2",
+            "expected_stage_digest": status["stage_digest"],
+            "transaction_hash": status["transaction_hash"],
+            "finalize_token": status["finalize_token"],
+        }
+    )
+
+
 def test_query_snapshot_is_head_bound_and_ignores_poisoned_legacy_index(
     tmp_path: Path,
 ) -> None:
@@ -69,6 +179,81 @@ def test_query_snapshot_is_head_bound_and_ignores_poisoned_legacy_index(
     assert result["generation"] == 0
     assert result["projection_digest"]
     assert "伪造旧投影" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_public_active_facts_include_genesis_and_published_author_axioms(
+    tmp_path: Path,
+) -> None:
+    project = _project_with_genesis(tmp_path / "book")
+    service = CanonV3Service(project)
+    _publish_author_axiom(service, _author_axiom_record(project))
+
+    result = CanonQueryFacade(project).snapshot(as_of_chapter=0)
+    facts = result["data"]["active_facts"]
+
+    assert {
+        (row["origin"], row["category"], row.get("field"), row.get("value"))
+        for row in facts
+    } >= {
+        ("genesis", "character_state", "name", "林舟"),
+        ("genesis", "world_rule", "scale", "九州大陆"),
+        (
+            "author_axiom",
+            "world_rule",
+            "death_is_irreversible",
+            "死者不能复生",
+        ),
+    }
+    assert len({row["fact_digest"] for row in facts}) == len(facts)
+    serialized = json.dumps(facts, ensure_ascii=False)
+    assert "legacy_base" not in serialized
+    assert '"source_type": "author_axiom"' in serialized
+    assert "author_axiom_draft_span" not in serialized
+    assert '"quote"' not in serialized
+
+    adapter = MemoryContractAdapter(
+        DataModulesConfig(project_root=project)
+    )
+    exported = adapter.export_asof_snapshot(as_of_chapter=0)
+    assert exported["active_facts"] == facts
+
+    context = adapter.load_context(1)
+    context_rows = {
+        str(row.get("fact_digest") or row.get("record_digest") or "")
+        for section in (
+            context.sections["canonical_facts"],
+            context.sections["hard_constraints"],
+            context.sections["author_axioms"],
+        )
+        for row in section
+    }
+    assert {row["fact_digest"] for row in facts} == context_rows
+
+
+def test_admitted_legacy_prefix_fact_is_active_but_keeps_cutover_origin() -> None:
+    rows = active_fact_rows(
+        {
+            "canonical_facts": [
+                {
+                    "id": "legacy-relation",
+                    "category": "relationship_changed",
+                    "subject": "林舟",
+                    "field": "苏月",
+                    "value": "盟友",
+                    "source_chapter": 4,
+                    "source_event_id": "legacy-event-4",
+                    "fact_digest": "a" * 64,
+                }
+            ],
+            "hard_constraints": [],
+            "author_axioms": {"records": []},
+        }
+    )
+
+    assert rows[0]["authority_layer"] == "active_canon"
+    assert rows[0]["authority_state"] == "active"
+    assert rows[0]["origin"] == "legacy_cutover"
+    assert rows[0]["source_chapter"] == 4
 
 
 def test_cli_knowledge_uses_canon_query_and_legacy_index_is_disabled(

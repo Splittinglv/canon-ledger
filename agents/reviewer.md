@@ -53,6 +53,12 @@ author-axiom 的 add/update/remove 使用独立 proposal、人工决定和 final
 
 文风、文笔、口吻、节奏、审美、人物动机、一般因果、剧情选择和章纲履约完全排除。无证据锚点的低概率猜测忽略。
 
+Reviewer 不授予事实类型。即使 candidate schema 合法，也不能把自由
+`attribute/relationship/world_rule` 自行宣布为 hard；runtime 的 `fact-boundary/v2`
+会在 compile/prepare 生成精确人工分类 case。若 candidate 实际属于上述 advisory 范围，
+应列入 `extraction_incomplete` 要求 data-agent 移除或改道，不能用 checkpoint observation
+让它进入 Canon。
+
 ## Observation
 
 - `confirmed_conflict`：当前证据与 exact prior 不能同时成立；必须引用 prior fact digest 和正文证据，进入 rewrite。

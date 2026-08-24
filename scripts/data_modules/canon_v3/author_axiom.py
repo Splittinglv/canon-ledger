@@ -25,7 +25,11 @@ except ImportError:  # pragma: no cover
     from scripts.security_utils import atomic_write_json, resolve_inside_project
 
 from .projection import projection_is_fresh, rebuild_projection
-from .fact_boundary import FactBoundaryClass, classify_author_axiom_leaf
+from .fact_boundary import (
+    FACT_BOUNDARY_POLICY_VERSION,
+    FactBoundaryClass,
+    classify_author_axiom_leaf,
+)
 from .public_protocol import (
     HumanActionProfile,
     PublicHumanProtocolError,
@@ -167,6 +171,48 @@ class AuthorAxiomPreparedEnvelope(_StrictModel):
     desired_records: tuple[AuthorAxiomRecord, ...]
     prior_superseded_genesis_admission_digests: tuple[str, ...] = ()
     cases: tuple[AuthorAxiomCase, ...] = Field(min_length=1)
+    # Optional only while reading immutable transactions created before the
+    # objective/advisory boundary was explicit.  Every new prepare writes the
+    # current value and ambiguous active records without it require an exact
+    # re-certification transaction.
+    fact_boundary_policy_version: str | None = None
+    fact_boundary_certified_record_digests: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def boundary_certificate_covers_active_snapshot(
+        self,
+    ) -> "AuthorAxiomPreparedEnvelope":
+        certified = self.fact_boundary_certified_record_digests
+        if certified != tuple(sorted(set(certified))) or any(
+            len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+            for digest in certified
+        ):
+            raise ValueError(
+                "author axiom fact-boundary certificate set invalid"
+            )
+        if self.fact_boundary_policy_version is None:
+            if certified:
+                raise ValueError(
+                    "pre-boundary author axiom envelope cannot certify records"
+                )
+            return self
+        potentially_active_ambiguous = {
+            record_digest(record)
+            for record in (*self.prior_records, *self.desired_records)
+            if classify_author_axiom_leaf(
+                axiom_key=record.axiom_key,
+                category=record.category,
+                value=record.source.value,
+            )
+            is FactBoundaryClass.AMBIGUOUS
+        }
+        if set(certified) != potentially_active_ambiguous:
+            raise ValueError(
+                "author axiom fact-boundary certificate must cover the "
+                "complete prior/desired ambiguous snapshot"
+            )
+        return self
 
 
 class AuthorAxiomStagingPointer(_StrictModel):
@@ -409,7 +455,7 @@ def _verify_record(project_root: Path, record: AuthorAxiomRecord) -> None:
         axiom_key=record.axiom_key,
         category=record.category,
         value=record.source.value,
-    ) is not FactBoundaryClass.HARD_FACT:
+    ) is FactBoundaryClass.KNOWN_SOFT:
         raise AuthorAxiomEvidenceError(
             "canon_v3_author_axiom_non_fact_semantics_forbidden"
         )
@@ -428,6 +474,25 @@ def _review_material(
 ) -> dict[str, Any]:
     """Return the exact author-facing material covered by material_digest."""
 
+    prior_boundary = (
+        classify_author_axiom_leaf(
+            axiom_key=prior.axiom_key,
+            category=prior.category,
+            value=prior.source.value,
+        )
+        if prior is not None
+        else None
+    )
+    proposed_boundary = (
+        classify_author_axiom_leaf(
+            axiom_key=proposed.axiom_key,
+            category=proposed.category,
+            value=proposed.source.value,
+        )
+        if proposed is not None
+        else None
+    )
+
     return {
         "schema_version": REVIEW_MATERIAL_SCHEMA,
         "case_key": case_key,
@@ -440,6 +505,21 @@ def _review_material(
             proposed.category.value if proposed is not None else None
         ),
         "proposed_value": proposed.source.value if proposed is not None else None,
+        "fact_boundary_policy_version": FACT_BOUNDARY_POLICY_VERSION,
+        "prior_fact_boundary_class": (
+            prior_boundary.value if prior_boundary is not None else None
+        ),
+        "proposed_fact_boundary_class": (
+            proposed_boundary.value if proposed_boundary is not None else None
+        ),
+        "fact_boundary_human_classification_required": (
+            proposed_boundary is FactBoundaryClass.AMBIGUOUS
+        ),
+        "fact_boundary_approve_meaning": (
+            "classify_exact_proposed_value_as_objective_fictional_fact"
+            if proposed_boundary is FactBoundaryClass.AMBIGUOUS
+            else None
+        ),
         "prior_record": _record_payload(prior) if prior else None,
         "proposed_record": _record_payload(proposed) if proposed else None,
         "prior_genesis_admission": (
@@ -1217,6 +1297,7 @@ class AuthorAxiomChannel:
             in {
                 "supersede_legacy_soft_facts",
                 "supersede_active_soft_author_axioms",
+                "recertify_active_author_axioms",
             }
         )
         replacing_axiom_stage = (
@@ -1275,6 +1356,9 @@ class AuthorAxiomChannel:
                     ),
                     "supersede_active_soft_author_axioms": (
                         "canon_v3_active_author_axiom_non_fact_records:"
+                    ),
+                    "recertify_active_author_axioms": (
+                        "canon_v3_active_author_axiom_boundary_recertification_required:"
                     ),
                 }.get(boundary_recovery)
                 if (
@@ -1347,21 +1431,21 @@ class AuthorAxiomChannel:
                             "canon_v3_legacy_fact_boundary_cleanup_not_exact"
                         )
                 else:
-                    from .fact_boundary import (
-                        FactBoundaryClass,
-                        classify_author_axiom_leaf,
+                    expected_records = (
+                        list(prior_records)
+                        if boundary_recovery
+                        == "recertify_active_author_axioms"
+                        else [
+                            item
+                            for item in prior_records
+                            if classify_author_axiom_leaf(
+                                axiom_key=item.axiom_key,
+                                category=item.category,
+                                value=item.source.value,
+                            )
+                            is not FactBoundaryClass.KNOWN_SOFT
+                        ]
                     )
-
-                    expected_records = [
-                        item
-                        for item in prior_records
-                        if classify_author_axiom_leaf(
-                            axiom_key=item.axiom_key,
-                            category=item.category,
-                            value=item.source.value,
-                        )
-                        is FactBoundaryClass.HARD_FACT
-                    ]
                     if (
                         proposal.genesis_overrides
                         or desired_payloads
@@ -1396,6 +1480,25 @@ class AuthorAxiomChannel:
                 sorted(proposal.records, key=lambda item: item.axiom_key)
             )
             cases_list = list(_derive_cases(prior_records, desired_records))
+            if (
+                opening_from_fact_boundary
+                and boundary_recovery == "recertify_active_author_axioms"
+            ):
+                cases_list.extend(
+                    _case_for(
+                        AuthorAxiomOperation.UPDATE,
+                        item.axiom_key,
+                        item,
+                        item,
+                    )
+                    for item in desired_records
+                    if classify_author_axiom_leaf(
+                        axiom_key=item.axiom_key,
+                        category=item.category,
+                        value=item.source.value,
+                    )
+                    is FactBoundaryClass.AMBIGUOUS
+                )
             active_admissions = {
                 str(item.get("admission_digest") or ""): item
                 for item in self._genesis_axiom_admissions(head)
@@ -1452,6 +1555,21 @@ class AuthorAxiomChannel:
                     sorted(prior_superseded)
                 ),
                 cases=cases,
+                fact_boundary_policy_version=FACT_BOUNDARY_POLICY_VERSION,
+                fact_boundary_certified_record_digests=tuple(
+                    sorted(
+                        {
+                            record_digest(item)
+                            for item in (*prior_records, *desired_records)
+                            if classify_author_axiom_leaf(
+                                axiom_key=item.axiom_key,
+                                category=item.category,
+                                value=item.source.value,
+                            )
+                            is FactBoundaryClass.AMBIGUOUS
+                        }
+                    )
+                ),
             )
             transaction_hash = self.repository.put_author_axiom_transaction(
                 envelope.model_dump(mode="json")

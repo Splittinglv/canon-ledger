@@ -363,7 +363,13 @@ class CanonV3Service:
             raise MigrationRequiredError(
                 "canon_v3_legacy_genesis_v1_recertification_required"
             )
-        if metadata.get("schema_version") == "canon-v3/legacy-genesis/v2":
+        legacy_snapshot = metadata.get("legacy_snapshot")
+        legacy_facts = (
+            legacy_snapshot.get("facts")
+            if isinstance(legacy_snapshot, Mapping)
+            else None
+        )
+        if isinstance(legacy_facts, Mapping):
             from .migration import (
                 LegacyMigrationError,
                 analyze_legacy_fact_boundary,
@@ -399,8 +405,10 @@ class CanonV3Service:
             )
         from .author_axiom import AuthorAxiomChannel
         from .fact_boundary import (
+            FACT_BOUNDARY_POLICY_VERSION,
             FactBoundaryClass,
             classify_author_axiom_leaf,
+            classify_candidate_claim,
         )
 
         active_records = AuthorAxiomChannel(
@@ -414,12 +422,111 @@ class CanonV3Service:
                 category=record.category,
                 value=record.source.value,
             )
-            is not FactBoundaryClass.HARD_FACT
+            is FactBoundaryClass.KNOWN_SOFT
         )
         if non_fact_keys:
             raise MigrationRequiredError(
                 "canon_v3_active_author_axiom_non_fact_records:"
                 + ",".join(non_fact_keys)
+            )
+        ambiguous_axiom_keys = sorted(
+            record.axiom_key
+            for record in active_records
+            if classify_author_axiom_leaf(
+                axiom_key=record.axiom_key,
+                category=record.category,
+                value=record.source.value,
+            )
+            is FactBoundaryClass.AMBIGUOUS
+        )
+        if ambiguous_axiom_keys:
+            from .author_axiom import (
+                AuthorAxiomPreparedEnvelope,
+                record_digest,
+            )
+
+            commits = self.repository.current_author_axiom_commits()
+            policy_version: str | None = None
+            certified_record_digests: set[str] = set()
+            if commits:
+                _commit_hash, active_commit = commits[-1]
+                try:
+                    raw_transaction = self.repository.read_author_axiom_transaction(
+                        str(active_commit.get("transaction_hash") or "")
+                    )
+                    boundary_envelope = (
+                        AuthorAxiomPreparedEnvelope.model_validate(
+                            raw_transaction
+                        )
+                    )
+                    policy_version = (
+                        boundary_envelope.fact_boundary_policy_version
+                    )
+                    certified_record_digests = set(
+                        boundary_envelope.fact_boundary_certified_record_digests
+                    )
+                except Exception:
+                    policy_version = None
+            required_record_digests = {
+                record_digest(record)
+                for record in active_records
+                if record.axiom_key in ambiguous_axiom_keys
+            }
+            if (
+                policy_version != FACT_BOUNDARY_POLICY_VERSION
+                or not required_record_digests.issubset(
+                    certified_record_digests
+                )
+            ):
+                raise MigrationRequiredError(
+                    "canon_v3_active_author_axiom_boundary_recertification_required:"
+                    + ",".join(ambiguous_axiom_keys)
+                )
+
+        polluted_active_candidates: list[str] = []
+        uncertified_active_candidates: list[str] = []
+        for _commit_hash, commit in self.repository.current_commits():
+            active_digests = {
+                str(effect.get("candidate_digest") or "")
+                for effect in commit.get("canon_effects") or ()
+                if isinstance(effect, Mapping)
+            }
+            if not active_digests:
+                continue
+            envelope = self._load_envelope(
+                str(commit.get("transaction_hash") or "")
+            )
+            requirements = {
+                requirement.candidate_digest: requirement
+                for requirement in envelope.prepared_transaction.requirements
+            }
+            for candidate in envelope.candidates:
+                digest = candidate_digest(candidate)
+                if digest not in active_digests:
+                    continue
+                classification = classify_candidate_claim(candidate.claim)
+                if classification is FactBoundaryClass.KNOWN_SOFT:
+                    polluted_active_candidates.append(digest)
+                    continue
+                if classification is FactBoundaryClass.AMBIGUOUS:
+                    requirement = requirements.get(digest)
+                    if (
+                        requirement is None
+                        or "fact_boundary:human_classification_required"
+                        not in requirement.reason_codes
+                    ):
+                        uncertified_active_candidates.append(digest)
+        if polluted_active_candidates or uncertified_active_candidates:
+            raise MigrationRequiredError(
+                "canon_v3_active_chapter_fact_boundary_recertification_required:"
+                + ",".join(
+                    sorted(
+                        set(
+                            polluted_active_candidates
+                            + uncertified_active_candidates
+                        )
+                    )
+                )
             )
         if metadata.get("source") != "v2_accepted_commits":
             return None
@@ -442,6 +549,38 @@ class CanonV3Service:
         """Expose the one reviewable v1 repair transaction on every surface."""
 
         message = str(error)
+        if "canon_v3_active_author_axiom_boundary_recertification_required:" in message:
+            keys = sorted(
+                set(
+                    message.split(
+                        "canon_v3_active_author_axiom_boundary_recertification_required:",
+                        1,
+                    )[1].split(":", 1)[0].split(",")
+                )
+                - {""}
+            )
+            return {
+                "cases": [],
+                "counts": {"ambiguous_author_axioms": len(keys)},
+                "recovery_action": "recertify_active_author_axioms",
+                "ambiguous_author_axiom_keys": keys,
+            }
+        if "canon_v3_active_chapter_fact_boundary_recertification_required:" in message:
+            digests = sorted(
+                set(
+                    message.split(
+                        "canon_v3_active_chapter_fact_boundary_recertification_required:",
+                        1,
+                    )[1].split(":", 1)[0].split(",")
+                )
+                - {""}
+            )
+            return {
+                "cases": [],
+                "counts": {"uncertified_active_facts": len(digests)},
+                "recovery_action": "fork_active_fact_boundary",
+                "uncertified_active_candidate_digests": digests,
+            }
         if "canon_v3_active_author_axiom_non_fact_records:" in message:
             keys = sorted(
                 set(

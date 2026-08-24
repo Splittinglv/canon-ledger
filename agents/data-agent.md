@@ -79,6 +79,11 @@ workflow 非 ready/当前 staged recovery、目标章不允许、HEAD 或 axiom 
 - 实体引用使用 registry canonical ID/identity links；歧义身份显式保留给人工；
 - update/terminal 引用 exact prior slot/fact；新 occurrence 不复用旧 slot。
 
+运行时 schema 合法不等于已获 Canon 准入。`fact-boundary/v2` 会再次检查 claim 的
+客观结构：已知文风、动机、人格、人设、成长弧等 candidate 直接拒绝；自由
+`character_state/relationship/world_rule` 无法结构化证明时会产生 exact 人工分类 case。
+不要为了减少人工而改 key/category 洗白，也不要把 `ambiguous` 改写成模型自报 hard。
+
 候选草案写入 `.canon-ledger/tmp/canon_v3_candidate_draft.json` 后，必须调用：
 
 ```bash

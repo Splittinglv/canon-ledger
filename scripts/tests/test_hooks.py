@@ -322,7 +322,14 @@ def test_guard_blocks_trusted_cli_legacy_state_mutation_capabilities(tail):
     [
         'story-system "玄幻" --format json',
         "style-memory show",
-        "memory-contract export-asof --chapter 3 --out snapshot.json",
+        (
+            "memory-contract export-asof --chapter 3 "
+            '--out "${PROJECT_ROOT}/.canon-ledger/tmp/asof_snapshot.json"'
+        ),
+        (
+            "chapter-binding --chapter 3 "
+            '--out "${PROJECT_ROOT}/.canon-ledger/tmp/chapter_binding.json"'
+        ),
     ],
 )
 def test_guard_allows_exact_non_authoritative_or_read_only_capabilities(tail):
@@ -341,6 +348,45 @@ def test_guard_allows_exact_non_authoritative_or_read_only_capabilities(tail):
 
     assert proc.returncode == 0, proc.stdout
     assert json.loads(proc.stdout)["permission"] == "allow"
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        (
+            "chapter-binding --chapter 3 "
+            '--out "${PROJECT_ROOT}/.story-system/v3/CURRENT"'
+        ),
+        (
+            "chapter-binding --chapter 3 "
+            '--out "${PROJECT_ROOT}/.canon-ledger/state.json"'
+        ),
+        (
+            "memory-contract export-asof --chapter 3 "
+            '--out "${PROJECT_ROOT}/.story-system/v3/CURRENT"'
+        ),
+        "memory-contract export-asof --chapter 3 --out /tmp/asof.json",
+        "story-events --health",
+        'init "${PROJECT_ROOT}/.story-system/v3/nested" 书名 玄幻',
+    ],
+)
+def test_guard_blocks_trusted_cli_unsafe_path_capabilities(tail):
+    canon_ledger = PLUGIN_ROOT / "scripts" / "canon_ledger.py"
+    proc = _run_guard(
+        {
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": (
+                    f'python3 -X utf8 "{canon_ledger}" '
+                    f'--project-root "${{PROJECT_ROOT}}" {tail}'
+                )
+            },
+        },
+        env={**os.environ, "PROJECT_ROOT": "/book"},
+    )
+
+    assert proc.returncode == 2, proc.stdout
+    assert json.loads(proc.stdout)["permission"] == "deny"
 
 
 def test_guard_checks_each_trusted_cli_in_compound_shell_request():

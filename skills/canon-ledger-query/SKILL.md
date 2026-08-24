@@ -65,6 +65,10 @@ latest_chapter
 
 legacy 审计只有在 workflow 指向 cutover/recertification 时才调用。若上述 facade 没有该种查询能力，停止并说明缺失，不扫描 object store、不通读 manifest/commit/decision 文件，也不借 `index.db`、旧 `knowledge query-*` 或 RAG 猜答案；尤其不能用 index aliases 替代 v3 entity registry。
 
+公开 `story-events` 已退役。查询活动或截至某章的事件事实必须使用 `canon-v3 query
+snapshot --as-of-chapter N`、`history` 或更窄的 HEAD-bound facade；不能直接读取旧
+`.story-system/events` 或 `index.db.story_events`。
+
 ## 4. 选择最窄 v3 视图
 
 按问题选择最窄的 HEAD-bound/as-of 接口：

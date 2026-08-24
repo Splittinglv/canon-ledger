@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -214,7 +215,7 @@ def test_event_log_store_recent_and_health_without_table(tmp_path):
     assert health["event_files"] == 0
 
 
-def test_story_events_cli_reads_chapter_file(tmp_path, monkeypatch, capsys):
+def test_story_events_cli_is_retired_without_reading_legacy_events(tmp_path, monkeypatch, capsys):
     _ensure_scripts_on_path()
     events_dir = tmp_path / ".story-system" / "events"
     events_dir.mkdir(parents=True, exist_ok=True)
@@ -230,7 +231,13 @@ def test_story_events_cli_reads_chapter_file(tmp_path, monkeypatch, capsys):
         "argv",
         ["story_events", "--project-root", str(tmp_path), "--chapter", "3"],
     )
-    main()
+    with pytest.raises(SystemExit) as exc:
+        main()
 
-    out = capsys.readouterr().out
-    assert "open_loop_created" in out
+    captured = capsys.readouterr()
+    assert int(exc.value.code or 0) == 2
+    assert captured.out == ""
+    payload = json.loads(captured.err)
+    assert payload["error"] == "canon_v3_story_events_public_read_retired"
+    assert payload["replacement"].endswith("canon-v3 query snapshot")
+    assert "open_loop_created" not in captured.err

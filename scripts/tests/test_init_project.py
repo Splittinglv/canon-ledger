@@ -231,6 +231,47 @@ def test_init_rejects_target_symlink_without_writes(
     assert _tree_bytes(real_target) == before
 
 
+def test_init_rejects_nested_project_and_reserved_directory_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_external_init_side_effects(monkeypatch)
+    existing = tmp_path / "existing-book"
+    (existing / ".canon-ledger").mkdir(parents=True)
+    (existing / ".canon-ledger" / "state.json").write_text("{}\n", encoding="utf-8")
+    before = _tree_bytes(existing)
+
+    with pytest.raises(SystemExit, match="init_target_inside_project"):
+        init_module.init_project(
+            str(existing / "nested-book"),
+            "嵌套项目",
+            "悬疑",
+        )
+    assert _tree_bytes(existing) == before
+
+    for reserved in (".story-system", ".canon-ledger", ".cursor", ".git"):
+        target = tmp_path / reserved / "nested-book"
+        with pytest.raises(SystemExit, match="init_target_forbidden"):
+            init_module.init_project(str(target), "保留目录项目", "悬疑")
+        assert not target.exists()
+
+
+def test_init_rejects_target_inside_plugin_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_external_init_side_effects(monkeypatch)
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    monkeypatch.setattr(init_module, "_PLUGIN_ROOT", plugin_root.resolve())
+    target = plugin_root / "nested-book"
+
+    with pytest.raises(SystemExit, match="init_target_forbidden"):
+        init_module.init_project(str(target), "插件内项目", "悬疑")
+
+    assert not target.exists()
+
+
 def test_init_pins_real_parent_behind_system_style_symlink(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

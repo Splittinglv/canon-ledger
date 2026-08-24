@@ -11,8 +11,10 @@ from scripts.data_modules.canon_v3.author_axiom import (
     AuthorAxiomDecisionError,
     AuthorAxiomEvidenceError,
     AuthorAxiomFinalizeBlocked,
+    AuthorAxiomPreparedEnvelope,
     AuthorAxiomStageConflict,
     _record_set_digest,
+    record_digest,
 )
 from scripts.data_modules.canon_v3.projection import read_projection, rebuild_projection
 from scripts.data_modules.canon_v3.repository import CanonHeadConflict
@@ -131,6 +133,50 @@ def _finalize(service: CanonV3Service) -> dict:
     )
 
 
+def _install_pre_boundary_active_axiom(
+    service: CanonV3Service, record: AuthorAxiomRecord
+) -> str:
+    repository = service.repository
+    head = repository.current_head(validate=True)
+    assert head is not None
+    manifest = repository.read_manifest(head, validate_references=True)
+    with repository.locked():
+        transaction_hash = repository._put_payload_unlocked(  # noqa: SLF001
+            "author_axiom_transaction",
+            {"schema_version": "canon-v3/pre-boundary-transaction/v1"},
+        )
+        commit_hash = repository._put_payload_unlocked(  # noqa: SLF001
+            "author_axiom_commit",
+            {
+                "schema_version": "canon-v3/author-axiom-commit/v1",
+                "revision": 1,
+                "transaction_hash": transaction_hash,
+                "decision_hashes": [],
+                "lineage_decision_hashes": [],
+                "base_head_hash": head,
+                "previous_author_axiom_commit_hash": None,
+                "records": [record.model_dump(mode="json")],
+                "axiom_set_digest": _record_set_digest((record,)),
+                "superseded_legacy_admission_digests": [],
+            },
+        )
+        polluted_head = repository._put_payload_unlocked(  # noqa: SLF001
+            "manifest",
+            {
+                "schema_version": "canon-v3/active-manifest/v1",
+                "generation": int(manifest["generation"]) + 1,
+                "parent_head_hash": head,
+                "chapters": list(manifest.get("chapters") or []),
+                "author_axiom_commits": [
+                    {"revision": 1, "commit_hash": commit_hash}
+                ],
+            },
+        )
+        repository._write_current_unlocked(polluted_head)  # noqa: SLF001
+    rebuild_projection(service.project_root)
+    return polluted_head
+
+
 def test_axiom_publish_is_head_bound_and_does_not_advance_chapters(tmp_path) -> None:
     service = _service(tmp_path)
     before = service.workflow_snapshot()
@@ -156,6 +202,15 @@ def test_axiom_publish_is_head_bound_and_does_not_advance_chapters(tmp_path) -> 
         ],
         "expected_decision_head_hash": None,
     }
+    assert public_case["review_material"][
+        "proposed_fact_boundary_class"
+    ] == "ambiguous"
+    assert public_case["review_material"][
+        "fact_boundary_human_classification_required"
+    ] is True
+    assert public_case["review_material"][
+        "fact_boundary_approve_meaning"
+    ] == "classify_exact_proposed_value_as_objective_fictional_fact"
     assert service.workflow_snapshot()["transaction_kind"] == "author_axiom"
     decided = _decide_all(service)
     assert decided["state"] == "ready_to_finalize"
@@ -180,6 +235,7 @@ def test_axiom_publish_is_head_bound_and_does_not_advance_chapters(tmp_path) -> 
         ("hero_personality", "character_identity", "人格冷漠且寡言"),
         ("immutable_law", "world_rule", "全书文风冷峻，短句为主"),
         ("rule_17", "world_rule", "每段最多三句话"),
+        ("rule_18", "world_rule", "禁止华丽修辞"),
     ],
 )
 def test_soft_design_cannot_enter_author_axiom_prepare(
@@ -201,6 +257,75 @@ def test_soft_design_cannot_enter_author_axiom_prepare(
         service.prepare_author_axioms(_proposal(service, [record]))
 
     assert service.active_author_axioms()["records"] == []
+
+
+def test_pre_boundary_ambiguous_axiom_requires_exact_recertification(
+    tmp_path,
+) -> None:
+    service = _service(tmp_path)
+    raw_record = _draft_record(
+        service.project_root,
+        name="legacy-objective-ambiguous",
+        key="death_is_irreversible",
+        value="死者不能复生",
+    )
+    record = AuthorAxiomRecord.model_validate(raw_record)
+    old_head = _install_pre_boundary_active_axiom(service, record)
+
+    blocked = WorkflowAuthority(service.project_root).snapshot()
+    assert blocked["state"] == "migration_required"
+    assert blocked["can_write_next"] is False
+    assert blocked["primary_action"]["code"] == (
+        "recertify_active_author_axioms"
+    )
+    assert blocked["ambiguous_author_axiom_keys"] == [
+        "death_is_irreversible"
+    ]
+
+    staged = service.prepare_author_axioms(
+        _proposal(service, [record.model_dump(mode="json")])
+    )
+    assert staged["state"] == "awaiting_human"
+    assert staged["cases"][0]["review_material"][
+        "fact_boundary_human_classification_required"
+    ] is True
+    _decide_all(service)
+    result = _finalize(service)
+
+    assert result["head_hash"] != old_head
+    ready = WorkflowAuthority(service.project_root).snapshot()
+    assert ready["state"] == "ready"
+    assert ready["can_write_next"] is True
+
+    unrelated = _draft_record(
+        service.project_root,
+        name="post-recert-unrelated",
+        key="moon_gate_cost",
+        value="开启月门会消耗一枚月石",
+    )
+    service.prepare_author_axioms(
+        _proposal(service, [record.model_dump(mode="json"), unrelated])
+    )
+    _decide_all(service)
+    _finalize(service)
+    active_records = tuple(
+        AuthorAxiomRecord.model_validate(item)
+        for item in service.active_author_axioms()["records"]
+    )
+    _commit_hash, latest_commit = service.repository.current_author_axiom_commits()[
+        -1
+    ]
+    latest_envelope = AuthorAxiomPreparedEnvelope.model_validate(
+        service.repository.read_author_axiom_transaction(
+            latest_commit["transaction_hash"]
+        )
+    )
+    assert set(latest_envelope.fact_boundary_certified_record_digests) == {
+        record_digest(item) for item in active_records
+    }
+    assert WorkflowAuthority(service.project_root).snapshot()["state"] == (
+        "ready"
+    )
 
 
 def test_legacy_active_soft_axiom_blocks_writing_until_human_supersession(
