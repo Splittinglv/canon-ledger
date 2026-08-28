@@ -30,7 +30,11 @@ from .memory_contract import (
 )
 from .memory.hard_constraints import normalize_hard_constraints
 from .consistency_context import sanitize_story_contracts
-from .rag_context import empty_rag_assist
+from .rag_context import (
+    build_rag_query,
+    chapter_goal_from_contract,
+    empty_rag_assist,
+)
 from .story_runtime_sources import commit_status_view, load_runtime_sources
 from .urgency_utils import coerce_urgency
 
@@ -484,6 +488,7 @@ class MemoryContractAdapter:
             }
 
         # 2. 章纲摘要
+        outline = ""
         try:
             from chapter_outline_loader import load_chapter_outline
             outline = load_chapter_outline(self.config.project_root, chapter, max_chars=1500)
@@ -497,17 +502,136 @@ class MemoryContractAdapter:
                 "reason": e.__class__.__name__,
             }
 
-        # The existing RAG/index stores are legacy-derived and are not bound to
-        # an exact Canon HEAD.  Keep the channel explicit and empty until a v3
-        # projection writer can produce a binding receipt.
-        optional["rag_assist"] = empty_rag_assist(
-            enabled=False,
-            reason="canon_v3_head_only",
+        # Retrieval is optional acceleration over the same sanitized active
+        # facts already present above.  A hit is never injected until the v3
+        # retrieval facade resolves its digest back against this exact HEAD.
+        retrieval_enabled = bool(
+            getattr(self.config, "context_rag_assist_enabled", True)
         )
-        source_status["rag"] = {
-            "status": "excluded_legacy",
-            "reason": "not_head_bound",
-        }
+        rag_assist = empty_rag_assist(enabled=retrieval_enabled)
+        if not retrieval_enabled:
+            rag_assist["reason"] = "disabled_by_config"
+            source_status["rag"] = {
+                "status": "disabled",
+                "reason": "disabled_by_config",
+            }
+        elif not workflow_ok:
+            rag_assist["reason"] = "canon_v3_authority_unavailable"
+            source_status["rag"] = {
+                "status": "unavailable",
+                "reason": "canon_v3_authority_unavailable",
+            }
+        else:
+            chapter_contract = (
+                runtime_sources.contracts.get("chapter")
+                if isinstance(runtime_sources.contracts, dict)
+                else None
+            )
+            query_text = build_rag_query(
+                outline,
+                chapter=chapter,
+                max_chars=int(
+                    getattr(
+                        self.config,
+                        "context_rag_assist_max_query_chars",
+                        120,
+                    )
+                    or 120
+                ),
+                chapter_goal=chapter_goal_from_contract(chapter_contract),
+            )
+            rag_assist["query"] = query_text
+            rag_assist["chapter_limit"] = history_as_of
+            if not query_text:
+                rag_assist["reason"] = "no_query_text"
+                source_status["rag"] = {
+                    "status": "skipped",
+                    "reason": "no_query_text",
+                }
+            else:
+                try:
+                    from .canon_v3.retrieval import (
+                        RETRIEVAL_SEARCH_REQUEST_SCHEMA,
+                        search_retrieval,
+                    )
+
+                    retrieval = search_retrieval(
+                        self.config.project_root,
+                        {
+                            "schema_version": RETRIEVAL_SEARCH_REQUEST_SCHEMA,
+                            "query": query_text,
+                            "as_of_chapter": history_as_of,
+                            "top_k": max(
+                                1,
+                                int(
+                                    getattr(
+                                        self.config,
+                                        "context_rag_assist_top_k",
+                                        4,
+                                    )
+                                    or 4
+                                ),
+                            ),
+                            "mode": "auto",
+                            "categories": [],
+                        },
+                    )
+                    rag_assist.update(
+                        {
+                            "invoked": True,
+                            "mode": retrieval["mode"],
+                            "degraded": bool(retrieval["degraded"]),
+                            "reason": retrieval["reason"],
+                            "authority": "canon_v3",
+                            "head_hash": retrieval["head_hash"],
+                            "generation": retrieval["generation"],
+                            "workflow_digest": retrieval["workflow_digest"],
+                            "projection_digest": retrieval["projection_digest"],
+                            "active_fact_set_digest": retrieval[
+                                "active_fact_set_digest"
+                            ],
+                            "hits": [
+                                {
+                                    "chunk_id": hit["retrieval_id"],
+                                    "fact_digest": hit["fact_digest"],
+                                    "chapter": hit["source_chapter"],
+                                    "scene_index": 0,
+                                    "score": hit["score"],
+                                    "source": hit["source"],
+                                    "source_file": (
+                                        "canon-v3:active-fact:"
+                                        + hit["fact_digest"]
+                                    ),
+                                    "content": hit["matched_text"],
+                                    "authority_layer": "retrieval_assist",
+                                    "resolved_against": "active_canon",
+                                    "usable_as_canon": False,
+                                    "active_fact": hit["active_fact"],
+                                }
+                                for hit in retrieval["hits"]
+                            ],
+                        }
+                    )
+                    source_status["rag"] = {
+                        "status": "ok",
+                        "reason": str(retrieval["reason"]),
+                        "mode": str(retrieval["mode"]),
+                    }
+                except Exception as exc:
+                    # Optional retrieval never weakens or blocks the complete
+                    # hard-fact context assembled above.
+                    logger.warning(
+                        "load_context: canon v3 retrieval failed: %s", exc
+                    )
+                    rag_assist["reason"] = (
+                        f"retrieval_error:{exc.__class__.__name__}"
+                    )
+                    rag_assist["degraded"] = True
+                    source_status["rag"] = {
+                        "status": "error",
+                        "reason": exc.__class__.__name__,
+                    }
+        optional["rag_assist"] = rag_assist
 
         # Free-form summaries are intentionally not injected. Accepted events,
         # state deltas, hard constraints and fact-only RAG are the trusted

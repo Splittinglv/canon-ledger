@@ -1,6 +1,6 @@
 # Canon v3：长期一致性事务架构
 
-状态：8.1 公开事实边界与恢复协议
+状态：9.1 HEAD-bound 可选检索与公开事实边界
 
 ## 产品边界
 
@@ -195,6 +195,16 @@ MASTER、设定集、STAGING 或 Canon，也不把章纲履约放入 review bloc
 `historical-export` 只沿审计开始时 CURRENT 的 manifest 祖先链导出 exact
 commit/transaction/decision/lineage、当时候选/effects、author axioms、entity registry 和
 revision source。它不读 STAGING、Git、legacy index 或未来事实，也不生成决定或写 HEAD。
+
+`canon-v3 retrieval` 位于公开 Canon query 之后，只承担候选召回：它把当前
+`active_canon` 复制进可删除的 SQLite projection，并绑定 HEAD/generation、workflow、
+author-axiom、Canon projection 与 active fact-set digest。搜索返回前再次按 fact digest
+解析 current active fact；任何失绑、篡改或 HEAD 竞争都丢弃索引并降级到当前快照的
+内存 BM25。历史 as-of 永远从该历史快照检索，不能读当前向量。Embedding 是可选外部增强，
+默认关闭；只有 `CANON_LEDGER_RETRIEVAL_REMOTE=1` 与非空 key 同时满足才允许远程请求，
+项目 `.env` 的显式 `0` 覆盖全局同名 `1`。缺 key、部分向量或远程失败不进入 workflow
+blocker。STAGING、style、legacy vectors 和历史失效事实不入库，检索命中及无命中都不
+构成事实证明。
 
 ## STAGING 放弃与恢复
 

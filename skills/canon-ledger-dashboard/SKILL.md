@@ -34,6 +34,7 @@ fi
 
 ```text
 /api/canon-v3/workflow
+/api/canon-v3/retrieval
 /api/canon-v3/history
 /api/canon-v3/facts
 /api/canon-v3/entities
@@ -54,6 +55,13 @@ fi
 
 projection stale 时事实接口返回结构化 409，包含 exact workflow、`projection_rebuild_required` 和 `primary_action`；前端不能把失败静默转换为空列表。退役的 legacy/index 分析接口返回结构化 410，并明确标记 `authority=legacy_read_only`、`usable_for_writing=false`，主导航不得调用。
 
+`/api/canon-v3/retrieval` 只展示可选召回层的 state/mode/fact/vector count 与 HEAD binding。
+missing/stale/invalid 必须显示“降级但不阻断写作”；旧 `vectors.db` 即使存在也标记
+`legacy_ignored/usable_for_retrieval=false`，不能让前端推断向量已就绪。Dashboard 不提供
+search 或 rebuild 写路由。
+`/api/env-status` 还必须分别展示 key present、remote opt-in 和 effective remote enabled；
+仅有 key 或只有库内旧向量时，有效 `rag_mode` 仍是 BM25，不能宣称远程语义召回已开启。
+
 Dashboard 的全部 API 必须是 GET-only。启动、读取 workflow、读取事实、查看文件和诊断前后都不得创建目录、锁文件、缓存或其他项目文件。
 
 ## Workflow 展示
@@ -69,6 +77,7 @@ Dashboard 只展示 `primary_action`、命令和人工审核材料，不提供 d
 - Dashboard 可访问。
 - workflow API 与 CLI 的 `workflow_digest` 相同。
 - 所有事实页绑定同一 HEAD/generation。
+- retrieval 状态明确标记非权威与 `writing_blocked=false`，旧向量库不冒充 ready。
 - stale/migration/invalid 状态被明确展示，不泄漏旧 index 数据。
 - 首页显示 exact workflow、STAGING、cases、`can_write_next` 和 `primary_action`。
 - 伏笔页的数据源为 `/api/canon-v3/obligations`。

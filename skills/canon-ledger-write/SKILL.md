@@ -56,6 +56,9 @@ style override
 ```
 
 context-agent 必须只消费活动 HEAD；state/index、STAGING 提议和 legacy 数据不能冒充已生效事实。
+`memory-contract` 可附带 v3 `rag_assist` 来突出与本章目标相关的 active facts；每条必须
+已回查 `active_canon` 且 `usable_as_canon=false`。缺失、过期、无 Embedding 或检索失败时
+继续使用完整 HEAD-bound 上下文，不能阻断起草，也不能把“无命中”解释为“没有事实”。
 
 按用户偏好自由完成正文。章纲是剧情方向，缺失节点可以报告，但默认不属于事实阻断。
 
@@ -138,7 +141,19 @@ finalize_token
 
 ## 7. 最终 Gate
 
-重新运行 status、postcommit gate 和 user report。投影未追上 HEAD 时只执行 rebuild-projection，fresh 前不得建议下一章。
+重新运行 status、postcommit gate 和 user report。Canon 投影未追上 HEAD 时只执行
+`rebuild-projection`，fresh 前不得建议下一章。最终 workflow 已 ready 后尝试刷新可选召回层：
+
+```bash
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 retrieval rebuild
+```
+
+该命令失败、只生成 BM25 或随后显示 stale 都只写入最终报告的增强 warning；章节仍已完成，
+不得重开事务、要求额外事实决定或阻止下一章。
+自动重建必须遵守项目远程开关：仅有 Embedding key 不得发送文本，只有
+`CANON_LEDGER_RETRIEVAL_REMOTE=1` 与非空 key 同时满足才可远程调用；项目 `.env` 的
+显式 `0` 覆盖全局 `1`。
 
 ## 恢复规则
 

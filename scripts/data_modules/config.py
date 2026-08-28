@@ -4,6 +4,7 @@
 Data Modules - 配置文件
 
 API 配置通过环境变量读取（支持 .env 文件）：
+- CANON_LEDGER_RETRIEVAL_REMOTE
 - EMBED_BASE_URL, EMBED_MODEL, EMBED_API_KEY
 - RERANK_BASE_URL, RERANK_MODEL, RERANK_API_KEY
 """
@@ -25,6 +26,12 @@ _PROJECT_ENV_FIELDS = {
     "RERANK_MODEL": "rerank_model",
     "RERANK_API_KEY": "rerank_api_key",
 }
+
+_PROJECT_PRIVACY_ENV_FIELDS = {
+    "CANON_LEDGER_RETRIEVAL_REMOTE": "retrieval_remote",
+}
+
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 def _read_dotenv_file(env_path: Path) -> dict[str, str]:
@@ -138,6 +145,9 @@ class DataModulesConfig:
     embed_base_url: str = field(default_factory=lambda: os.getenv("EMBED_BASE_URL", "https://api-inference.modelscope.cn/v1"))
     embed_model: str = field(default_factory=lambda: os.getenv("EMBED_MODEL", "Qwen/Qwen3-Embedding-8B"))
     embed_api_key: str = field(default_factory=lambda: os.getenv("EMBED_API_KEY", ""))
+    retrieval_remote: str = field(
+        default_factory=lambda: os.getenv("CANON_LEDGER_RETRIEVAL_REMOTE", "0")
+    )
 
     @property
     def embed_url(self) -> str:
@@ -145,15 +155,26 @@ class DataModulesConfig:
 
     @property
     def embedding_enabled(self) -> bool:
-        """Whether remote embedding is explicitly configured.
+        """Whether an embedding credential is available.
 
         Embedding is an optional consistency aid.  Treating the default URL as
         usable without credentials caused fresh projects to make doomed HTTP
-        requests and retry before falling back.  A key is therefore the
-        capability switch; callers can immediately use the local BM25 index
-        when it is absent.
+        requests and retry before falling back.  This generic capability check
+        therefore requires a key.  It is not Canon v3 privacy authorization:
+        v3 callers must use ``retrieval_embedding_enabled``, which additionally
+        requires the explicit remote opt-in.
         """
         return bool(str(self.embed_api_key or "").strip())
+
+    @property
+    def retrieval_remote_enabled(self) -> bool:
+        """Whether Canon v3 retrieval explicitly opted in to remote calls."""
+        return str(self.retrieval_remote or "").strip().lower() in _TRUTHY_ENV_VALUES
+
+    @property
+    def retrieval_embedding_enabled(self) -> bool:
+        """Whether Canon v3 may send retrieval text to the embedding service."""
+        return self.retrieval_remote_enabled and self.embedding_enabled
 
     # ================= Rerank API 配置 =================
     rerank_api_type: str = "openai"
@@ -291,6 +312,11 @@ class DataModulesConfig:
         project_values = _read_dotenv_file(root / ".env")
         for env_name, field_name in _PROJECT_ENV_FIELDS.items():
             if env_name not in os.environ and env_name in project_values:
+                setattr(config, field_name, project_values[env_name])
+        # 远程发送属于项目隐私边界。项目 `.env` 中的显式 0 必须能覆盖进程或
+        # 全局配置中的 1，否则仅仅切换到另一部书也可能把 Canon 文本发往远端。
+        for env_name, field_name in _PROJECT_PRIVACY_ENV_FIELDS.items():
+            if env_name in project_values:
                 setattr(config, field_name, project_values[env_name])
         return config
 

@@ -251,6 +251,16 @@ author-axiom 只调用：
 
 发布后重新读取 status。只有 `ready + can_write_next=true + projection_fresh=true` 才能宣布完成。响应丢失时只允许用同一个 finalize request 做 exact retry。
 
+## 8. 刷新可选检索
+
+无论本轮发布的是章节、author axiom 还是 legacy recertification，只要最终 workflow 已
+`ready + projection_fresh=true`，就尝试执行一次 `canon-v3 retrieval rebuild`。它只刷新
+可丢弃的 active-fact 召回层；BM25-only、远程 Embedding 失败或命令失败都只在报告中标记
+增强未就绪，不得改变本轮发布成功、重开 STAGING、追加人工 case 或阻止下一章。
+远程默认关闭；该自动重建只有在项目实际生效的
+`CANON_LEDGER_RETRIEVAL_REMOTE=1` 且 key 非空时才能发送检索文本。项目 `.env` 的显式
+`0` 必须覆盖全局 `1`。
+
 ## 成功标准
 
 1. 每个 required case 都由作者对 exact material 做出允许动作。

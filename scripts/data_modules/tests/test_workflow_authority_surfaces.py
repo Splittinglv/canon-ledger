@@ -109,7 +109,11 @@ def test_uninitialized_context_is_fact_empty_and_legacy_writers_are_disabled(
     )
     source_status = context.completeness["source_status"]
     assert source_status["scratchpad"]["status"] == "excluded_legacy"
-    assert source_status["rag"]["status"] == "excluded_legacy"
+    assert source_status["rag"] == {
+        "status": "unavailable",
+        "reason": "canon_v3_authority_unavailable",
+    }
+    assert context.sections["rag_assist"]["hits"] == []
 
     with pytest.raises(ValueError, match="legacy_fact_mutation_disabled"):
         ChapterCommitService(tmp_path).build_commit(  # guard runs first

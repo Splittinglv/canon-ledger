@@ -468,18 +468,19 @@ def test_dashboard_env_status_endpoints_report_local_rag_state(monkeypatch, tmp_
     status_payload = status_response.json()
     assert status_payload["embed"]["api_key_present"] is True
     assert status_payload["rerank"]["api_key_present"] is True
-    assert status_payload["vector_db"]["exists"] is True
-    assert status_payload["vector_db"]["record_count"] == 1
-    assert status_payload["rag_mode"] == "full"
+    assert status_payload["legacy_vector_db"]["exists"] is True
+    assert status_payload["legacy_vector_db"]["record_count"] == 1
+    assert status_payload["legacy_vector_db"]["usable_for_retrieval"] is False
+    assert status_payload["rag_mode"] == "bm25_fallback"
 
     probe_response = client.get("/api/env-status/probe")
     assert probe_response.status_code == 200
     probe_payload = probe_response.json()
-    assert probe_payload["ok"] is True
     check_names = [item["name"] for item in probe_payload["checks"]]
     assert "embed_api_key" in check_names
-    assert "rerank_api_key" in check_names
-    assert "vector_db" in check_names
+    assert "canon_v3_retrieval" in check_names
+    assert "rerank_api_key" not in check_names
+    assert "vector_db" not in check_names
 
 
 def test_dashboard_v3_endpoints_use_head_bound_workflow(monkeypatch, tmp_path):

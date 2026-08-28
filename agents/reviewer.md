@@ -41,6 +41,10 @@ legacy cache 都不是可接受的设定扫描输入。
 author-axiom 的 add/update/remove 使用独立 proposal、人工决定和 finalize 通道，
 没有章节正文或 reviewer scan，因此不得伪造为本 agent 的模式。
 
+可选 retrieval 输入只能来自同一 parent HEAD/as-of 的 `canon-v3 retrieval search`，且每条
+必须携带 `resolved_against=active_canon` 与完整 `active_fact`。它只用于定位可能相关的 prior；
+不能把相似文本当证据、把无命中当不存在、缩减五维扫描，或因检索降级而停止审核。
+
 ## 扫描范围
 
 同一轮完整覆盖：

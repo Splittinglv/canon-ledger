@@ -49,6 +49,7 @@ def test_project_dotenv_is_scoped_to_its_config(monkeypatch, tmp_path):
         "EMBED_BASE_URL",
         "EMBED_MODEL",
         "EMBED_API_KEY",
+        "CANON_LEDGER_RETRIEVAL_REMOTE",
         "RERANK_BASE_URL",
         "RERANK_MODEL",
         "RERANK_API_KEY",
@@ -64,6 +65,7 @@ def test_project_dotenv_is_scoped_to_its_config(monkeypatch, tmp_path):
             [
                 "EMBED_BASE_URL=https://embed.invalid/v1",
                 "EMBED_API_KEY=项目甲嵌入密钥",
+                "CANON_LEDGER_RETRIEVAL_REMOTE=1",
                 "RERANK_BASE_URL=https://rerank.invalid/v1",
                 "RERANK_API_KEY=项目甲重排密钥",
             ]
@@ -76,9 +78,32 @@ def test_project_dotenv_is_scoped_to_its_config(monkeypatch, tmp_path):
 
     assert config_a.embed_base_url == "https://embed.invalid/v1"
     assert config_a.embed_api_key == "项目甲嵌入密钥"
+    assert config_a.retrieval_remote_enabled is True
+    assert config_a.retrieval_embedding_enabled is True
     assert config_a.rerank_base_url == "https://rerank.invalid/v1"
     assert config_a.rerank_api_key == "项目甲重排密钥"
     assert config_b.embed_api_key == ""
+    assert config_b.retrieval_remote_enabled is False
+    assert config_b.retrieval_embedding_enabled is False
     assert config_b.rerank_api_key == ""
     assert os.environ.get("EMBED_API_KEY") is None
+    assert os.environ.get("CANON_LEDGER_RETRIEVAL_REMOTE") is None
     assert os.environ.get("RERANK_API_KEY") is None
+
+
+def test_project_remote_opt_out_overrides_global_opt_in(monkeypatch, tmp_path):
+    """书项目的隐私开关必须能压过全局远程配置。"""
+    monkeypatch.setenv("EMBED_API_KEY", "global-key")
+    monkeypatch.setenv("CANON_LEDGER_RETRIEVAL_REMOTE", "1")
+    project = tmp_path / "local-only-book"
+    project.mkdir()
+    (project / ".env").write_text(
+        "CANON_LEDGER_RETRIEVAL_REMOTE=0\n",
+        encoding="utf-8",
+    )
+
+    config = DataModulesConfig.from_project_root(project)
+
+    assert config.embedding_enabled is True
+    assert config.retrieval_remote_enabled is False
+    assert config.retrieval_embedding_enabled is False

@@ -7,6 +7,7 @@ import pytest
 
 from scripts.data_modules import canon_ledger
 from scripts.data_modules.canon_v3 import migration
+from scripts.data_modules.canon_v3 import retrieval
 from scripts.data_modules.canon_v3.service import CanonV3Service
 
 
@@ -216,3 +217,128 @@ def test_canon_v3_repair_cutover_apply_consumes_project_bound_request(
     assert completed.value.code == 0
     assert json.loads(capsys.readouterr().out)["published"] is True
     assert called == {"root": root, "payload": request}
+
+
+@pytest.mark.parametrize(
+    ("subcommand", "extra", "function_name", "expected"),
+    [
+        ("status", [], "retrieval_status", {"action": "status"}),
+        (
+            "rebuild",
+            ["--bm25-only"],
+            "rebuild_retrieval_projection",
+            {"action": "rebuild", "bm25_only": True},
+        ),
+    ],
+)
+def test_canon_v3_retrieval_admin_actions_are_exposed_by_cli(
+    tmp_path, monkeypatch, capsys, subcommand, extra, function_name, expected
+) -> None:
+    root = _project(tmp_path)
+    called = {}
+
+    def fake(project_root, **kwargs):
+        called["root"] = project_root
+        called.update(kwargs)
+        return {"schema_version": "test/retrieval", **expected}
+
+    monkeypatch.setattr(retrieval, function_name, fake)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "canon-ledger",
+            "--project-root",
+            str(root),
+            "canon-v3",
+            "retrieval",
+            subcommand,
+            *extra,
+        ],
+    )
+
+    with pytest.raises(SystemExit) as completed:
+        canon_ledger.main()
+
+    assert completed.value.code == 0
+    assert json.loads(capsys.readouterr().out)["action"] == expected["action"]
+    assert called == {
+        "root": root,
+        **({"bm25_only": True} if subcommand == "rebuild" else {}),
+    }
+
+
+def test_canon_v3_retrieval_search_consumes_project_bound_request(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    root = _project(tmp_path)
+    request_path = root / ".canon-ledger" / "tmp" / "retrieval_query.json"
+    request_path.parent.mkdir(parents=True, exist_ok=True)
+    request = {
+        "schema_version": "canon-v3/retrieval-search-request/v1",
+        "query": "林舟知道什么",
+        "as_of_chapter": 3,
+        "top_k": 5,
+        "mode": "auto",
+        "categories": [],
+    }
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    called = {}
+
+    def fake(project_root, payload):
+        called["root"] = project_root
+        called["payload"] = payload
+        return {"schema_version": "test/retrieval-search", "hits": []}
+
+    monkeypatch.setattr(retrieval, "search_retrieval", fake)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "canon-ledger",
+            "--project-root",
+            str(root),
+            "canon-v3",
+            "retrieval",
+            "search",
+            "--input-file",
+            ".canon-ledger/tmp/retrieval_query.json",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as completed:
+        canon_ledger.main()
+
+    assert completed.value.code == 0
+    assert json.loads(capsys.readouterr().out)["hits"] == []
+    assert called == {"root": root, "payload": request}
+
+
+def test_canon_v3_retrieval_search_rejects_input_outside_project(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    root = _project(tmp_path)
+    outside = tmp_path / "retrieval_query.json"
+    outside.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "canon-ledger",
+            "--project-root",
+            str(root),
+            "canon-v3",
+            "retrieval",
+            "search",
+            "--input-file",
+            str(outside),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as failed:
+        canon_ledger.main()
+
+    assert failed.value.code == 2
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "canon_v3_public_command_disabled"
+    assert error["operation"] == "retrieval:unsafe-path"

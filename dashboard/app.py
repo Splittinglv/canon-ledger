@@ -75,6 +75,8 @@ def _load_state_payload(*, required: bool = False) -> dict:
 
 
 def _inspect_vector_db(project_root: Path) -> dict:
+    """Inspect the retired v2 store for disclosure only, never for readiness."""
+
     from data_modules.config import DataModulesConfig
 
     cfg = DataModulesConfig.from_project_root(project_root)
@@ -84,9 +86,12 @@ def _inspect_vector_db(project_root: Path) -> dict:
     record_count = 0
     error = ""
 
-    if exists and size_bytes > 0:
+    if vector_db.is_symlink():
+        error = "legacy_vector_db_symlink_ignored"
+    elif exists and size_bytes > 0:
         try:
-            with sqlite3.connect(str(vector_db)) as conn:
+            uri = f"{vector_db.resolve().as_uri()}?mode=ro"
+            with sqlite3.connect(uri, uri=True) as conn:
                 cursor = conn.cursor()
                 table_exists = cursor.execute(
                     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vectors'"
@@ -103,39 +108,52 @@ def _inspect_vector_db(project_root: Path) -> dict:
         "size_bytes": size_bytes,
         "record_count": record_count,
         "error": error,
+        "authority_layer": "legacy_ignored",
+        "usable_for_retrieval": False,
+        "usable_as_canon": False,
     }
 
 
 def _build_env_status(project_root: Path) -> dict:
     from data_modules.config import DataModulesConfig
+    from data_modules.canon_v3.retrieval import retrieval_status
 
     cfg = DataModulesConfig.from_project_root(project_root)
-    vector_info = _inspect_vector_db(project_root)
+    legacy_vector_info = _inspect_vector_db(project_root)
+    retrieval = retrieval_status(project_root)
 
-    embed_ready = bool(str(cfg.embed_api_key or "").strip())
+    embed_key_present = cfg.embedding_enabled
+    remote_opt_in = cfg.retrieval_remote_enabled
+    remote_enabled = cfg.retrieval_embedding_enabled
     rerank_ready = bool(str(cfg.rerank_api_key or "").strip())
-    vector_ready = bool(vector_info["exists"] and vector_info["size_bytes"] > 0)
-
-    if vector_ready and embed_ready and rerank_ready:
-        rag_mode = "full"
-    elif vector_ready and embed_ready:
-        rag_mode = "embed_only"
-    else:
-        rag_mode = "bm25_only"
+    retrieval_mode = str(retrieval.get("mode") or "bm25")
+    if retrieval.get("state") != "ready":
+        retrieval_mode = "bm25_fallback"
+    elif not remote_enabled:
+        # The projection may still contain reusable vectors, but without the
+        # project privacy opt-in no remote query embedding is allowed.
+        retrieval_mode = "bm25"
 
     return {
         "embed": {
             "base_url": cfg.embed_base_url,
             "model": cfg.embed_model,
-            "api_key_present": embed_ready,
+            "api_key_present": embed_key_present,
+            "remote_opt_in": remote_opt_in,
+            "remote_enabled": remote_enabled,
         },
         "rerank": {
             "base_url": cfg.rerank_base_url,
             "model": cfg.rerank_model,
             "api_key_present": rerank_ready,
+            "used_by_canon_v3_retrieval": False,
         },
-        "vector_db": vector_info,
-        "rag_mode": rag_mode,
+        "retrieval": retrieval,
+        "legacy_vector_db": legacy_vector_info,
+        # Compatibility alias for older Dashboard clients. The authority labels
+        # make it explicit that existence is not retrieval readiness.
+        "vector_db": legacy_vector_info,
+        "rag_mode": retrieval_mode,
     }
 
 
@@ -468,6 +486,13 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
 
         return WorkflowAuthority(_get_project_root()).snapshot()
 
+    @app.get("/api/canon-v3/retrieval")
+    def canon_v3_retrieval():
+        """Return read-only status for the optional HEAD-bound retrieval plane."""
+        from data_modules.canon_v3.retrieval import retrieval_status
+
+        return retrieval_status(_get_project_root())
+
     @app.get("/api/canon-v3/history")
     def canon_v3_history():
         view = _canon_dashboard_view()
@@ -763,23 +788,29 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
 
         status = _build_env_status(_get_project_root())
         workflow = WorkflowAuthority(_get_project_root()).snapshot()
-        vector_db = status["vector_db"]
+        retrieval = status["retrieval"]
         checks = [
             {
-                "name": "embed_api_key",
-                "ok": bool(status["embed"]["api_key_present"]),
-                "detail": "已配置" if status["embed"]["api_key_present"] else "未配置",
+                "name": "remote_embedding",
+                "ok": True,
+                "detail": (
+                    "已显式开启；active Canon 检索文本可能发送到远程服务"
+                    if status["embed"]["remote_enabled"]
+                    else (
+                        "已选择远程语义召回但未配置 key，使用本地 BM25"
+                        if status["embed"]["remote_opt_in"]
+                        else "未显式开启远程发送，使用本地 BM25"
+                    )
+                ),
             },
             {
-                "name": "rerank_api_key",
-                "ok": bool(status["rerank"]["api_key_present"]),
-                "detail": "已配置" if status["rerank"]["api_key_present"] else "未配置",
-            },
-            {
-                "name": "vector_db",
-                "ok": bool(vector_db["exists"] and not vector_db["error"]),
-                "detail": vector_db["error"]
-                or f"{vector_db['record_count']} records · {vector_db['size_bytes']} bytes",
+                "name": "canon_v3_retrieval",
+                "ok": not bool(retrieval.get("writing_blocked")),
+                "detail": (
+                    f"state={retrieval.get('state')} mode={retrieval.get('mode')} "
+                    f"facts={retrieval.get('fact_count', 0)} "
+                    f"embedded={retrieval.get('embedded_count', 0)}; optional"
+                ),
             },
             {
                 "name": "canon_v3_workflow",

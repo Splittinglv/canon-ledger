@@ -40,10 +40,16 @@ description: 只读诊断 Canon v3 workflow、cutover 认证、事务对象、�
 - `legacy-genesis/v2` 的只读 `fact_boundary_analysis`：已知软事实、待人工分类项、
   下游依赖以及 `ready_to_supersede|manual_fork_required`；
 - canon projection 的 HEAD/generation freshness；
-- 旧 index、RAG 和 projection log 只作为明确标记的兼容告警。
+- 可选 `canon-v3 retrieval status`：ready 时展示 mode、fact/vector count 与 exact binding；
+  missing/stale/invalid 时只给 `canon-v3 retrieval rebuild` 增强建议，不改变 `report.ok`、
+  `can_write_next` 或 workflow primary action；
+- 旧 index、`.canon-ledger/vectors.db`、RAG 和 projection log 只作为明确标记的兼容告警，
+  即使可读也不能报告为当前 BM25/向量可用。
 
-`--deep` 另外报告 Dashboard 前端打包、服务端依赖和插件运行环境。缺少可选
-RAG 或旧 projection 日志不能把有效 HEAD 判成损坏，也不能触发任何 v2 补跑命令。
+`--deep` 另外报告 Dashboard 前端打包、服务端依赖和插件运行环境。Doctor 必须分别报告
+Embedding key 是否存在、`CANON_LEDGER_RETRIEVAL_REMOTE` 是否显式开启和远程能力是否实际
+生效；仅有 key 仍表示本地 BM25。缺少或损坏 retrieval、旧 projection 日志不能把有效
+HEAD 判成损坏，也不能触发任何 v2 补跑命令。
 缺少大纲、角色卡、卷/章/审查规划合同或 legacy state/index 字段只能是规划/兼容
 warning；它们不改变 `report.ok`、`can_write_next` 或唯一事实恢复动作。
 

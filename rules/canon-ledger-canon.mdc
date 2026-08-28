@@ -10,6 +10,7 @@ alwaysApply: false
 
 - 只有 `.story-system/v3/CURRENT` 可达的 Canon v3 HEAD，以及与该 HEAD 和 generation 精确绑定的 fresh projection，才是当前长期事实真源。
 - `.canon-ledger/state.json`、`index.db`、旧报告、RAG、模型记忆和未发布 STAGING 都不能替代当前 HEAD。
+- `canon-v3 retrieval` 只从当前 active Canon 构建可丢弃的 HEAD/fact-set 绑定召回层；命中必须回查 active fact，不能成为事实证据。远程 Embedding 默认关闭，只有 `CANON_LEDGER_RETRIEVAL_REMOTE=1` 与非空 key 同时满足才允许发送检索文本；缺失、过期、BM25 降级或向量失败不阻断写作，旧 `rag`/`vectors.db` 永远不参与。
 - 写作、规划、审查、查询或恢复前，先读取 exact `canon-v3 status`；只执行同一份 workflow snapshot 返回的 `primary_action`，并使用对应 `/canon-ledger-*` Skill。
 
 ## 强制一致性范围

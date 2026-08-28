@@ -11,6 +11,7 @@ from scripts.data_modules.chapter_content_binding import build_chapter_binding
 from scripts.data_modules.canon_v3.evidence import candidate_digest
 from scripts.data_modules.canon_v3.projection import projection_path
 from scripts.data_modules.canon_v3.query import CanonQueryFacade
+from scripts.data_modules.canon_v3.retrieval import rebuild_retrieval_projection
 from scripts.data_modules.canon_v3.schema import FactCandidate, OpenLoopCreatedClaim
 from scripts.data_modules.canon_v3.service import CanonV3Service
 from scripts.data_modules.tests.canon_v3_protocol_helpers import (
@@ -111,6 +112,75 @@ def test_dashboard_fact_surfaces_share_exact_head_binding_and_are_read_only(
         assert len(payload["binding"]["projection_digest"]) == 64
 
     assert _file_fingerprint(root) == before
+
+
+def test_dashboard_retrieval_status_is_get_only_read_only_and_ignores_legacy_db(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.delenv("EMBED_API_KEY", raising=False)
+    monkeypatch.delenv("CANON_LEDGER_RETRIEVAL_REMOTE", raising=False)
+    root = _initialized_project_with_genesis(tmp_path)
+    legacy = root / ".canon-ledger" / "vectors.db"
+    legacy.write_bytes(b"legacy rows are never v3 retrieval")
+    module = _dashboard_module(monkeypatch)
+    before = _file_fingerprint(root)
+
+    with TestClient(module.create_app(root)) as client:
+        missing_response = client.get("/api/canon-v3/retrieval")
+        env_response = client.get("/api/env-status")
+
+    assert missing_response.status_code == 200
+    missing = missing_response.json()
+    assert missing["state"] == "missing"
+    assert missing["writing_blocked"] is False
+    assert missing["usable_as_canon"] is False
+    env = env_response.json()
+    assert env["retrieval"]["state"] == "missing"
+    assert env["legacy_vector_db"]["exists"] is True
+    assert env["legacy_vector_db"]["usable_for_retrieval"] is False
+    assert env["embed"]["api_key_present"] is False
+    assert env["embed"]["remote_opt_in"] is False
+    assert env["embed"]["remote_enabled"] is False
+    assert env["rag_mode"] == "bm25_fallback"
+    assert _file_fingerprint(root) == before
+
+    rebuilt = rebuild_retrieval_projection(root, bm25_only=True)
+    with TestClient(module.create_app(root)) as client:
+        ready_response = client.get("/api/canon-v3/retrieval")
+
+    assert ready_response.status_code == 200
+    ready = ready_response.json()
+    assert ready["state"] == "ready"
+    assert ready["head_hash"] == rebuilt["head_hash"]
+    assert ready["fact_count"] == rebuilt["fact_count"]
+    assert ready["mode"] == "bm25"
+
+
+def test_dashboard_reports_effective_bm25_when_vectors_exist_without_opt_in(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("EMBED_API_KEY", "global-key")
+    monkeypatch.delenv("CANON_LEDGER_RETRIEVAL_REMOTE", raising=False)
+    root = _initialized_project_with_genesis(tmp_path)
+    rebuilt = rebuild_retrieval_projection(
+        root,
+        embedder=lambda _config, texts: ([[1.0, 0.0]] * len(texts), ""),
+    )
+    module = _dashboard_module(monkeypatch)
+
+    with TestClient(module.create_app(root)) as client:
+        env_response = client.get("/api/env-status")
+
+    assert env_response.status_code == 200
+    env = env_response.json()
+    assert rebuilt["mode"] == "vector"
+    assert env["retrieval"]["mode"] == "vector"
+    assert env["embed"]["api_key_present"] is True
+    assert env["embed"]["remote_opt_in"] is False
+    assert env["embed"]["remote_enabled"] is False
+    assert env["rag_mode"] == "bm25"
 
 
 def test_dashboard_active_facts_match_public_query_and_include_genesis(

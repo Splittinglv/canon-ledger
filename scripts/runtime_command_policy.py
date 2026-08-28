@@ -101,6 +101,7 @@ _CANON_V3_ACTIONS = frozenset(
         "rebuild-projection",
         "history",
         "query",
+        "retrieval",
         "agent-schema",
         "validate-agent-output",
         "assemble-proposal",
@@ -473,6 +474,39 @@ def _story_system_is_render_only(arguments: Sequence[str]) -> bool:
     return positional_count == 1
 
 
+def _canon_v3_retrieval_is_safe(arguments: Sequence[str]) -> bool:
+    """Accept only the exact public grammar for the derived retrieval plane."""
+
+    values = [str(item) for item in arguments]
+    if not values:
+        return False
+    if values in (["-h"], ["--help"]):
+        return True
+    action = values[0].lower()
+    rest = values[1:]
+    if action == "status":
+        return not rest or rest in (["-h"], ["--help"])
+    if action == "rebuild":
+        return (
+            not rest
+            or rest == ["--bm25-only"]
+            or rest in (["-h"], ["--help"])
+        )
+    if action == "search":
+        if rest in (["-h"], ["--help"]):
+            return True
+        input_values = _option_values(rest, "input-file")
+        if input_values is None or len(input_values) != 1:
+            return False
+        return len(rest) in {1, 2} and all(
+            token == "--input-file"
+            or token.startswith("--input-file=")
+            or not token.startswith("--")
+            for token in rest
+        )
+    return False
+
+
 def _deny(tool: str, operation: str = "") -> PublicCommandDecision:
     replacement = "canon_ledger.py canon-v3 status"
     if tool in {"story-system", "master-outline-sync"}:
@@ -506,6 +540,10 @@ def evaluate_public_command(argv: Sequence[str]) -> PublicCommandDecision:
     if tool == "canon-v3":
         operation = _subcommand(rest)
         if operation in _CANON_V3_ACTIONS:
+            if operation == "retrieval" and not _canon_v3_retrieval_is_safe(
+                rest[1:]
+            ):
+                return _deny(tool, "retrieval:invalid-action")
             # Every public JSON input is an untrusted, non-authoritative
             # scratch artifact.  It may never alias CURRENT, an immutable
             # object, a projection, author content or a path outside the book.

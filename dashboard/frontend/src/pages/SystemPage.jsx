@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useDashboardContext } from '../App.jsx'
 import Badge from '../components/Badge.jsx'
 import DataTable from '../components/DataTable.jsx'
-import { fetchCommits, formatApiError } from '../api.js'
+import { fetchCommits, fetchRetrievalStatus, formatApiError } from '../api.js'
 import { formatChapterLabel } from '../lib/format.js'
 
 function statusTone(status) {
@@ -33,6 +33,8 @@ export default function SystemPage() {
     const [commits, setCommits] = useState([])
     const [commitBinding, setCommitBinding] = useState(null)
     const [commitError, setCommitError] = useState('')
+    const [retrieval, setRetrieval] = useState(null)
+    const [retrievalError, setRetrievalError] = useState('')
 
     useEffect(() => {
         let cancelled = false
@@ -48,6 +50,24 @@ export default function SystemPage() {
                 setCommits([])
                 setCommitBinding(null)
                 setCommitError(formatApiError(error))
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [refreshToken])
+
+    useEffect(() => {
+        let cancelled = false
+        fetchRetrievalStatus()
+            .then(payload => {
+                if (cancelled) return
+                setRetrieval(payload || null)
+                setRetrievalError('')
+            })
+            .catch(error => {
+                if (cancelled) return
+                setRetrieval(null)
+                setRetrievalError(formatApiError(error))
             })
         return () => {
             cancelled = true
@@ -106,7 +126,21 @@ export default function SystemPage() {
                     value={bindingMatches ? 'exact' : 'unavailable'}
                     sub={commitBinding ? `${shortDigest(commitBinding.head_hash)} · G${commitBinding.generation}` : '未取得 HEAD-bound history'}
                 />
+                <StatCard
+                    label="Optional Retrieval"
+                    value={retrieval?.state || 'unavailable'}
+                    sub={`${retrieval?.mode || 'bm25'} · ${retrieval?.fact_count ?? 0} facts / ${retrieval?.embedded_count ?? 0} vectors`}
+                />
             </div>
+
+            {retrievalError || (retrieval && retrieval.state !== 'ready') ? (
+                <div className="authority-banner" role="status">
+                    <strong>检索增强已降级，但不阻断写作</strong>
+                    <span>
+                        {retrievalError || `${retrieval.state} · 当前 active Canon 会以内存 BM25 召回；命中仍需回查事实。`}
+                    </span>
+                </div>
+            ) : null}
 
             <article className="card">
                 <div className="card-header">

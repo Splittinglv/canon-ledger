@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import DataModulesConfig
+from .canon_v3.retrieval import retrieval_status
 from .project_phase import (
     INIT_REQUIRED_DIRS,
     INIT_REQUIRED_FILES,
@@ -839,97 +840,115 @@ def _sqlite_checks(project_root: Path) -> list[dict[str, Any]]:
 
 
 def _rag_checks(project_root: Path) -> list[dict[str, Any]]:
+    """Report the disposable Canon v3 retrieval plane without opening legacy RAG."""
+
     cfg = DataModulesConfig.from_project_root(project_root)
     checks: list[dict[str, Any]] = []
-    for key, present, base_url, model, fallback in (
-        (
-            "embed",
-            bool(str(cfg.embed_api_key or "").strip()),
-            cfg.embed_base_url,
-            cfg.embed_model,
-            "BM25 关键词召回仍可用；仅语义向量召回未启用。",
-        ),
-        (
-            "rerank",
-            bool(str(cfg.rerank_api_key or "").strip()),
-            cfg.rerank_base_url,
-            cfg.rerank_model,
-            "召回结果仍可用；仅远程精排未启用。",
-        ),
-    ):
-        checks.append(
-            _check(
-                f"rag.{key}.api_key",
-                status=CHECK_OK,
-                severity="info",
-                message=(
-                    f"{key} api key configured"
-                    if present
-                    else f"{key} api key not configured (optional)"
-                ),
-                expected="api key present in env or .env",
-                actual=f"present; model={model}; base_url={base_url}" if present else f"missing; model={model}; base_url={base_url}",
-                impact="" if present else fallback,
-                repair="" if present else "如需可选增强，复制 .env.example 为 .env 并填写对应 API key；不要提交真实 key。",
-            )
+    embed_present = cfg.embedding_enabled
+    remote_opt_in = cfg.retrieval_remote_enabled
+    remote_enabled = cfg.retrieval_embedding_enabled
+    checks.append(
+        _check(
+            "retrieval.embed.api_key",
+            status=CHECK_OK,
+            severity="info",
+            message=(
+                "remote embedding enabled (explicit opt-in and key present)"
+                if remote_enabled
+                else (
+                    "remote embedding opted in but api key is missing; using local BM25"
+                    if remote_opt_in
+                    else "remote embedding disabled by default; using local BM25"
+                )
+            ),
+            expected=(
+                "remote embedding requires CANON_LEDGER_RETRIEVAL_REMOTE=1 "
+                "and an embedding key; local BM25 is the default"
+            ),
+            actual=(
+                f"remote_opt_in={str(remote_opt_in).lower()}; "
+                f"api_key_present={str(embed_present).lower()}; "
+                f"effective_enabled={str(remote_enabled).lower()}; "
+                f"model={cfg.embed_model}; base_url={cfg.embed_base_url}"
+            ),
+            impact=(
+                "active Canon 检索文本可能发送到配置的远程服务。"
+                if remote_enabled
+                else "只使用本地 BM25 召回；事实检查与写作流程不受阻断。"
+            ),
+            repair=(
+                ""
+                if remote_enabled
+                else (
+                    "已选择远程语义召回；请在 .env 配置 EMBED_API_KEY，"
+                    "或将 CANON_LEDGER_RETRIEVAL_REMOTE 设回 0。"
+                    if remote_opt_in
+                    else "无需修复。如确认允许远程发送，再在书项目 .env 同时配置 "
+                    "CANON_LEDGER_RETRIEVAL_REMOTE=1 与 EMBED_API_KEY。"
+                )
+            ),
         )
+    )
+
+    try:
+        status = retrieval_status(project_root)
+    except Exception as exc:  # retrieval is optional and never a writing gate.
+        status = {
+            "state": "authority_unavailable",
+            "mode": "bm25",
+            "degraded_reason": f"{exc.__class__.__name__}:{exc}",
+            "writing_blocked": False,
+            "rebuild_command": "canon_ledger.py canon-v3 retrieval rebuild",
+        }
+    state = str(status.get("state") or "invalid")
+    ready = state == "ready"
+    checks.append(
+        _check(
+            "retrieval.projection",
+            status=CHECK_OK if ready else CHECK_WARNING,
+            severity="info" if ready else "warning",
+            message="Canon v3 HEAD-bound retrieval projection",
+            path=str(status.get("path") or ""),
+            expected="ready and exactly bound to current active Canon fact set",
+            actual=json.dumps(
+                {
+                    "state": state,
+                    "mode": status.get("mode"),
+                    "fact_count": status.get("fact_count"),
+                    "embedded_count": status.get("embedded_count"),
+                    "head_hash": status.get("head_hash"),
+                    "index_binding": status.get("index_binding"),
+                    "degraded_reason": status.get("degraded_reason"),
+                    "writing_blocked": False,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            impact=(
+                ""
+                if ready
+                else "仅召回降级为当前 active Canon 的内存 BM25；不阻断写作，也不改变事实权威。"
+            ),
+            repair=(
+                ""
+                if ready
+                else str(status.get("rebuild_command") or "canon_ledger.py canon-v3 retrieval rebuild")
+            ),
+        )
+    )
+
     if cfg.vector_db.is_file():
-        unsupported_rows = 0
-        provenance_error = ""
-        try:
-            uri = f"{cfg.vector_db.resolve().as_uri()}?mode=ro"
-            with sqlite3.connect(uri, uri=True) as conn:
-                tables = {
-                    str(row[0])
-                    for row in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='table'"
-                    ).fetchall()
-                }
-                if "vectors" in tables:
-                    columns = {
-                        str(row[1])
-                        for row in conn.execute("PRAGMA table_info(vectors)").fetchall()
-                    }
-                    if "source_file" not in columns:
-                        provenance_error = "unsupported_schema_missing_source_file"
-                    else:
-                        row = conn.execute(
-                            """
-                            SELECT COUNT(*) FROM vectors
-                            WHERE source_file IS NULL
-                               OR source_file = ''
-                               OR source_file NOT LIKE 'commit:chapter_%:%'
-                            """
-                        ).fetchone()
-                        unsupported_rows = int(row[0] or 0) if row else 0
-                else:
-                    provenance_error = "vectors_table_missing"
-        except sqlite3.Error as exc:
-            provenance_error = f"sqlite_error:{exc.__class__.__name__}"
-        needs_rebuild = bool(unsupported_rows or provenance_error)
         checks.append(
             _check(
-                "rag.retrieval_provenance",
-                status=CHECK_WARNING if needs_rebuild else CHECK_OK,
-                severity="warning" if needs_rebuild else "info",
-                message="retrieval rows bound to accepted commit snapshots",
-                expected="all default-context rows carry a commit snapshot marker",
-                actual=(
-                    f"unsupported_or_unbound_rows={unsupported_rows}; schema={provenance_error}"
-                    if provenance_error
-                    else f"unsupported_or_unbound_rows={unsupported_rows}"
-                ),
-                impact=(
-                    "兼容向量库含未绑定行或不受支持的结构，不能把它当作 Canon 事实源。"
-                    if needs_rebuild
-                    else ""
-                ),
-                repair=(
-                    "运行 canon_ledger.py canon-v3 status，并只执行返回的 primary_action；"
-                    "不要运行任何 v2 projection 补跑命令恢复 Canon。"
-                    if needs_rebuild
-                    else ""
-                ),
+                "retrieval.legacy_vector_db",
+                status=CHECK_WARNING,
+                severity="warning",
+                message="legacy .canon-ledger/vectors.db is ignored by Canon v3",
+                path=str(cfg.vector_db),
+                expected="v3 retrieval lives only under .story-system/v3/projections",
+                actual="legacy database present; never used for context or Canon answers",
+                impact="旧向量行即使可读也不具备 HEAD/fact-set 绑定，不能作为事实或当前召回来源。",
+                repair="无需用旧 rag/projection 命令修复；需要召回时执行 canon_ledger.py canon-v3 retrieval rebuild。",
             )
         )
     return checks

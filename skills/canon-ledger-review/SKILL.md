@@ -76,6 +76,23 @@ Reviewer output 必须以 v3 `candidate_digest_map` 精确绑定每个 candidate
 逐项比较 draft map，审核后互换 ID 必须失败。ScanAttestation 必须绑定 chapter SHA、
 parent HEAD、candidate digests、entity registry 和 active author axioms。正文明示的长期事实漏提时，停止并重跑 extract，不能写 complete。
 
+长篇项目允许在 reviewer 前用候选中的实体、物品、地点、规则和信息命题组合一个严格
+`canon-v3/retrieval-search-request/v1`，写入 `.canon-ledger/tmp/retrieval_query.json`，并调用：
+
+```bash
+"${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_ledger.py" \
+  --project-root "${PROJECT_ROOT}" canon-v3 retrieval search \
+  --input-file ".canon-ledger/tmp/retrieval_query.json"
+```
+
+staged 模式固定 `as_of_chapter=N-1`；historical 模式固定 export 对应的 as-of 边界。
+命中只能作为定位 prior fact 的候选，必须保持其 exact `active_fact/fact_digest`，不能引用
+`matched_text` 作为证据。检索缺失、降级或无命中时照常完成五维扫描；它既不减少扫描范围，
+也不能产生 conflict/checkpoint 或人工 case。
+默认 `mode=auto` 必须服从项目远程开关；仅本次审核查询要求本地时将请求设为
+`mode=bm25`。只有 `CANON_LEDGER_RETRIEVAL_REMOTE=1` 与非空 key 同时满足时，查询文本才
+允许发送到远程 Embedding 服务。
+
 ## 4A. Staged draft review
 
 proposal 写入 `.canon-ledger/tmp/canon_v3_proposal.json`，然后执行带版本的 prepare：

@@ -637,6 +637,29 @@ def cmd_canon_v3(args: argparse.Namespace) -> int:
                 )
             else:  # pragma: no cover - argparse closes this set.
                 raise ValueError(f"未知 Canon query kind：{args.query_kind}")
+        elif action == "retrieval":
+            from .canon_v3.retrieval import (
+                rebuild_retrieval_projection,
+                retrieval_status,
+                search_retrieval,
+            )
+
+            if args.retrieval_action == "status":
+                payload = retrieval_status(root)
+            elif args.retrieval_action == "rebuild":
+                payload = rebuild_retrieval_projection(
+                    root,
+                    bm25_only=bool(args.bm25_only),
+                )
+            elif args.retrieval_action == "search":
+                payload = search_retrieval(
+                    root,
+                    _read_project_json(root, args.input_file),
+                )
+            else:  # pragma: no cover - argparse closes this set.
+                raise ValueError(
+                    f"未知 Canon retrieval action：{args.retrieval_action}"
+                )
         elif action == "agent-schema":
             from .canon_v3.agent_protocol import protocol_schema
 
@@ -1002,6 +1025,35 @@ def main() -> None:
     p_v3_query.add_argument("--entity", default="")
     p_v3_query.add_argument("--as-of-chapter", type=int, default=None)
     p_v3_query.set_defaults(func=cmd_canon_v3)
+    p_v3_retrieval = canon_v3_sub.add_parser(
+        "retrieval",
+        help="管理只负责召回、绑定 exact HEAD 的可丢弃检索投影",
+    )
+    retrieval_sub = p_v3_retrieval.add_subparsers(
+        dest="retrieval_action",
+        required=True,
+    )
+    p_v3_retrieval_status = retrieval_sub.add_parser(
+        "status",
+        help="只读检查 retrieval 与当前 HEAD/fact set 的绑定",
+    )
+    p_v3_retrieval_status.set_defaults(func=cmd_canon_v3)
+    p_v3_retrieval_rebuild = retrieval_sub.add_parser(
+        "rebuild",
+        help="从当前 active Canon 原子重建 BM25/向量投影",
+    )
+    p_v3_retrieval_rebuild.add_argument(
+        "--bm25-only",
+        action="store_true",
+        help="本次不调用远程 Embedding；仍复用未变化事实的已有向量",
+    )
+    p_v3_retrieval_rebuild.set_defaults(func=cmd_canon_v3)
+    p_v3_retrieval_search = retrieval_sub.add_parser(
+        "search",
+        help="读取项目内严格 JSON 请求并返回已回查 active Canon 的命中",
+    )
+    p_v3_retrieval_search.add_argument("--input-file", required=True)
+    p_v3_retrieval_search.set_defaults(func=cmd_canon_v3)
     p_v3_agent_schema = canon_v3_sub.add_parser(
         "agent-schema", help="导出 data-agent/reviewer 可执行 JSON Schema"
     )

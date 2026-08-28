@@ -239,21 +239,56 @@ def test_doctor_no_project_reports_repair(monkeypatch):
     assert report["recommended_actions"]
 
 
-def test_doctor_treats_missing_rag_keys_as_optional_bm25_mode(tmp_path, monkeypatch):
+def test_doctor_treats_missing_embedding_key_as_optional_bm25_mode(tmp_path, monkeypatch):
     monkeypatch.delenv("EMBED_API_KEY", raising=False)
-    monkeypatch.delenv("RERANK_API_KEY", raising=False)
+    monkeypatch.delenv("CANON_LEDGER_RETRIEVAL_REMOTE", raising=False)
+    monkeypatch.setattr(
+        doctor_module,
+        "retrieval_status",
+        lambda _root: {
+            "state": "missing",
+            "mode": "bm25",
+            "writing_blocked": False,
+            "rebuild_command": "canon_ledger.py canon-v3 retrieval rebuild",
+        },
+    )
 
     checks = doctor_module._rag_checks(tmp_path)
 
     by_id = {item["id"]: item for item in checks}
-    assert by_id["rag.embed.api_key"]["status"] == "ok"
-    assert by_id["rag.embed.api_key"]["severity"] == "info"
-    assert "BM25" in by_id["rag.embed.api_key"]["impact"]
-    assert by_id["rag.rerank.api_key"]["status"] == "ok"
-    assert by_id["rag.rerank.api_key"]["severity"] == "info"
+    assert by_id["retrieval.embed.api_key"]["status"] == "ok"
+    assert by_id["retrieval.embed.api_key"]["severity"] == "info"
+    assert "BM25" in by_id["retrieval.embed.api_key"]["impact"]
+    assert "remote_opt_in=false" in by_id["retrieval.embed.api_key"]["actual"]
+    assert "api_key_present=false" in by_id["retrieval.embed.api_key"]["actual"]
+    assert "effective_enabled=false" in by_id["retrieval.embed.api_key"]["actual"]
+    assert by_id["retrieval.projection"]["status"] == "warning"
+    assert "不阻断写作" in by_id["retrieval.projection"]["impact"]
 
 
-def test_doctor_warns_on_unbound_compatibility_retrieval_rows(tmp_path):
+def test_doctor_does_not_treat_a_global_key_as_remote_opt_in(tmp_path, monkeypatch):
+    monkeypatch.setenv("EMBED_API_KEY", "global-key")
+    monkeypatch.delenv("CANON_LEDGER_RETRIEVAL_REMOTE", raising=False)
+    monkeypatch.setattr(
+        doctor_module,
+        "retrieval_status",
+        lambda _root: {
+            "state": "ready",
+            "mode": "vector",
+            "writing_blocked": False,
+        },
+    )
+
+    checks = doctor_module._rag_checks(tmp_path)
+
+    embed = next(item for item in checks if item["id"] == "retrieval.embed.api_key")
+    assert "remote_opt_in=false" in embed["actual"]
+    assert "api_key_present=true" in embed["actual"]
+    assert "effective_enabled=false" in embed["actual"]
+    assert "BM25" in embed["impact"]
+
+
+def test_doctor_explicitly_ignores_legacy_vector_database(tmp_path, monkeypatch):
     vector_db = tmp_path / ".canon-ledger" / "vectors.db"
     vector_db.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(vector_db) as conn:
@@ -270,31 +305,22 @@ def test_doctor_warns_on_unbound_compatibility_retrieval_rows(tmp_path):
             ("legacy", "commit:chapter_001"),
         )
 
-    checks = doctor_module._rag_checks(tmp_path)
-
-    provenance = next(item for item in checks if item["id"] == "rag.retrieval_provenance")
-    assert provenance["status"] == "warning"
-    assert "canon-v3 status" in provenance["repair"]
-    assert "projections replay" not in provenance["repair"]
-
-
-def test_doctor_warns_on_compatibility_retrieval_schema_without_provenance_column(
-    tmp_path,
-):
-    vector_db = tmp_path / ".canon-ledger" / "vectors.db"
-    vector_db.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(vector_db) as conn:
-        conn.execute(
-            "CREATE TABLE vectors (chunk_id TEXT PRIMARY KEY, chapter INTEGER, content TEXT)"
-        )
+    monkeypatch.setattr(
+        doctor_module,
+        "retrieval_status",
+        lambda _root: {
+            "state": "ready",
+            "mode": "bm25",
+            "writing_blocked": False,
+        },
+    )
 
     checks = doctor_module._rag_checks(tmp_path)
 
-    provenance = next(item for item in checks if item["id"] == "rag.retrieval_provenance")
-    assert provenance["status"] == "warning"
-    assert "unsupported_schema_missing_source_file" in provenance["actual"]
-    assert "canon-v3 status" in provenance["repair"]
-    assert "projections replay" not in provenance["repair"]
+    legacy = next(item for item in checks if item["id"] == "retrieval.legacy_vector_db")
+    assert legacy["status"] == "warning"
+    assert "ignored" in legacy["message"]
+    assert "canon-v3 retrieval rebuild" in legacy["repair"]
 
 
 def test_doctor_warns_on_commit_without_compatibility_projection_log(

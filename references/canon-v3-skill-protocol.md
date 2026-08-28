@@ -213,6 +213,28 @@ candidate/record/effect/transaction digest 或根据文档猜 strict schema。
 HEAD 祖先可达的 exact commit/transaction/decisions 与当时 axiom/registry，不读
 STAGING、Git、legacy index 或未来事实。只读 audit 不生成人工决定或改 HEAD。
 
+## 可选检索增强
+
+`canon-v3 retrieval` 是可删除重建的召回层，不是 Canon 查询或事实证明。磁盘投影只收录
+当前 `active_canon`，并同时绑定 exact HEAD、generation、workflow、author-axiom、Canon
+projection 与活动 fact-set digest；STAGING、style、设定草稿、历史失效事实和 legacy RAG
+一律排除。每个命中都必须按 fact digest 回查当前 active fact，返回
+`authority_layer=retrieval_assist`、`resolved_against=active_canon` 和
+`usable_as_canon=false`。
+
+- `retrieval status` 纯读检查绑定；missing/stale/invalid 只表示增强不可用。
+- 远程 Embedding 默认关闭。只有 `CANON_LEDGER_RETRIEVAL_REMOTE=1` 与非空 key 同时满足
+  才能发送 active Canon 检索文本；项目 `.env` 的显式 `0` 覆盖全局同名 `1`。未开启、
+  未配置 key 或远程失败时使用本地 BM25，不能阻断写作、finalize 或下一章。
+- `retrieval rebuild` 从当前 active fact set 原子重建并遵守上述开关。`--bm25-only` 只禁止
+  该次重建生成新向量，仍可复用旧向量，不能作为持久本地模式；单次搜索需本地时使用
+  `mode=bm25`，整本书禁止远程时保持开关为 `0`。
+- `retrieval search --input-file .canon-ledger/tmp/<name>.json` 只消费严格 v1 请求。
+  历史 as-of 查询从对应 v3 快照在内存做 BM25，不能使用当前索引泄漏未来事实。
+- 检索可用于找候选事实或缩小阅读范围；事实判断仍使用返回的 `active_fact` 或更窄的
+  v3 query facade。无命中不等于事实不存在，任何命中也不能代替完整五维扫描。
+- 旧 `rag`、`.canon-ledger/vectors.db` 和 rerank 配置不参与 v3 检索权威。
+
 ## Legacy 边界
 
 生产 Skill 禁止调用：`chapter-commit`、`chapter-commit --from-last-commit`、旧 `human-review resolve`、旧 `review-pipeline` 写队列、事实型 `update-state`、公开

@@ -50,7 +50,10 @@ projection/history 绑定同一 HEAD
 
 基础包不足时，只用带 `--as-of-chapter N-1` 的 v3 query facade 补查 entity、rules、obligations、timeline、knowledge、presence 和 custody。
 
-完整保留所有 active hard facts；可以压缩措辞，不能按条数、最近窗口或 RAG 命中裁剪。摘要和 RAG 只是软证据，不能覆盖 HEAD。
+完整保留所有 active hard facts；可以压缩措辞，不能按条数、最近窗口或检索命中裁剪。
+`rag_assist` 只可把与本章目标相关的事实提前展示；只接受
+`resolved_against=active_canon && usable_as_canon=false` 的命中，并以其中 `active_fact`
+为内容。missing/stale/invalid、BM25 降级、无命中或远程向量失败都不是 blocker。
 
 未 recertify 的设定草案只能列入“待确认变更”，不能进入事实轨。字段缺失只有在对应 coverage 完整且来源可靠时才能解释为否定；否则写“未记录”。
 
@@ -58,7 +61,7 @@ projection/history 绑定同一 HEAD
 
 1. 核对 workflow/HEAD/目标章。
 2. 读取章合同和章纲方向；章纲履约默认 advisory。
-3. 完整消费 active rules、relationships、obligations、人物状态、知识、在场、持有和时间锚点。
+3. 完整消费 active rules、relationships、obligations、人物状态、知识、在场、持有和时间锚点；可用 `rag_assist` 排序，但不能据此删减。
 4. 读取本轮要求，分成剧情、风格、显式 retcon。
 5. 通过 `style-memory show` 读取全书文风；style 文件缺失不是 blocker。
 6. 组装任务书并检查事实/剧情/风格没有串轨。

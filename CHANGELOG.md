@@ -1,5 +1,29 @@
 # 更新日志
 
+## v9.1.0 - HEAD-bound 可选向量召回
+
+发版范围：`v9.0.0..v9.1.0`。
+
+### 给作者看的变化
+
+- 新增 `canon-v3 retrieval status|rebuild|search`。长篇事实可用语义向量或本地 BM25
+  找候选，但所有命中都会回查当前 active Canon，永远不直接成为正史。
+- 远程 Embedding 默认关闭，只有 `CANON_LEDGER_RETRIEVAL_REMOTE=1` 与非空 key 同时满足
+  才会发送 active Canon 检索文本；仅有全局 key 不会开启远程，项目 `.env` 的 `0` 可覆盖
+  全局 `1`。本地 BM25 或任何检索降级都不阻断写章、人工确认、finalize 或下一章。
+- Context、Reviewer、Query、Doctor 和 Dashboard 统一展示同一 HEAD/fact-set 绑定；旧
+  RAG 与 `.canon-ledger/vectors.db` 明确忽略。
+
+### 给维护者
+
+- 新投影固定在 `.story-system/v3/projections/retrieval.sqlite3`，只收 active facts，并绑定
+  HEAD/generation/workflow/axiom/projection/fact-set；篡改、删除、替换和并发 HEAD 均 fail closed。
+- CLI/Hook 收口严格检索语法和项目内请求路径；读取、状态和 Dashboard GET 保持零写入。
+- 新增 BM25/向量复用、stale/tamper、知识边界、历史防泄漏、远程显式 opt-in、项目级
+  opt-out、Context 与 Dashboard 回归测试，并同步 9 个 Canon Skills 的共享协议。
+
+详见 [`releases/v9.1.0.md`](releases/v9.1.0.md)。
+
 ## v9.0.0 - Canon 事实准入、能力与读取闭包
 
 发版范围：`v8.1.0..v9.0.0`。

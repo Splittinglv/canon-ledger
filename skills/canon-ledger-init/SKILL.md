@@ -90,6 +90,12 @@ head_hash=<CURRENT HEAD>
 
 才宣布初始化完成并建议 `/canon-ledger-plan 1`。同时读取 `canon-v3 author-axioms`：作者确认的初始硬事实应出现在 `genesis_admissions`；没有后续 managed transaction 时 `records=[]` 是正常状态。
 
+验收成功后可执行一次 `canon-v3 retrieval rebuild`。生成的 `.env.example` 必须默认包含
+`CANON_LEDGER_RETRIEVAL_REMOTE=0`；仅有 Embedding key 不得开启远程。只有作者确认并将
+开关改为 `1` 且 key 非空时才允许发送 active Canon 检索文本。未启用或未配置时得到 BM25
+投影是正常结果；网络或检索构建失败只报告可选增强未就绪，不把已完成的 genesis 标成
+部分完成，也不阻止 plan/write。
+
 骨架已生成但 CURRENT 未建立时报告“部分完成”。只有 status 精确返回 `migration_required + bootstrap_mode=new_project + primary_action=initialize_v3` 时才单独执行 `canon-v3 initialize`；如果发现 accepted legacy prefix，必须转 `legacy_cutover`，不能生成空 genesis 覆盖它。
 
 ## 6. 初始化后修改硬设定

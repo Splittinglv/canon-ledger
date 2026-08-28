@@ -65,6 +65,15 @@ latest_chapter
 
 legacy 审计只有在 workflow 指向 cutover/recertification 时才调用。若上述 facade 没有该种查询能力，停止并说明缺失，不扫描 object store、不通读 manifest/commit/decision 文件，也不借 `index.db`、旧 `knowledge query-*` 或 RAG 猜答案；尤其不能用 index aliases 替代 v3 entity registry。
 
+对“全书哪里提过某件事”这类宽泛召回，可以把查询写入项目内
+`.canon-ledger/tmp/retrieval_query.json`，调用 `canon-v3 retrieval search --input-file ...`。
+它只返回已回查当前 active Canon 的候选指针；回答前仍应选择最窄 v3 facade，或明确引用
+命中的 `active_fact` 及 HEAD/as-of binding。`matched_text`、相似度与排序不是事实证据；
+missing/stale/BM25/无命中均不得改写成否定答案。禁止调用旧 `rag search`。
+默认 `mode=auto` 也必须服从项目远程开关；整本书保持本地时使用
+`CANON_LEDGER_RETRIEVAL_REMOTE=0`，只要求本次查询不生成远程查询向量时使用
+`mode=bm25`。`--bm25-only` 是重建参数，不能替代这两项。
+
 公开 `story-events` 已退役。查询活动或截至某章的事件事实必须使用 `canon-v3 query
 snapshot --as-of-chapter N`、`history` 或更窄的 HEAD-bound facade；不能直接读取旧
 `.story-system/events` 或 `index.db.story_events`。

@@ -24,6 +24,7 @@ Data Modules - API 客户端 (v5.4，v5.0 OpenAI 兼容接口沿用)
 import asyncio
 import aiohttp
 import json
+import sys
 import time
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
@@ -179,7 +180,7 @@ class EmbeddingAPIClient:
                         # 可重试的状态码: 429 (限流), 500, 502, 503, 504
                         if resp.status in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
                             delay = base_delay * (2 ** attempt)  # 指数退避
-                            print(f"[WARN] Embed {resp.status}, retrying in {delay:.1f}s ({attempt + 1}/{max_retries})")
+                            print(f"[WARN] Embed {resp.status}, retrying in {delay:.1f}s ({attempt + 1}/{max_retries})", file=sys.stderr)
                             await asyncio.sleep(delay)
                             continue
 
@@ -187,31 +188,31 @@ class EmbeddingAPIClient:
                         err_text = await resp.text()
                         self.last_error_status = int(resp.status)
                         self.last_error_message = str(err_text[:200])
-                        print(f"[ERR] Embed {resp.status}: {err_text[:200]}")
+                        print(f"[ERR] Embed {resp.status}: {err_text[:200]}", file=sys.stderr)
                         return None
 
                 except asyncio.TimeoutError:
                     if attempt < max_retries - 1:
                         delay = base_delay * (2 ** attempt)
-                        print(f"[WARN] Embed timeout, retrying in {delay:.1f}s ({attempt + 1}/{max_retries})")
+                        print(f"[WARN] Embed timeout, retrying in {delay:.1f}s ({attempt + 1}/{max_retries})", file=sys.stderr)
                         await asyncio.sleep(delay)
                         continue
                     self.stats.errors += 1
                     self.last_error_status = None
                     self.last_error_message = f"Timeout after {max_retries} attempts"
-                    print(f"[ERR] Embed: Timeout after {max_retries} attempts")
+                    print(f"[ERR] Embed: Timeout after {max_retries} attempts", file=sys.stderr)
                     return None
 
                 except Exception as e:
                     if attempt < max_retries - 1:
                         delay = base_delay * (2 ** attempt)
-                        print(f"[WARN] Embed error: {e}, retrying in {delay:.1f}s ({attempt + 1}/{max_retries})")
+                        print(f"[WARN] Embed error: {e}, retrying in {delay:.1f}s ({attempt + 1}/{max_retries})", file=sys.stderr)
                         await asyncio.sleep(delay)
                         continue
                     self.stats.errors += 1
                     self.last_error_status = None
                     self.last_error_message = str(e)
-                    print(f"[ERR] Embed: {e}")
+                    print(f"[ERR] Embed: {e}", file=sys.stderr)
                     return None
 
             return None
@@ -250,9 +251,9 @@ class EmbeddingAPIClient:
                 all_embeddings.extend(result)
             else:
                 if not skip_failures:
-                    print(f"[WARN] Embed batch {batch_idx} failed, aborting all")
+                    print(f"[WARN] Embed batch {batch_idx} failed, aborting all", file=sys.stderr)
                     return []
-                print(f"[WARN] Embed batch {batch_idx} failed, marking {actual_batch_size} items as None")
+                print(f"[WARN] Embed batch {batch_idx} failed, marking {actual_batch_size} items as None", file=sys.stderr)
                 all_embeddings.extend([None] * actual_batch_size)
 
         return all_embeddings[:len(texts)]

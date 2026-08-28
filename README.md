@@ -1,7 +1,7 @@
 # 叙典 CanonLedger
 
 [![License](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-9.0.0-brightgreen.svg)](.cursor-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-9.1.0-brightgreen.svg)](.cursor-plugin/plugin.json)
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 
 记住故事事实，不替你决定文风。
@@ -332,15 +332,84 @@ planning refresh-contracts --chapter N [--dry-run]
 historical-export --chapter N --revision R [--commit-hash <sha256>]
 history  # 与 query snapshot 同一净化、HEAD-bound 公开视图
 rebuild-projection
+retrieval status
+retrieval rebuild [--bm25-only]
+retrieval search --input-file .canon-ledger/tmp/retrieval_query.json
 ```
 
-派生写入只有两个固定公开目标：chapter binding 写
+作者流程的派生文件只写固定项目角色：chapter binding 写
 `.canon-ledger/tmp/chapter_binding.json`，N-1 snapshot 写
 `.canon-ledger/tmp/asof_snapshot.json`。其它 `--out`、CURRENT/STAGING/objects、正文或
-项目外路径都会由 CLI 和 Hook 同时拒绝。公开 `story-events` 已退役；活动事件事实使用
+项目外路径都会由 CLI 和 Hook 同时拒绝；retrieval rebuild 只原子替换固定的
+`.story-system/v3/projections/retrieval.sqlite3`。公开 `story-events` 已退役；活动事件事实使用
 `canon-v3 query/history`，legacy event 只能在 cutover/repair audit 中查看。
 
 v3 不可变对象、活动 manifest、CURRENT 和 projection binding 位于 `.story-system/v3/`。派生投影可以删除重建，不能反向成为正史来源。
+
+## 可选向量召回（非正史）
+
+长篇小说的事实很多时，`canon-v3 retrieval` 可以先找出可能相关的 active Canon 事实，
+供 Context、Reviewer 或宽泛查询定位。它不是第二套记忆，更不是事实权威：
+
+- 只索引当前 `active_canon`；STAGING、文风、设定草稿、已失效历史和旧
+  `.canon-ledger/vectors.db` 永远不进入 v3 检索。
+- 索引同时绑定 exact HEAD、generation、workflow、author-axiom、Canon projection 和
+  active fact-set digest。HEAD 前进、事实删除/替换或索引被改动后，旧行立即失效。
+- 每个命中返回前都会按 digest 回查当前 active fact，并标记
+  `usable_as_canon=false`。相似度只是定位线索；无命中也不表示事实不存在。
+- 历史 `as_of_chapter` 查询从对应历史快照做内存 BM25，不会拿当前向量泄漏未来事实。
+- 远程 Embedding 默认关闭；仅存在 Embedding key 不会发送数据。未显式开启、没有 key、
+  远程请求失败或索引 missing/stale/invalid 时，都使用当前 Canon 的本地 BM25。检索问题
+  不阻断起草、人工确认、finalize 或下一章。
+
+状态与重建：
+
+```bash
+python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
+  --project-root "<PROJECT_ROOT>" canon-v3 retrieval status
+python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
+  --project-root "<PROJECT_ROOT>" canon-v3 retrieval rebuild
+```
+
+搜索请求必须是项目内 `.canon-ledger/tmp/*.json` 的严格 JSON，例如：
+
+```json
+{
+  "schema_version": "canon-v3/retrieval-search-request/v1",
+  "query": "林舟是否知道密门在钟楼下",
+  "as_of_chapter": 18,
+  "top_k": 8,
+  "mode": "auto",
+  "categories": []
+}
+```
+
+默认配置是持久的本地模式。只有确认允许 active Canon 检索文本离开本机后，才在书项目
+`.env` 同时配置：
+
+```dotenv
+CANON_LEDGER_RETRIEVAL_REMOTE=1
+EMBED_BASE_URL=https://example.com/v1
+EMBED_MODEL=your-embedding-model
+EMBED_API_KEY=your-secret-key
+```
+
+远程端点必须兼容 OpenAI `/v1/embeddings` 请求/响应。v3 只有在远程开关为真且 key 非空时
+才会发送重建文本或搜索查询；仅配置 key 不会开启远程。目标书项目 `.env` 中的
+`CANON_LEDGER_RETRIEVAL_REMOTE=0` 会覆盖同名的进程或全局 `=1`，可可靠地把单本书锁定为
+本地模式。端点、模型和 key 保持既有配置优先级：已定义的进程/全局环境值不会被目标项目
+`.env` 覆盖，请用 `doctor` 或 Dashboard 核对实际生效值。不要提交真实 key。
+
+章节或 author axiom 发布后，Write/Confirm 会自动尝试 `retrieval rebuild`；该重建同样遵守
+远程开关。需要区分三个控制项：
+
+- `CANON_LEDGER_RETRIEVAL_REMOTE=0`：持久禁止 v3 发起远程 Embedding，`auto` 搜索也只走
+  BM25；这是整本书的本地隐私保证。
+- 搜索请求的 `"mode": "bm25"`：仅保证这一次搜索不生成远程查询向量。
+- `retrieval rebuild --bm25-only`：仅禁止该次重建生成新文档向量；为节省成本，它仍可复用
+  索引内已有的同模型向量，也不会改变以后搜索的配置，因此不能代替持久隐私开关。
+
+启用远程后，请按作品保密要求选择服务。v3 当前不使用 Rerank。
 
 ## 安装
 
@@ -381,8 +450,8 @@ ln -s "/absolute/path/to/canon-ledger" ~/.cursor/plugins/local/canon-ledger
 ```bash
 npm --prefix dashboard/frontend ci
 python scripts/run_acceptance.py --mode full
-python scripts/sync_plugin_version.py --check --expected-version 9.0.0
-python scripts/validate_release_notes.py --version 9.0.0 --previous-tag v8.1.0 --format json
+python scripts/sync_plugin_version.py --check --expected-version 9.1.0
+python scripts/validate_release_notes.py --version 9.1.0 --previous-tag v9.0.0 --format json
 ```
 
 此外要对全部 9 个 Skill 运行 `skill-creator` 的 `quick_validate.py`。`full`
@@ -413,7 +482,8 @@ workspace/
 
 | 版本 | 说明 |
 |------|------|
-| **v9.0.0 (当前)** | 统一事实准入证明、存量重认证、CLI/Hook capability 与完整 HEAD-bound 公共读取面；退役无绑定 legacy story-events。 |
+| **v9.1.0 (当前)** | 新增 HEAD-bound 可选向量/BM25 召回；命中回查 active Canon，缺失、过期或远程失败不阻断写作。 |
+| **v9.0.0** | 统一事实准入证明、存量重认证、CLI/Hook capability 与完整 HEAD-bound 公共读取面；退役无绑定 legacy story-events。 |
 | **v8.1.0** | 只守长期事实边界；新增 clean-only init、统一 Agent/人工协议、exact STAGING 恢复、planning/history facade、v8 软事实分析与 HEAD-bound Dashboard/验收。 |
 | **v8.0.0** | Canon v3 统一正史写入、精确人工决定、managed author-axiom、fail-closed 迁移/重新认证与 HEAD-bound 投影。 |
 | **v7.2.0** | 堵住正史静默改写与前缀脱节；伏笔、关系和知识边界绑定正文证据。 |

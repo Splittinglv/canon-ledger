@@ -91,6 +91,7 @@ _REQUIRED_CURRENT_AUTHORITY_MODULES = frozenset(
         "scripts/data_modules/tests/test_canon_v3_projection.py",
         "scripts/data_modules/tests/test_canon_v3_public_protocol.py",
         "scripts/data_modules/tests/test_canon_v3_public_query.py",
+        "scripts/data_modules/tests/test_canon_v3_retrieval.py",
         "scripts/data_modules/tests/test_canon_v3_read_purity.py",
         "scripts/data_modules/tests/test_canon_v3_repository.py",
         "scripts/data_modules/tests/test_canon_v3_review.py",

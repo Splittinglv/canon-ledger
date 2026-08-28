@@ -48,6 +48,10 @@ export function fetchWorkflow() {
     return fetchJSON('/api/canon-v3/workflow')
 }
 
+export function fetchRetrievalStatus() {
+    return fetchJSON('/api/canon-v3/retrieval')
+}
+
 export function fetchCanonCharacters() {
     return fetchJSON('/api/canon-v3/characters')
 }

@@ -59,6 +59,9 @@ def test_clean_init_supports_missing_or_strictly_empty_target(
     assert state["project_info"]["title"] == "雾城旧约"
     assert state["protagonist_state"]["name"] == "林舟"
     assert (target / ".story-system" / "v3" / "CURRENT").is_file()
+    env_example = (target / ".env.example").read_text(encoding="utf-8")
+    assert "CANON_LEDGER_RETRIEVAL_REMOTE=0" in env_example
+    assert "OpenAI /v1/embeddings" in env_example
     assert not list((target / ".canon-ledger").rglob("*.lock"))
     assert not list((target / ".story-system").rglob("*.lock"))
 
