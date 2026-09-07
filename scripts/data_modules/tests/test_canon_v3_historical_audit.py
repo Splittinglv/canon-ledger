@@ -231,9 +231,7 @@ def test_historical_export_refuses_ambiguous_republished_numeric_revision(
     repository = CanonV3Repository(project)
     head = repository._initialize_objects(  # noqa: SLF001 - storage fixture.
         genesis_metadata={
-            "schema_version": "canon-v3/genesis-metadata/v1",
-            "source": "new_project",
-            "cutover_chapter": 0,
+            "schema_version": "canon-v3/storage-genesis/v1",
         }
     )
     first = repository._seal_objects(  # noqa: SLF001 - storage fixture.

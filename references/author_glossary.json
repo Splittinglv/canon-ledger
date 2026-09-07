@@ -67,14 +67,9 @@
       "explanation": "作者明确给出的长期硬事实；只有经过独立的提议、确认和发布后才进入 HEAD。"
     },
     {
-      "technical": "migration_required",
-      "author": "需要建立或修复 v3 正史",
-      "explanation": "当前不能继续写新章；按 workflow 的 bootstrap mode 和唯一恢复动作完成初始化、迁移或重新认证。"
-    },
-    {
-      "technical": "legacy_repair",
-      "author": "旧正史来源需要修复",
-      "explanation": "已经存在 HEAD，但导入的旧前缀或后缀来源发生变化；只执行 workflow 给出的精确修复动作，不重新初始化。"
+      "technical": "initialization_required",
+      "author": "需要建立 v3 正史",
+      "explanation": "当前不能继续写新章；按 workflow 的唯一初始化动作建立原生 genesis。"
     },
     {
       "technical": "ready",

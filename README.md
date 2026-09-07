@@ -120,8 +120,7 @@ setting, timeline, continuity, character, logic
 ```
 
 确认 Skill 按当前唯一事务分派：章节与 author-axiom case 先提交 exact
-`decide`，达到 `ready_to_finalize` 后再提交 exact `finalize`；legacy
-recertification 则生成完整绑定的 publish request 并调用 `repair-cutover --apply`。
+`decide`，达到 `ready_to_finalize` 后再提交 exact `finalize`。
 `correct` 和 `rewrite` 都不会在旧 transaction 上直接发布。
 
 若作者明确放弃当前未发布事务，不直接删除 STAGING 或不可变对象。先从
@@ -147,7 +146,7 @@ CLI、write gate、报告、context、Skills 和 Dashboard 读取同一个 `cano
 | `rewrite_required` | 已确认事实冲突或作者选 rewrite | 修改本章并完整重跑 |
 | `recompile_required` | 正文、HEAD 或候选修订变化 | 重新 binding、scan、prepare |
 | `projection_rebuild_required` | 正史已发布但读模型未追上 | `canon-v3 rebuild-projection` |
-| `migration_required` | 尚未切 v3、旧前缀/事实边界变化或旧 schema 待重新认证 | 只执行同一 snapshot 的 `primary_action`；不得自行选恢复命令 |
+| `initialization_required` | 新项目骨架尚未建立 Canon genesis | 执行同一 snapshot 的 `initialize_v3` |
 | `invalid` | 内容寻址对象或引用校验失败 | 停止写作并体检 |
 
 只有 `state=ready`、`can_write_next=true` 且 projection fresh 才能继续下一章。`ready_to_finalize`、暂存 transaction、合同就绪或旧报告里的 blocking 数量都不表示完成。
@@ -162,7 +161,8 @@ CLI、write gate、报告、context、Skills 和 Dashboard 读取同一个 `cano
 /canon-ledger-write 1
 ```
 
-新项目骨架完成后会从 closed `MASTER_SETTING.initial_canon` 创建 genesis。默认只接收
+新项目骨架完成后会从 closed `MASTER_SETTING.initial_canon` 创建
+`canon-v3/genesis/v1` 原生 genesis。默认只接收
 明确身份以及会约束后文的世界、规则、物品能力等硬事实；人物欲望、缺陷、人设类型、
 剧情定位和生成的设定模板仍是软设计，不自动进入 Canon。后续要把某项设计变成长期硬设定，
 必须走 managed author-axiom 的逐项人工决定：
@@ -177,7 +177,7 @@ CLI、write gate、报告、context、Skills 和 Dashboard 读取同一个 `cano
 
 `canon-v3 initialize` 只创建全新项目的 genesis；已有 HEAD 时不能用它保存或更新硬设定。
 `/canon-ledger-init` 同样只接受不存在或严格空的目标；非空目录、已有 v3、
-legacy/malformed 项目、symlink 目标，以及已有书项目、插件根、`.story-system`、
+非空或 malformed 目标、symlink 目标，以及已有书项目、插件根、`.story-system`、
 `.canon-ledger`、`.cursor` 或 `.git` 内部目标都在首次写入前拒绝。新项目在同级临时目录完整
 构建并验证后才发布，init 不再兼任升级或就地修复。
 
@@ -221,82 +221,6 @@ author axioms 与 entity registry，不读 STAGING、legacy index、Git 或未�
 
 优先级是：本轮用户要求 > 全书文风提示词 > 当前模型默认。这个文件不进入 Canon 事实快照，不触发一致性审核。也可以用 `/canon-ledger-learn` 追加长期偏好。
 
-## 从 v2 迁移
-
-先备份书项目，并确认最后一个只读 v2 章节边界 K。查看状态：
-
-```bash
-python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
-  --project-root "<PROJECT_ROOT>" canon-v3 status
-```
-
-冻结已验证 v2 前缀并创建 v3 genesis：
-
-```bash
-python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
-  --project-root "<PROJECT_ROOT>" canon-v3 migrate --cutover-chapter K
-```
-
-`migrate` 先编译 detached cutover material：所有 event/delta/timeline/entity 输入都转成 typed legacy candidates，真实正文 span、identity resolution、slot transition 和 normalized facts 分别留下 admission receipt。旧 opaque ID 只是 alias，不能直接决定 promise/loop/knowledge/timeline/rule slot；alias 与 namespace 先统一后才折叠状态。首次 cutover 遇到无法证明、未分类或身份冲突的输入会直接报错且不创建 CURRENT；先修复旧来源/证据，再重跑 migrate，不能把缺口交给普通人工 case 掩盖。全部通过后才 CAS 切换 CURRENT。
-
-新 cutover 发布 `legacy-genesis/v3 + legacy-fact-snapshot/v3`：身份、时间、硬规则等
-客观叶子可进入 active facts；已知的文风、欲望、动机、性格、人设和成长弧只留
-exclusion audit receipt，不进 admissions/projection。活动但无法判定的自定义叶子才进
-人工分类；空模板和 placeholder 不阻断。旧 v2 schema 仍按原字节解释校验，
-不用新规则静默改写。只有 `fact_boundary_analysis.state=clean` 才保持 `ready`；其余状态
-一律 `migration_required + can_write_next=false`，普通 query/context 也拒绝消费该投影，
-只能通过只读 analysis 后走 exact author-axiom supersession、人工分类或 clean-target fork。
-
-仅已存在的 `canon-v3/legacy-genesis/v1` 进入 detached
-`migration_required/recertification`：旧 positive decisions 不自动复用，负裁决会转成语义谱系，旧 HEAD 和对象保留只读，修复链完成后才原子切换。未发布的 v1 chapter/author-axiom STAGING 不参加 recertification，而是返回 `recompile_required`，要求按当前 v2 proposal、binding 与 HEAD 重新 prepare；任何 STAGING 存在时都与 legacy recertification 互斥。
-若作者明确放弃该冲突事务，status 会给出带 exact kind/digest 的
-`archive_conflicting_staging` primary action；按上文 `archive-staging` 归档并重读 status 后，
-才可开始 detached recertification。
-
-重新认证先只读生成逐项材料：
-
-```bash
-python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
-  --project-root "<PROJECT_ROOT>" canon-v3 repair-cutover --dry-run
-```
-
-作者通过 `/canon-ledger-confirm` 逐项确认全部 admission、identity、target、suffix 与旧裁决后，
-插件生成精确绑定 `expected_current_head + detached_plan_digest + publish_token` 的请求，再执行：
-
-```bash
-python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
-  --project-root "<PROJECT_ROOT>" canon-v3 repair-cutover --apply \
-  --input-file ".canon-ledger/tmp/canon_v3_recertification_publish.json"
-```
-
-partial/stale/concurrent 请求不会切换 CURRENT；响应丢失只能重放同一请求。
-
-已有 CURRENT 的冻结 legacy prefix 若后来失绑，会进入 `bootstrap_mode=legacy_repair`。
-此时普通 `migrate` 会安全拒绝；唯一通用下一步是执行 snapshot 指向的只读
-`canon-v3 audit-cutover`，根据稳定 reason code 恢复原冻结来源，再重新读取 status。
-对 `legacy-genesis/v2` CURRENT，`audit-cutover` 与 `repair-cutover --dry-run` 另外返回
-只读 `fact_boundary_analysis`：无依赖的旧软字段会给出
-`ready_to_supersede` override fragment，但必须合并进“保留全部当前 author-axiom
-records”的完整 proposal，不能把 fragment 当成整份替换请求。若任一活动下游
-commit/transaction/decision 引用该 genesis fact，结果是 `manual_fork_required`；
-author-axiom prepare 与 finalize 在 CURRENT CAS 前都会复查依赖，禁止原地留下悬空引用。
-若存量自定义叶子不能可靠分类，分析返回 `human_classification_required`，保持只读并
-交作者确认，不由模型猜测它是硬事实还是写作设计。
-存量 active author axiom 若 key/category/value 实际描述文风、文笔、动机、人格、人设或
-成长弧，同样进入 `author_axiom_fact_boundary` 只读状态；只能用保留其它硬记录的 exact
-人工 remove 事务清理。新 proposal 的 validator、prepare、decision 与 finalize 都复用该
-语义边界，不能借 `world_rule` category 或无害 key 把软偏好包装成硬 Canon。
-本版本不在活动项目内自动重写受影响后缀：若作者有意修改冻结前缀且无法恢复 exact bytes，
-应保留原项目只读审计，并在 clean target 中 fork/rebuild。插件不会猜新的 cutover 边界、
-转接旧人工决定或自动覆盖当前 HEAD。
-
-### cutover 后的规则
-
-- K 以内的 v1/v2 **章节事实 commit** 是只读前缀。
-- K 之后的章节事实只有 `canon-v3 prepare/decide/finalize` 可以写；跨章节的作者硬设定只走独立的 author-axiom prepare/decide/finalize，并成为新的 active axiom digest。
-- 不再支持 v2 `chapter-commit` 写入、`--from-last-commit` replay、旧 `human-review resolve` 或长期双写。
-- 修改 K 以内正文会使迁移来源摘要失效并 fail closed。恢复 exact bytes 后可继续；若修改是有意且无法恢复，则从 clean target fork/rebuild，不能继续在旧 prefix 上写下一章。
-
 ## CLI
 
 统一入口：
@@ -310,15 +234,11 @@ python3 -X utf8 "<PLUGIN_ROOT>/scripts/canon_ledger.py" \
 
 ```text
 initialize
-migrate --cutover-chapter K
 status
 prepare --input-file .canon-ledger/tmp/canon_v3_proposal.json
 decide --input-file .canon-ledger/tmp/canon_v3_decisions.json
 finalize --input-file .canon-ledger/tmp/canon_v3_finalize.json
 archive-staging --transaction-kind chapter|author_axiom --expected-stage-digest <sha256>
-audit-cutover
-repair-cutover --dry-run
-repair-cutover --apply --input-file .canon-ledger/tmp/canon_v3_recertification_publish.json
 author-axiom-prepare --input-file .canon-ledger/tmp/canon_v3_author_axiom_proposal.json
 author-axiom-decide --input-file .canon-ledger/tmp/canon_v3_author_axiom_decisions.json
 author-axiom-finalize --input-file .canon-ledger/tmp/canon_v3_author_axiom_finalize.json
@@ -342,7 +262,7 @@ retrieval search --input-file .canon-ledger/tmp/retrieval_query.json
 `.canon-ledger/tmp/asof_snapshot.json`。其它 `--out`、CURRENT/STAGING/objects、正文或
 项目外路径都会由 CLI 和 Hook 同时拒绝；retrieval rebuild 只原子替换固定的
 `.story-system/v3/projections/retrieval.sqlite3`。公开 `story-events` 已退役；活动事件事实使用
-`canon-v3 query/history`，legacy event 只能在 cutover/repair audit 中查看。
+`canon-v3 query/history`；旧 event 不进入当前产品的事实读面。
 
 v3 不可变对象、活动 manifest、CURRENT 和 projection binding 位于 `.story-system/v3/`。派生投影可以删除重建，不能反向成为正史来源。
 

@@ -743,27 +743,17 @@ class AuthorAxiomChannel:
                 parent, validate_references=True
             )
         metadata = cursor.get("genesis_metadata")
-        if not isinstance(metadata, Mapping) or metadata.get(
-            "schema_version"
-        ) not in {
-            "canon-v3/legacy-genesis/v2",
-            "canon-v3/legacy-genesis/v3",
-        }:
-            # v1 cutovers predate the certified fact boundary.  Their raw
-            # snapshot remains available to the recertification workflow but
-            # must never surface as active author-axiom authority.
+        if (
+            not isinstance(metadata, Mapping)
+            or metadata.get("schema_version") != "canon-v3/genesis/v1"
+        ):
             return {}
         snapshot = (
-            metadata.get("legacy_snapshot")
+            metadata.get("snapshot")
             if isinstance(metadata, Mapping)
             else None
         )
         facts = snapshot.get("facts") if isinstance(snapshot, Mapping) else None
-        admissions = (
-            facts.get("cutover_fact_admissions")
-            if isinstance(facts, Mapping)
-            else ()
-        )
         return facts if isinstance(facts, Mapping) else {}
 
     def _genesis_axiom_admissions(
@@ -771,11 +761,8 @@ class AuthorAxiomChannel:
     ) -> tuple[dict[str, Any], ...]:
         facts = self._genesis_facts(head)
         result: list[dict[str, Any]] = []
-        for raw in facts.get("cutover_fact_admissions") or ():
-            if (
-                not isinstance(raw, Mapping)
-                or raw.get("mode") != "author_axiom_snapshot"
-            ):
+        for raw in facts.get("genesis_fact_admissions") or ():
+            if not isinstance(raw, Mapping):
                 continue
             fact: Any = None
             for location in raw.get("locations") or ():
@@ -819,12 +806,12 @@ class AuthorAxiomChannel:
         return frozenset(
             str(item)
             for item in commit.get(
-                "superseded_legacy_admission_digests"
+                "superseded_genesis_admission_digests"
             )
             or ()
         )
 
-    def _genesis_legacy_admission_digests(self, head: str | None) -> list[str]:
+    def _active_genesis_admission_digests(self, head: str | None) -> list[str]:
         superseded = self._superseded_genesis_admission_digests(head)
         return sorted(
             str(item.get("admission_digest") or "")
@@ -881,7 +868,7 @@ class AuthorAxiomChannel:
         return canonical_digest(
             {
                 "schema_version": ACTIVE_SET_SCHEMA,
-                "legacy_admission_digests": self._genesis_legacy_admission_digests(
+                "genesis_admission_digests": self._active_genesis_admission_digests(
                     resolved_head
                 ),
                 "active_author_axiom_commit_hash": commit_hash,
@@ -1286,20 +1273,6 @@ class AuthorAxiomChannel:
             and workflow.get("state") == "ready"
             and workflow.get("can_write_next") is True
         )
-        boundary_recovery = str(
-            (workflow.get("primary_action") or {}).get("code") or ""
-        )
-        opening_from_fact_boundary = (
-            existing_kind in {None, "chapter"}
-            and not workflow.get("transaction_hash")
-            and workflow.get("state") == "migration_required"
-            and boundary_recovery
-            in {
-                "supersede_legacy_soft_facts",
-                "supersede_active_soft_author_axioms",
-                "recertify_active_author_axioms",
-            }
-        )
         replacing_axiom_stage = (
             existing_kind == "author_axiom"
             and workflow.get("state")
@@ -1313,9 +1286,7 @@ class AuthorAxiomChannel:
         if (
             not workflow.get("projection_fresh")
             or not (
-                opening_from_ready
-                or opening_from_fact_boundary
-                or replacing_axiom_stage
+                opening_from_ready or replacing_axiom_stage
             )
         ):
             raise AuthorAxiomStageConflict(
@@ -1343,30 +1314,11 @@ class AuthorAxiomChannel:
                 )
             # Recheck all non-staging health inputs after acquiring the shared
             # lock without recursively taking that lock through status().
-            from .service import CanonV3Service, MigrationRequiredError
+            from .service import CanonV3Service
 
             guard = CanonV3Service(self.project_root)
             guard.repository = self.repository
-            try:
-                guard._legacy_prefix_guard()
-            except MigrationRequiredError as exc:
-                expected_boundary_error = {
-                    "supersede_legacy_soft_facts": (
-                        "canon_v3_legacy_fact_boundary_ready_to_supersede:"
-                    ),
-                    "supersede_active_soft_author_axioms": (
-                        "canon_v3_active_author_axiom_non_fact_records:"
-                    ),
-                    "recertify_active_author_axioms": (
-                        "canon_v3_active_author_axiom_boundary_recertification_required:"
-                    ),
-                }.get(boundary_recovery)
-                if (
-                    not opening_from_fact_boundary
-                    or expected_boundary_error is None
-                    or not str(exc).startswith(expected_boundary_error)
-                ):
-                    raise
+            guard._assert_native_genesis()
             guard._assert_active_chapter_bindings()
             active_digest = self.active_digest(head)
             if proposal.active_author_axiom_digest != active_digest:
@@ -1391,114 +1343,18 @@ class AuthorAxiomChannel:
                     for override in proposal.genesis_overrides
                 )
             )
-            if opening_from_fact_boundary:
-                desired_payloads = [
-                    _record_payload(item)
-                    for item in sorted(
-                        proposal.records, key=lambda item: item.axiom_key
-                    )
-                ]
-                if boundary_recovery == "supersede_legacy_soft_facts":
-                    from .migration import analyze_legacy_fact_boundary
-
-                    analysis = analyze_legacy_fact_boundary(
-                        self.project_root, head_hash=head
-                    )
-                    override_plan = analysis.get("override_plan") or {}
-                    expected_overrides = sorted(
-                        override_plan.get("genesis_overrides") or [],
-                        key=lambda item: str(item.get("admission_digest") or ""),
-                    )
-                    actual_overrides = sorted(
-                        [
-                            item.model_dump(mode="json")
-                            for item in proposal.genesis_overrides
-                        ],
-                        key=lambda item: str(item.get("admission_digest") or ""),
-                    )
-                    if (
-                        analysis.get("state") != "ready_to_supersede"
-                        or actual_overrides != expected_overrides
-                        or desired_payloads
-                        != [
-                            _record_payload(item)
-                            for item in sorted(
-                                prior_records, key=lambda item: item.axiom_key
-                            )
-                        ]
-                    ):
-                        raise AuthorAxiomEvidenceError(
-                            "canon_v3_legacy_fact_boundary_cleanup_not_exact"
-                        )
-                else:
-                    expected_records = (
-                        list(prior_records)
-                        if boundary_recovery
-                        == "recertify_active_author_axioms"
-                        else [
-                            item
-                            for item in prior_records
-                            if classify_author_axiom_leaf(
-                                axiom_key=item.axiom_key,
-                                category=item.category,
-                                value=item.source.value,
-                            )
-                            is not FactBoundaryClass.KNOWN_SOFT
-                        ]
-                    )
-                    if (
-                        proposal.genesis_overrides
-                        or desired_payloads
-                        != [
-                            _record_payload(item)
-                            for item in sorted(
-                                expected_records,
-                                key=lambda item: item.axiom_key,
-                            )
-                        ]
-                    ):
-                        raise AuthorAxiomEvidenceError(
-                            "canon_v3_active_author_axiom_cleanup_not_exact"
-                        )
             if requested_genesis_overrides:
-                from .migration import (
-                    LegacyMigrationError,
-                    require_legacy_genesis_supersession_safe,
+                manifest = self.repository.read_manifest(
+                    head, validate_references=True
                 )
-
-                try:
-                    require_legacy_genesis_supersession_safe(
-                        self.project_root,
-                        requested_genesis_overrides,
-                        head_hash=head,
-                    )
-                except LegacyMigrationError as exc:
+                if manifest.get("chapters"):
                     raise AuthorAxiomEvidenceError(
-                        f"{exc.code}:" + ":".join(exc.details)
-                    ) from exc
+                        "canon_v3_genesis_supersession_has_downstream_dependencies"
+                    )
             desired_records = tuple(
                 sorted(proposal.records, key=lambda item: item.axiom_key)
             )
             cases_list = list(_derive_cases(prior_records, desired_records))
-            if (
-                opening_from_fact_boundary
-                and boundary_recovery == "recertify_active_author_axioms"
-            ):
-                cases_list.extend(
-                    _case_for(
-                        AuthorAxiomOperation.UPDATE,
-                        item.axiom_key,
-                        item,
-                        item,
-                    )
-                    for item in desired_records
-                    if classify_author_axiom_leaf(
-                        axiom_key=item.axiom_key,
-                        category=item.category,
-                        value=item.source.value,
-                    )
-                    is FactBoundaryClass.AMBIGUOUS
-                )
             active_admissions = {
                 str(item.get("admission_digest") or ""): item
                 for item in self._genesis_axiom_admissions(head)
@@ -1769,21 +1625,13 @@ class AuthorAxiomChannel:
                 )
             )
             if newly_superseded:
-                from .migration import (
-                    LegacyMigrationError,
-                    require_legacy_genesis_supersession_safe,
+                parent_manifest = self.repository.read_manifest(
+                    envelope.parent_head, validate_references=True
                 )
-
-                try:
-                    require_legacy_genesis_supersession_safe(
-                        self.project_root,
-                        newly_superseded,
-                        head_hash=envelope.parent_head,
-                    )
-                except LegacyMigrationError as exc:
+                if parent_manifest.get("chapters"):
                     raise AuthorAxiomFinalizeBlocked(
-                        f"{exc.code}:" + ":".join(exc.details)
-                    ) from exc
+                        "canon_v3_genesis_supersession_has_downstream_dependencies"
+                    )
             set_digest = _record_set_digest(active)
             result = self.repository.seal_author_axiom(
                 transaction=pointer.transaction_hash,
@@ -1792,7 +1640,7 @@ class AuthorAxiomChannel:
                 lineage_decisions=pointer.lineage_decision_hashes,
                 records=[_record_payload(item) for item in active],
                 axiom_set_digest=set_digest,
-                superseded_legacy_admission_digests=superseded,
+                superseded_genesis_admission_digests=superseded,
                 expected_stage_digest=str(pointer.stage_digest),
                 finalize_token=request.finalize_token,
             )
@@ -1880,7 +1728,7 @@ class AuthorAxiomChannel:
             != [_record_payload(item) for item in active]
             or commit.get("axiom_set_digest") != _record_set_digest(active)
             or tuple(
-                commit.get("superseded_legacy_admission_digests") or ()
+                commit.get("superseded_genesis_admission_digests") or ()
             )
             != superseded
         ):
@@ -1949,7 +1797,7 @@ def validate_publication_proof(
     lineage_decision_hashes: tuple[str, ...],
     records: list[dict[str, Any]],
     axiom_set_digest: str,
-    superseded_legacy_admission_digests: tuple[str, ...],
+    superseded_genesis_admission_digests: tuple[str, ...],
     expected_head: str,
     expected_stage_digest: str,
     finalize_token: str,
@@ -2002,7 +1850,7 @@ def validate_publication_proof(
         raise ValueError("author_axiom_active_records_mismatch")
     if _record_set_digest(expected_records) != axiom_set_digest:
         raise ValueError("author_axiom_set_digest_mismatch")
-    if expected_superseded != superseded_legacy_admission_digests:
+    if expected_superseded != superseded_genesis_admission_digests:
         raise ValueError("author_axiom_genesis_supersession_mismatch")
 
 

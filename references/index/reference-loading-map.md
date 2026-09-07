@@ -1,6 +1,6 @@
 # Reference Loading Map
 
-所有 `canon-ledger-*` Skill 首先完整读取 `references/canon-v3-skill-protocol.md`。共享协议维护环境解析、workflow 状态、版本化人工请求、事实/style/legacy 边界；各 Skill 不复制另一套状态机。
+所有 `canon-ledger-*` Skill 首先完整读取 `references/canon-v3-skill-protocol.md`。共享协议维护环境解析、workflow 状态、版本化人工请求和事实/style 边界；各 Skill 不复制另一套状态机。
 
 | Skill | 额外 reference | 何时读取 |
 |---|---|---|

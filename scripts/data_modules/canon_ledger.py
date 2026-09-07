@@ -737,46 +737,6 @@ def cmd_canon_v3(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
                 return 2
-        elif action == "migrate":
-            from .canon_v3.migration import migrate_legacy
-
-            payload = migrate_legacy(
-                root,
-                cutover_chapter=args.cutover_chapter,
-            )
-        elif action == "audit-cutover":
-            from .canon_v3.migration import audit_cutover
-
-            payload = audit_cutover(
-                root,
-                cutover_chapter=args.cutover_chapter,
-            )
-        elif action == "repair-cutover":
-            if args.dry_run:
-                from .canon_v3.migration import repair_cutover_dry_run
-
-                if args.input_file:
-                    raise ValueError("repair-cutover --dry-run 不接受 --input-file")
-                payload = repair_cutover_dry_run(
-                    root,
-                    cutover_chapter=args.cutover_chapter,
-                )
-            else:
-                from .canon_v3.migration import repair_cutover_apply
-
-                if not args.input_file:
-                    raise ValueError(
-                        "repair-cutover --apply 必须提供项目内 --input-file"
-                    )
-                if args.cutover_chapter is not None:
-                    raise ValueError(
-                        "repair-cutover --apply 的边界已绑定在 detached plan；"
-                        "不能同时提供 --cutover-chapter"
-                    )
-                payload = repair_cutover_apply(
-                    root,
-                    _read_project_json(root, args.input_file),
-                )
         else:  # pragma: no cover - argparse closes this set.
             raise ValueError(f"未知 canon-v3 action：{action}")
     except Exception as exc:
@@ -789,7 +749,7 @@ def cmd_canon_v3(args: argparse.Namespace) -> int:
         return 1
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     if action == "status":
-        return 0 if payload.get("state") not in {"invalid", "migration_required"} else 1
+        return 0 if payload.get("state") not in {"invalid", "initialization_required"} else 1
     return 0
 
 
@@ -800,8 +760,7 @@ def main() -> None:
         "--legacy-read-only",
         action="store_true",
         help=(
-            "已退役兼容参数；legacy adapters 可能产生写入，迁移诊断请使用 "
-            "canon-v3 audit-cutover 或 repair-cutover --dry-run"
+            "已退役兼容参数；legacy adapters 可能产生写入，生产入口始终拒绝"
         ),
     )
 
@@ -1117,35 +1076,6 @@ def main() -> None:
         help="仅在同数字 revision 多个可达时用于精确消歧",
     )
     p_v3_historical.set_defaults(func=cmd_canon_v3)
-    p_v3_migrate = canon_v3_sub.add_parser(
-        "migrate", help="在章节边界冻结 v2 前缀并切换到 v3"
-    )
-    p_v3_migrate.add_argument("--cutover-chapter", type=int, default=None)
-    p_v3_migrate.set_defaults(func=cmd_canon_v3)
-    p_v3_audit = canon_v3_sub.add_parser(
-        "audit-cutover", help="只读审计 legacy 前缀、证据、目标与身份准入"
-    )
-    p_v3_audit.add_argument("--cutover-chapter", type=int, default=None)
-    p_v3_audit.set_defaults(func=cmd_canon_v3)
-    p_v3_repair = canon_v3_sub.add_parser(
-        "repair-cutover", help="只读生成或显式发布 detached 重新认证链"
-    )
-    p_v3_repair.add_argument("--cutover-chapter", type=int, default=None)
-    repair_mode = p_v3_repair.add_mutually_exclusive_group(required=True)
-    repair_mode.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="只读生成逐项审核材料与精确 publish token",
-    )
-    repair_mode.add_argument(
-        "--apply",
-        dest="apply_recertification",
-        action="store_true",
-        help="消费全部逐项人工确认并 CAS 发布重新认证链",
-    )
-    p_v3_repair.add_argument("--input-file", default="")
-    p_v3_repair.set_defaults(func=cmd_canon_v3)
-
     # Pass-through to data modules
     p_index = sub.add_parser("index", help="退役 adapter；生产入口始终拒绝")
     p_index.add_argument("args", nargs=argparse.REMAINDER)
@@ -1340,7 +1270,7 @@ def main() -> None:
                     "error": mutation_blocker,
                     "message": (
                         "旧事实写入口已退役；无论 CURRENT 是否存在，事实变更都必须走 "
-                        "Canon v3 initialize/migrate/prepare/decide/finalize。"
+                        "Canon v3 initialize/prepare/decide/finalize。"
                     ),
                 },
                 ensure_ascii=False,
@@ -1356,7 +1286,7 @@ def main() -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         raise SystemExit(
             0
-            if payload.get("state") not in {"invalid", "migration_required"}
+            if payload.get("state") not in {"invalid", "initialization_required"}
             else 1
         )
     if tool == "update-state":

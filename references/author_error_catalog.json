@@ -6,7 +6,6 @@
       "match": {
         "codes": [
           "canon_v3_head_conflict",
-          "legacy_recertification_head_conflict",
           "canon_v3_proposal_workflow_digest_mismatch",
           "canon_v3_decision_stage_precondition_failed",
           "canon_v3_decision_target_precondition_failed",
@@ -25,7 +24,6 @@
         ],
         "contains": [
           "canon_v3_head_conflict",
-          "legacy_recertification_head_conflict",
           "precondition_failed",
           "workflow_digest_mismatch",
           "stage_digest mismatch",
@@ -42,27 +40,23 @@
       "auto_handle": false
     },
     {
-      "code": "migration_required",
+      "code": "initialization_required",
       "match": {
         "codes": [
-          "migration_required",
+          "initialization_required",
           "canon_v3_initialize_required",
-          "canon_v3_legacy_cutover_required",
-          "legacy_migration_required",
-          "v3_not_initialized",
-          "legacy_repair"
+          "v3_not_initialized"
         ],
         "contains": [
-          "canon_v3_workflow_migration_required",
-          "state=migration_required",
-          "legacy_migration_required"
+          "canon_v3_workflow_initialization_required",
+          "state=initialization_required"
         ]
       },
       "severity": "must_handle",
-      "title": "需要建立或修复 Canon v3 正史",
-      "reason": "当前项目还没有可用的 v3 HEAD，或已导入的旧正史来源需要迁移、修复或重新认证。",
+      "title": "需要建立 Canon v3 正史",
+      "reason": "当前新项目还没有可用的 v3 HEAD。",
       "impact": "完成 workflow 指定的恢复动作前，不能开始下一章，也不能回退旧索引读取事实。",
-      "next_action": "先读取 exact `canon-v3 status`，只执行其中的 `primary_action`；new_project、legacy_cutover、legacy_repair 和 recertification 不能互相替代。",
+      "next_action": "先读取 exact `canon-v3 status`，只执行其中的 `initialize_v3` primary action。",
       "command": "canon_ledger.py canon-v3 status",
       "auto_handle": false
     },

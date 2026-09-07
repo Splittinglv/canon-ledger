@@ -12,7 +12,7 @@
       "type": "skill_contract",
       "skill": "canon-ledger-init",
       "description": "初始化技能只能对 clean target 建立经过确认的 Canon v3 起点。",
-      "required": ["clean target", "author_axiom_snapshot", "genesis_admissions", "bootstrap_mode=canon_v3", "/canon-ledger-learn"]
+      "required": ["clean target", "原生 immutable genesis", "genesis_admissions", "bootstrap_mode=canon_v3", "/canon-ledger-learn"]
     },
     {
       "id": "skill_plan_contract",
@@ -40,14 +40,14 @@
       "type": "skill_contract",
       "skill": "canon-ledger-confirm",
       "description": "确认技能必须精确绑定作者看到的证据与事务版本。",
-      "required": ["canon-v3/decision-request/v2", "target_digest", "material_digest", "canon-v3/finalize-request/v2", "canon-v3/author-axiom-decision-request/v2", "canon-v3/legacy-recertification-publish-request/v1", "repair-cutover --apply"]
+      "required": ["canon-v3/decision-request/v2", "target_digest", "material_digest", "canon-v3/finalize-request/v2", "canon-v3/author-axiom-decision-request/v2"]
     },
     {
       "id": "skill_query_contract",
       "type": "skill_contract",
       "skill": "canon-ledger-query",
-      "description": "查询技能必须区分活动正史、暂存提议与旧数据。",
-      "required": ["active_canon", "staged_proposal", "legacy_read_only", "不能覆盖 HEAD"]
+      "description": "查询技能必须区分活动正史、暂存提议与草案。",
+      "required": ["active_canon", "staged_proposal", "draft_setting", "不能覆盖 HEAD"]
     },
     {
       "id": "skill_dashboard_contract",
@@ -60,8 +60,8 @@
       "id": "skill_doctor_contract",
       "type": "skill_contract",
       "skill": "canon-ledger-doctor",
-      "description": "诊断技能必须先检查权威工作流和迁移状态。",
-      "required": ["只读", "stage digest", "legacy prefix/genesis 是否需要 recertification"]
+      "description": "诊断技能必须先检查权威工作流和初始化状态。",
+      "required": ["只读", "stage digest", "initialization_required"]
     },
     {
       "id": "skill_learn_contract",

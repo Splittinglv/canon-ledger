@@ -67,7 +67,7 @@ _UNCONDITIONALLY_ALLOWED_TOOLS = frozenset(
         # Clean-only bootstrap; init_project enforces the empty-target contract.
         "init",
         # Canon v3 is the sole factual mutation plane, including its bounded
-        # planning facade and detached migration/recertification workflows.
+        # planning facade.
         # HEAD-bound/read-only diagnostics and v3 gate helpers.
         "where",
         "preflight",
@@ -107,9 +107,6 @@ _CANON_V3_ACTIONS = frozenset(
         "assemble-proposal",
         "planning",
         "historical-export",
-        "migrate",
-        "audit-cutover",
-        "repair-cutover",
     }
 )
 
@@ -617,8 +614,7 @@ def evaluate_public_command(argv: Sequence[str]) -> PublicCommandDecision:
         operation = _subcommand(rest)
         # These adapters were historically labelled read-only, but opening
         # their stores can create SQLite files, initialize schemas or record
-        # observations.  Migration diagnostics must use the pure Canon v3
-        # audit-cutover / repair-cutover --dry-run paths instead.
+        # observations.  They remain unavailable to the production workflow.
         return _deny(tool, operation or "missing-read-command")
 
     if tool == "backup":

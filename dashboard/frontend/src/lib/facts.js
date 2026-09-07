@@ -1,11 +1,10 @@
 const ORIGIN_LABELS = {
-    genesis: '初始化 / 已认证迁移',
-    legacy_cutover: '已认证迁移前缀',
+    genesis: '初始化事实',
     author_axiom: '作者长期硬设定',
     chapter_commit: '已发布章节',
 }
 
-const ORIGIN_ORDER = { genesis: 0, legacy_cutover: 1, author_axiom: 2, chapter_commit: 3 }
+const ORIGIN_ORDER = { genesis: 0, author_axiom: 1, chapter_commit: 2 }
 
 function text(value) {
     return String(value ?? '').trim()
@@ -45,7 +44,7 @@ export function buildActiveFactRecords(payload = {}) {
 export function activeFactSummary(rows = []) {
     const result = { total: rows.length, genesis: 0, authorAxioms: 0, chapters: 0 }
     for (const row of rows) {
-        if (row.origin === 'genesis' || row.origin === 'legacy_cutover') result.genesis += 1
+        if (row.origin === 'genesis') result.genesis += 1
         else if (row.origin === 'author_axiom') result.authorAxioms += 1
         else if (row.origin === 'chapter_commit') result.chapters += 1
     }

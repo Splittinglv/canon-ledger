@@ -47,7 +47,7 @@ CANON_V3_STATES = {
     "rewrite_required",
     "recompile_required",
     "projection_rebuild_required",
-    "migration_required",
+    "initialization_required",
     "invalid",
 }
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -246,8 +246,8 @@ def _canon_v3_checks(
                 f"workflow/CURRENT mismatch: workflow={workflow_head}, current={current_head}"
             )
         if current_head is None:
-            if not workflow_available or state != "migration_required":
-                raise ValueError("CURRENT missing outside migration_required")
+            if not workflow_available or state != "initialization_required":
+                raise ValueError("CURRENT missing outside initialization_required")
             checks.append(
                 _check(
                     "canon_v3.current_manifest",
@@ -255,8 +255,8 @@ def _canon_v3_checks(
                     severity="info",
                     message="CURRENT not published yet",
                     path=str(repository.current_path),
-                    expected="absent only before initialize/migrate",
-                    actual=f"bootstrap_mode={workflow.get('bootstrap_mode')}",
+                    expected="absent only before initialize",
+                    actual="new project",
                     impact="由 workflow blocker 和 primary_action 决定下一步。",
                     repair=_workflow_primary_command(workflow),
                 )
@@ -506,81 +506,9 @@ def _canon_v3_checks(
                 status=CHECK_SKIPPED,
                 severity="info",
                 message="projection not expected before CURRENT publication",
-                expected="initialize/migrate publishes CURRENT, then builds projection",
-                actual=f"bootstrap_mode={workflow.get('bootstrap_mode')}",
+                expected="initialize publishes CURRENT, then builds projection",
+                actual="new project",
                 repair=_workflow_primary_command(workflow),
-            )
-        )
-
-    bootstrap_mode = str(workflow.get("bootstrap_mode") or "")
-    cutover = workflow.get("cutover_chapter")
-    should_audit_cutover = bool(
-        bootstrap_mode in {"legacy_cutover", "legacy_repair", "recertification"}
-        or (isinstance(cutover, int) and cutover > 0)
-    )
-    if should_audit_cutover:
-        from .canon_v3.migration import audit_cutover
-
-        try:
-            audit = audit_cutover(
-                project_root,
-                cutover_chapter=(
-                    int(cutover) if isinstance(cutover, int) and cutover >= 0 else None
-                ),
-            )
-            diagnostics["cutover_audit"] = {
-                "schema_version": audit.get("schema_version"),
-                "state": audit.get("state"),
-                "requires_recertification": audit.get("requires_recertification"),
-                "required_case_count": audit.get("required_case_count"),
-                "reason_codes": list(audit.get("reason_codes") or []),
-                "detached_plan_digest": audit.get("detached_plan_digest"),
-            }
-            audit_state = str(audit.get("state") or "blocked")
-            blocked = audit_state == "blocked"
-            checks.append(
-                _check(
-                    "canon_v3.cutover_audit",
-                    status=CHECK_ERROR if blocked else CHECK_OK,
-                    severity="blocker" if blocked else "info",
-                    message=f"legacy cutover audit: {audit_state}",
-                    expected="ready or exact needs_recertification plan",
-                    actual=json.dumps(
-                        diagnostics["cutover_audit"],
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ),
-                    impact=(
-                        "旧前缀、证据、目标或身份准入未通过，只能保持只读。"
-                        if blocked
-                        else ""
-                    ),
-                    repair="" if not blocked else _workflow_primary_command(workflow),
-                )
-            )
-        except Exception as exc:
-            diagnostics["cutover_audit"]["error"] = str(exc)
-            checks.append(
-                _check(
-                    "canon_v3.cutover_audit",
-                    status=CHECK_ERROR,
-                    severity="blocker",
-                    message="legacy cutover audit failed",
-                    expected="deterministic read-only cutover audit",
-                    actual=str(exc),
-                    impact="不能证明旧前缀可迁移或重新认证。",
-                    repair=_workflow_primary_command(workflow),
-                )
-            )
-    else:
-        diagnostics["cutover_audit"] = {"state": "not_applicable"}
-        checks.append(
-            _check(
-                "canon_v3.cutover_audit",
-                status=CHECK_SKIPPED,
-                severity="info",
-                message="legacy cutover audit not applicable",
-                actual=f"bootstrap_mode={bootstrap_mode};cutover={cutover}",
             )
         )
 

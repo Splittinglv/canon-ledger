@@ -6,13 +6,13 @@ description: 初始化新的长篇小说项目，收集作者已确定的故事�
 # 初始化长篇小说项目
 
 开始前完整读取 [`../../references/canon-v3-skill-protocol.md`](../../references/canon-v3-skill-protocol.md)
-和 [`../../references/index/reference-loading-map.md`](../../references/index/reference-loading-map.md)。初始化只服务新项目；已有 accepted prefix 或 CURRENT 时不得覆盖。只有创建尚未可识别的 clean target 时可以暂不运行项目 locator/status；骨架生成后必须立即回到统一 workflow authority。
+和 [`../../references/index/reference-loading-map.md`](../../references/index/reference-loading-map.md)。初始化只服务新项目；已有内容或 CURRENT 时不得覆盖。只有创建尚未可识别的 clean target 时可以暂不运行项目 locator/status；骨架生成后必须立即回到统一 workflow authority。
 
 ## 1. 确认 exact target
 
 - 要求用户明示给出新书目标目录，转成绝对路径后固定；不把工作区当前绑定的另一个项目猜成目标。
 - clean target 必须不存在或为空。目标中已有正文、设定、大纲、`.canon-ledger` 或 `.story-system` 时，列出内容并停止，请用户改用新目录；禁止静默合并或覆盖。
-- 若目标已能识别为书项目，用该目标自己的 `canon-v3 status` 分流：`legacy_cutover|legacy_repair|recertification` 执行 snapshot 的唯一恢复动作，`canon_v3` 项目停止 init 并建议 plan/write。
+- 若目标已能识别为书项目，停止 init；已有 Canon 项目建议使用 plan/write，其他非空目标请改用新的空目录。
 
 ## 2. 收集最小故事基线
 
@@ -30,7 +30,7 @@ description: 初始化新的长篇小说项目，收集作者已确定的故事�
 
 写文件前向作者展示：
 
-- 将通过一次性 verified genesis import 成为 `author_axiom_snapshot` admissions 的初始硬事实；
+- 将通过一次性 verified genesis import 成为 genesis admissions 的初始硬事实；
 - 仅作为大纲/剧情/人物表现方向的软计划；
 - 仅作为 style-only 的文风偏好；
 - 仍未确定、因此不会传给工具的开放项。
@@ -58,13 +58,13 @@ description: 初始化新的长篇小说项目，收集作者已确定的故事�
 正文/                         章节正文
 ```
 
-然后它把净化后的 `MASTER_SETTING.initial_canon`（`.story-system/MASTER_SETTING.json#/initial_canon`）编译成带逐项 admission receipt 的 verified new-project snapshot，以 `cutover_chapter=0` 建立 immutable genesis/CURRENT，并重建 fresh projection。
+然后它把净化后的 `MASTER_SETTING.initial_canon`（`.story-system/MASTER_SETTING.json#/initial_canon`）编译成带逐项 admission receipt 的 verified new-project snapshot，建立原生 immutable genesis/CURRENT，并重建 fresh projection。
 
 约束：
 
 - init 只创建 `设定集/文风提示词.md` 的 style-only 载体；需长期保留的作者偏好在项目建立后交给 `/canon-ledger-learn`，不进入 genesis 或 author-axiom manifest。
 - 章纲和卷纲是软计划，不成为“已经发生”的事实。
-- 初始世界硬规则、角色身份等是 genesis 中 `mode=author_axiom_snapshot` 的一次性 `genesis_admissions`；此时 manifest 的 `author_axiom_commits` 和 active snapshot 的 `records` 可以为空，但 `author_axiom_digest` 仍绑定活动初始权威。
+- 初始世界硬规则、角色身份等是 genesis 中的一次性 `genesis_admissions`；此时 manifest 的 `author_axiom_commits` 和 active snapshot 的 `records` 可以为空，但 `author_axiom_digest` 仍绑定活动初始权威。
 - `.canon-ledger/state.json` 只是兼容配置/投影，不能成为正史。
 
 ## 5. 定位新项目并验收
@@ -96,7 +96,7 @@ head_hash=<CURRENT HEAD>
 投影是正常结果；网络或检索构建失败只报告可选增强未就绪，不把已完成的 genesis 标成
 部分完成，也不阻止 plan/write。
 
-骨架已生成但 CURRENT 未建立时报告“部分完成”。只有 status 精确返回 `migration_required + bootstrap_mode=new_project + primary_action=initialize_v3` 时才单独执行 `canon-v3 initialize`；如果发现 accepted legacy prefix，必须转 `legacy_cutover`，不能生成空 genesis 覆盖它。
+骨架已生成但 CURRENT 未建立时报告“部分完成”。只有 status 精确返回 `initialization_required + bootstrap_mode=new_project + primary_action=initialize_v3` 时才单独执行 `canon-v3 initialize`。
 
 ## 6. 初始化后修改硬设定
 

@@ -110,24 +110,14 @@ def test_confirm_maps_status_decision_head_to_request_precondition() -> None:
     assert "不能使用活动 Canon `head_hash` 或 `parent_head`" in confirm
 
 
-def test_legacy_recertification_has_one_exact_human_publish_route() -> None:
+def test_migration_routes_are_absent_from_current_skills() -> None:
     protocol = _read(REFERENCES / "canon-v3-skill-protocol.md")
     confirm = _read(SKILLS / "canon-ledger-confirm" / "SKILL.md")
     doctor = _read(SKILLS / "canon-ledger-doctor" / "SKILL.md")
-    for marker in (
-        "transaction_kind=legacy_recertification",
-        "canon-v3/legacy-recertification-publish-request/v1",
-        "canon-v3/legacy-recertification-decision/v1",
-        "expected_current_head",
-        "detached_plan_digest",
-        "publish_token",
-        "repair-cutover --apply",
-    ):
-        assert marker in protocol
-        assert marker in confirm
-    assert "逐项确认" in confirm
-    assert "收齐全部明确选择前不得调用" in confirm
-    assert "--dry-run" in doctor and "--apply --input-file" in doctor
+    for marker in ("canon-v3 migrate", "audit-cutover", "repair-cutover"):
+        assert marker not in protocol
+        assert marker not in confirm
+        assert marker not in doctor
 
 
 def test_production_skills_do_not_restore_legacy_fact_writers() -> None:
@@ -149,7 +139,6 @@ def test_plan_and_init_cannot_create_unreviewed_hard_facts() -> None:
     plan = _read(SKILLS / "canon-ledger-plan" / "SKILL.md")
     assert "canon-v3 initialize" in init
     for marker in (
-        "author_axiom_snapshot",
         "genesis_admissions",
         "author_axiom_digest",
         "genesis_overrides",
@@ -179,9 +168,6 @@ def test_init_docs_match_clean_target_and_workflow_bootstrap_contract() -> None:
     for marker in (
         "全新且尚未可识别",
         "bootstrap_mode=new_project",
-        "bootstrap_mode=legacy_cutover",
-        "bootstrap_mode=legacy_repair",
-        "bootstrap_mode=recertification",
         "bootstrap_mode=canon_v3",
     ):
         assert marker in protocol
@@ -190,7 +176,6 @@ def test_init_docs_match_clean_target_and_workflow_bootstrap_contract() -> None:
     for text in (init, flow):
         for marker in (
             "MASTER_SETTING.initial_canon",
-            "author_axiom_snapshot",
             "genesis_admissions",
             "bootstrap_mode=canon_v3",
             "managed author-axiom commit",
@@ -208,14 +193,14 @@ def test_init_docs_match_clean_target_and_workflow_bootstrap_contract() -> None:
     for state in ("ready_to_finalize", "recompile_required"):
         assert f"`{state}`" in architecture
     assert "otherwise -> ready_to_finalize" in architecture
-    assert "初始化成功后必须是这个模式，不是 `new_project`" in architecture
+    assert "已建立 CURRENT 的 `canon_v3`" in architecture
 
 
 def test_query_context_and_dashboard_are_head_bound() -> None:
     query = _read(SKILLS / "canon-ledger-query" / "SKILL.md")
     context = _read(AGENTS / "context-agent.md")
     dashboard = _read(SKILLS / "canon-ledger-dashboard" / "SKILL.md")
-    for marker in ("active_canon", "staged_proposal", "legacy_read_only", "draft_setting"):
+    for marker in ("active_canon", "staged_proposal", "draft_setting"):
         assert marker in query
     for marker in ("workflow_digest", "head_hash", "author_axiom_digest"):
         assert marker in context
@@ -232,7 +217,6 @@ def test_query_uses_real_public_facades_and_fails_closed() -> None:
         "canon-v3 query entity-state",
         "canon-v3 author-axioms",
         "canon-v3 status",
-        "canon-v3 audit-cutover",
         "style-memory show",
         "/api/canon-v3/entities",
         "/api/canon-v3/relationships",
@@ -271,7 +255,6 @@ def test_style_skill_is_explicitly_non_canon() -> None:
         "workflow_digest",
         "stage_digest",
         "projection binding",
-        "migration digest",
         "cases",
     ):
         assert marker in text
@@ -403,7 +386,7 @@ def test_plugin_release_version_surfaces_are_in_sync() -> None:
     assert sync_plugin_version.get_readme_current_version(readme) == plugin_version
 
 
-def test_root_docs_match_canon_v3_human_and_migration_routes() -> None:
+def test_root_docs_match_native_canon_v3_routes() -> None:
     readme = _read(ROOT / "README.md")
     readme_compact = re.sub(r"\s+", " ", readme)
     notice = _read(ROOT / "NOTICE.md")
@@ -416,25 +399,17 @@ def test_root_docs_match_canon_v3_human_and_migration_routes() -> None:
 
     for marker in (
         "章节与 author-axiom case 先提交 exact",
-        "legacy recertification 则生成完整绑定的 publish request",
-        "首次 cutover 遇到无法证明、未分类或身份冲突的输入会直接报错",
-        "未发布的 v1 chapter/author-axiom STAGING 不参加 recertification",
-        "章节事实 commit",
+        "initialization_required",
+        "原生 genesis",
     ):
         assert marker in readme_compact
-    for stale in (
-        "确认流底层只调用 `canon-v3 decide`",
-        "无法证明的项进入人工 recertification",
-        "旧 genesis 和未发布 STAGING 需要 recertification",
-    ):
+    for stale in ("canon-v3 migrate", "audit-cutover", "repair-cutover"):
         assert stale not in readme
-        assert stale not in release
         assert stale not in architecture
 
     assert "章纲目标保持 advisory" in notice
     assert "章纲目标保留为 advisory" in attribution
-    assert "只有 `canon-v3/legacy-genesis/v1` 走 recertification" in architecture
-    assert "未发布的 v1 chapter/author-axiom STAGING" in architecture
+    assert "canon-v3/genesis/v1" in readme
 
 
 def test_compatibility_templates_and_optional_design_refs_do_not_claim_authority() -> None:
@@ -476,16 +451,14 @@ def test_plugin_description_matches_product_boundary() -> None:
         assert "不" in description or "自由" in description
 
 
-def test_shared_protocol_and_architecture_agree_on_cutover_and_lineage() -> None:
+def test_shared_protocol_and_architecture_agree_on_transaction_lineage() -> None:
     protocol = _read(REFERENCES / "canon-v3-skill-protocol.md")
     architecture = _read(REFERENCES / "canon-v3-architecture.md")
     for marker in (
         "semantic_claim_digest",
         "stage_digest",
         "finalize_token",
-        "recertification",
         "author-axiom",
-        "legacy",
     ):
         assert marker in protocol or marker.replace("-", "_") in protocol
         assert marker in architecture or marker.replace("-", "_") in architecture

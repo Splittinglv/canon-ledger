@@ -1714,7 +1714,7 @@ def build_user_report(
         "rewrite_required": STATUS_NEEDS_USER,
         "recompile_required": STATUS_NEEDS_USER,
         "projection_rebuild_required": STATUS_PARTIAL,
-        "migration_required": STATUS_NEEDS_USER,
+        "initialization_required": STATUS_NEEDS_USER,
         "invalid": STATUS_FAILED,
     }
     report["overall_status"] = overall_map.get(state, STATUS_FAILED)

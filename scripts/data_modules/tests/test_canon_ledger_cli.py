@@ -890,7 +890,7 @@ def test_status_command_uses_workflow_authority_not_legacy_reporter(
     assert int(exc.value.code or 0) == 1
     assert called == {}
     assert payload["schema_version"].startswith("canon-v3/workflow-snapshot/")
-    assert payload["state"] == "migration_required"
+    assert payload["state"] == "initialization_required"
     assert payload["primary_action"]["code"] == "initialize_v3"
 
 

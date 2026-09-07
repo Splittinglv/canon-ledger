@@ -19,8 +19,7 @@ _TEMPORARY_DIRECTORY_SUPPORTS_DELETE = (
 )
 
 # These modules exercise the removed v2 fact-writing product as an active
-# workflow.  Canon v3 keeps dedicated read-only migration/recertification
-# coverage instead; allowing these expectations to drive the default suite
+# workflow.  Allowing these expectations to drive the default suite
 # would require reopening the retired writers.  Set the documented environment
 # switch only when studying the frozen v2 specification itself.
 _RETIRED_V2_MODULES = frozenset(
@@ -86,7 +85,6 @@ _REQUIRED_CURRENT_AUTHORITY_MODULES = frozenset(
         "scripts/data_modules/tests/test_canon_v3_fact_boundary.py",
         "scripts/data_modules/tests/test_canon_v3_global_invariants.py",
         "scripts/data_modules/tests/test_canon_v3_historical_audit.py",
-        "scripts/data_modules/tests/test_canon_v3_migration.py",
         "scripts/data_modules/tests/test_canon_v3_planning_history_cli.py",
         "scripts/data_modules/tests/test_canon_v3_projection.py",
         "scripts/data_modules/tests/test_canon_v3_public_protocol.py",
@@ -97,7 +95,6 @@ _REQUIRED_CURRENT_AUTHORITY_MODULES = frozenset(
         "scripts/data_modules/tests/test_canon_v3_review.py",
         "scripts/data_modules/tests/test_canon_v3_service.py",
         "scripts/data_modules/tests/test_canon_v3_source_verifier.py",
-        "scripts/data_modules/tests/test_canon_v3_staging_recovery.py",
         "scripts/data_modules/tests/test_dashboard_app.py",
         "scripts/data_modules/tests/test_planning_facade.py",
         "scripts/data_modules/tests/test_workflow_authority_surfaces.py",

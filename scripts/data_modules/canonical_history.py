@@ -394,34 +394,8 @@ def _load_v3_history(
         )
         return True
 
-    legacy = projection.get("legacy_base")
-    if isinstance(legacy, dict) and legacy:
-        try:
-            from .canon_v3.migration import legacy_prefix_status
-
-            legacy_status = legacy_prefix_status(project_root)
-        except Exception as exc:
-            result.invalid_sources.append(
-                f"canon_v3_legacy_prefix:{exc.__class__.__name__}"
-            )
-            return True
-        prefix_reasons = {
-            str(item)
-            for item in legacy_status.get("reason_codes") or []
-            if str(item) != "v3_projection_stale"
-        }
-        if prefix_reasons:
-            result.invalid_sources.extend(
-                f"canon_v3_legacy_prefix:{reason}"
-                for reason in sorted(prefix_reasons)
-            )
-            return True
-        cutover = int(legacy.get("as_of_chapter") or 0)
-        if as_of < cutover:
-            result.invalid_sources.append(
-                "canon_v3_query_before_legacy_cutover"
-            )
-            return True
+    genesis = projection.get("genesis_base")
+    if isinstance(genesis, dict) and genesis:
         for field_name in (
             "initial_canon",
             "setting_canon",
@@ -445,8 +419,8 @@ def _load_v3_history(
             "coverage",
             "verification",
         ):
-            if field_name in legacy:
-                setattr(result, field_name, copy.deepcopy(legacy[field_name]))
+            if field_name in genesis:
+                setattr(result, field_name, copy.deepcopy(genesis[field_name]))
 
     chronology = [
         dict(item)

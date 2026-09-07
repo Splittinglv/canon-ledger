@@ -1,6 +1,6 @@
 ---
 name: canon-ledger-query
-description: 查询活动 Canon HEAD 中的角色、关系、规则、时间线、知识、物品持有、承诺和开放问题，并明确区分 STAGING 与 legacy 只读数据。
+description: 查询活动 Canon HEAD 中的角色、关系、规则、时间线、知识、物品持有、承诺和开放问题，并明确区分 STAGING、草案与已生效事实。
 ---
 
 # 查询故事事实
@@ -28,11 +28,10 @@ latest_chapter
 
 1. `active_canon`：当前 HEAD 中已生效事实，可作为后续写作依据。
 2. `staged_proposal`：当前事务的待确认提议，只在用户明确询问草稿审核时展示，不能称为已发生。
-3. `legacy_read_only`：迁移前旧数据，仅供定位和修复；不能与 active canon 合并回答。
-4. `draft_setting`：磁盘上尚未 recertify 的硬设定草案，不能冒充 active author axiom。
-5. `style`：文风偏好，仅在用户询问写法时返回，不作为事实。
+3. `draft_setting`：磁盘上尚未认证的硬设定草案，不能冒充 active author axiom。
+4. `style`：文风偏好，仅在用户询问写法时返回，不作为事实。
 
-任何 staged、legacy、draft setting 或 style 结果都不能覆盖 HEAD，也不能参与活动事实的肯定回答。
+任何 staged、draft setting 或 style 结果都不能覆盖 HEAD，也不能参与活动事实的肯定回答。
 
 ## 3. 只使用已有公开查询面
 
@@ -42,7 +41,6 @@ latest_chapter
 |---|---|---|
 | `active_canon` | `canon-v3 query snapshot|entity-state|relationships`；active hard settings 用 `canon-v3 author-axioms`；Dashboard 已启动时可用 `/api/canon-v3/entities`、`/api/canon-v3/relationships`、`/api/canon-v3/state-changes` 等 v3 API | 只在 fresh projection 下返回；每个响应携带 `authority=canon_v3`、`head_hash/generation/as_of_chapter/projection_digest`；author axioms 只来自不可变 commit |
 | `staged_proposal` | `canon-v3 status` 的当前 `cases[].review_material` | 仅在用户明确问当前审核草案时展示；不是 active facts |
-| `legacy_read_only` | migration/recertification 状态下的 `canon-v3 audit-cutover` | 仅返回审计实际暴露的旧前缀/准入材料；不能回答的字段直接说明“公开 facade 未提供” |
 | `style` | `style-memory show` | 只返回作者文风提示词，不得与事实结果合并 |
 | `draft_setting` | 当前没有可证明已认证状态的公共查询 facade | fail-closed；不得直接读设定文件后把内容称为 Canon |
 
@@ -63,7 +61,7 @@ latest_chapter
   --project-root "${PROJECT_ROOT}" style-memory show
 ```
 
-legacy 审计只有在 workflow 指向 cutover/recertification 时才调用。若上述 facade 没有该种查询能力，停止并说明缺失，不扫描 object store、不通读 manifest/commit/decision 文件，也不借 `index.db`、旧 `knowledge query-*` 或 RAG 猜答案；尤其不能用 index aliases 替代 v3 entity registry。
+若上述 facade 没有该种查询能力，停止并说明缺失，不扫描 object store、不通读 manifest/commit/decision 文件，也不借 `index.db`、旧 `knowledge query-*` 或 RAG 猜答案；尤其不能用 index aliases 替代 v3 entity registry。
 
 对“全书哪里提过某件事”这类宽泛召回，可以把查询写入项目内
 `.canon-ledger/tmp/retrieval_query.json`，调用 `canon-v3 retrieval search --input-file ...`。
@@ -113,7 +111,7 @@ snapshot --as-of-chapter N`、`history` 或更窄的 HEAD-bound facade；不能�
 - 查询版本（HEAD/generation/as-of chapter）；
 - 命中的事实及其来源章节；
 - 若有歧义，列出多个 canonical instances，不自动选第一个；
-- 数据属于 active、staged、legacy 还是 draft setting；
+- 数据属于 active、staged 还是 draft setting；
 - 无结果时说明是“未记录”，不要推断成“没有发生”。
 
 文风、剧情取舍和人物动机问题可按作者偏好回答，但不得包装为 Canon 查询结果。

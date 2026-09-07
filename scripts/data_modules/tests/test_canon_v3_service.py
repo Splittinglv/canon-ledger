@@ -21,7 +21,6 @@ from scripts.data_modules.canon_v3.service import (
     ActiveTransactionError,
     CanonV3Service,
     FinalizeBlockedError,
-    MigrationRequiredError,
     PreparedTransactionInvalid,
     ScanAttestationError,
     STAGING_SCHEMA_V1,
@@ -432,70 +431,6 @@ def test_unknown_caller_supplied_rule_slot_is_rejected(tmp_path) -> None:
         service.prepare(_batch(service, binding, [candidate]))
 
 
-def test_legacy_rule_slot_update_replaces_old_hard_rule_and_binds_prior(tmp_path) -> None:
-    from scripts.data_modules.canon_v3.projection import rebuild_projection
-    from scripts.data_modules.canon_v3.repository import CanonV3Repository, content_hash
-
-    root, manuscript, binding = _project(tmp_path, "异火数量改为二十四种。\n")
-    legacy_rule = {
-        "id": "legacy-rule-flame-count",
-        "category": "world_rule",
-        "subject": "力量体系",
-        "field": "异火数量",
-        "value": "二十三种",
-        "status": "active",
-        "source_chapter": 0,
-    }
-    legacy_facts = {
-        "canonical_facts": [],
-        "hard_constraints": [dict(legacy_rule)],
-        "rules": [dict(legacy_rule)],
-        "entities": {},
-    }
-    snapshot = {
-        "schema_version": "canon-v3/legacy-fact-snapshot/v1",
-        "source_schema_version": "canon-ledger-asof-snapshot/v3",
-        "cutover_chapter": 0,
-        "facts": legacy_facts,
-    }
-    repository = CanonV3Repository(root)
-    repository._initialize_objects(
-        genesis_metadata={
-            "schema_version": "canon-v3/legacy-genesis/v1",
-            "source": "new_project",
-            "cutover_chapter": 0,
-            "v2_commits": [],
-            "legacy_snapshot": snapshot,
-            "legacy_snapshot_sha256": content_hash(snapshot),
-        }
-    )
-    projection = rebuild_projection(root)
-    prior = projection["legacy_base"]["rules"][0]
-    assert len(prior["slot_id"]) == 64
-    assert len(prior["fact_digest"]) == 64
-
-    candidate = FactCandidate(
-        candidate_id="rule-flame-count-update",
-        claim=WorldRuleRevealedClaim(
-            slot_id=prior["slot_id"],
-            rule="异火数量改为二十四种",
-        ),
-        sources=(
-            _span(
-                manuscript,
-                binding,
-                "span-rule-update",
-                "异火数量改为二十四种。",
-            ),
-        ),
-        support_map={"rule": ("span-rule-update",)},
-    )
-    service = CanonV3Service(root)
-    with pytest.raises(
-        MigrationRequiredError,
-        match="legacy_genesis_v1_recertification_required",
-    ):
-        service.prepare(_batch(service, binding, [candidate]))
 
 
 def test_confirmed_conflict_only_allows_rewrite_and_never_publishes(tmp_path) -> None:
@@ -919,7 +854,7 @@ def test_new_project_cannot_skip_the_first_canonical_chapter(tmp_path) -> None:
     proposal = _batch(service, binding, [candidate])
     proposal["chapter"] = 2
 
-    with pytest.raises(CanonChapterSequenceError, match="cutover_plus_one"):
+    with pytest.raises(CanonChapterSequenceError, match="first_chapter_must_be_one"):
         service.prepare(proposal)
 
 

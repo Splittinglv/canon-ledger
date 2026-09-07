@@ -418,9 +418,7 @@ def test_unapproved_entity_effect_cannot_seed_registry(tmp_path) -> None:
     repository = CanonV3Repository(root)
     head = repository._initialize_objects(
         genesis_metadata={
-            "schema_version": "canon-v3/genesis-metadata/v1",
-            "source": "new_project",
-            "cutover_chapter": 0,
+            "schema_version": "canon-v3/storage-genesis/v1",
         }
     )
     effect = {
@@ -494,34 +492,37 @@ def test_checkpoint_decision_binds_registry_and_resolution_digests(tmp_path) -> 
         decision_from_dict(tampered)
 
 
-def test_registry_seeds_content_addressed_legacy_aliases(tmp_path) -> None:
+def test_registry_seeds_content_addressed_genesis_aliases(tmp_path) -> None:
     root = tmp_path / "book"
     repository = CanonV3Repository(root)
-    legacy_facts = {
+    entity = {
+        "id": "linzhou",
+        "name": "林舟",
+        "type": "角色",
+        "aliases": ["少主"],
+    }
+    admission = {
+        "schema_version": "canon-v3/genesis-fact-admission/v1",
+        "fact_content_sha256": content_hash(entity),
+        "locations": ["/entities/linzhou"],
+    }
+    admission["admission_digest"] = content_hash(admission)
+    genesis_facts = {
         "canonical_facts": [],
-        "entities": {
-            "linzhou": {
-                "id": "linzhou",
-                "name": "林舟",
-                "type": "角色",
-                "aliases": ["少主"],
-            }
-        },
+        "entities": {"linzhou": entity},
+        "genesis_fact_admissions": [admission],
     }
     snapshot = {
-        "schema_version": "canon-v3/legacy-fact-snapshot/v1",
+        "schema_version": "canon-v3/genesis-fact-snapshot/v1",
         "source_schema_version": "canon-ledger-asof-snapshot/v3",
-        "cutover_chapter": 0,
-        "facts": legacy_facts,
+        "facts": genesis_facts,
     }
     repository._initialize_objects(
         genesis_metadata={
-            "schema_version": "canon-v3/legacy-genesis/v1",
+            "schema_version": "canon-v3/genesis/v1",
             "source": "new_project",
-            "cutover_chapter": 0,
-            "v2_commits": [],
-            "legacy_snapshot": snapshot,
-            "legacy_snapshot_sha256": content_hash(snapshot),
+            "snapshot": snapshot,
+            "snapshot_sha256": content_hash(snapshot),
         }
     )
     rebuild_projection(root)
@@ -534,7 +535,7 @@ def test_registry_seeds_content_addressed_legacy_aliases(tmp_path) -> None:
     binding = registry.resolve("少主", IdentityNamespace.ACTOR)
     assert binding is not None
     assert binding.canonical_entity == "linzhou"
-    assert binding.legacy_snapshot_digests == (content_hash(snapshot),)
+    assert binding.genesis_snapshot_digests == (content_hash(snapshot),)
 
 
 def test_future_alias_is_not_visible_when_rewriting_earlier_chapter(tmp_path) -> None:

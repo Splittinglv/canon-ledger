@@ -1,5 +1,12 @@
 # 更新日志
 
+## Unreleased
+
+- 删除 V2/legacy 项目迁移、cutover audit 与 recertification 产品链；CLI 不再提供
+  `migrate`、`audit-cutover` 或 `repair-cutover`。
+- 新项目直接以 `canon-v3/genesis/v1` 原生 snapshot 建立 CURRENT；未建立 HEAD 时统一返回
+  `initialization_required`，非空旧目录不再提供导入路径。
+
 ## v9.1.0 - HEAD-bound 可选向量召回
 
 发版范围：`v9.0.0..v9.1.0`。

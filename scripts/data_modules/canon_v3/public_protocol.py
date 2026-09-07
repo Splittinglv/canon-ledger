@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """Typed, digest-neutral public protocol for human review cases.
 
-The immutable chapter, author-axiom, and legacy recertification objects each
-have their own storage schema.  Public callers should not have to infer an
+The immutable chapter and author-axiom objects each have their own storage
+schema.  Public callers should not have to infer an
 action matrix or assemble optimistic-concurrency bindings from those storage
 shapes, though.  This module is the single registry and serializer for that
 public projection.
@@ -36,7 +36,6 @@ class HumanActionProfile(str, Enum):
     CHAPTER_REWRITE = "chapter_rewrite"
     CHAPTER_DISMISS = "chapter_dismiss"
     AUTHOR_AXIOM = "author_axiom"
-    LEGACY_RECERTIFICATION = "legacy_recertification"
 
 
 class PublicHumanAction(str, Enum):
@@ -46,7 +45,6 @@ class PublicHumanAction(str, Enum):
     REWRITE = "rewrite"
     NO_CONFLICT = "no_conflict"
     DISMISS = "dismiss"
-    CONFIRM = "confirm"
 
 
 # Tuple order is part of the public protocol.  In particular, sets/frozensets
@@ -75,9 +73,6 @@ _ACTION_REGISTRY: Mapping[
         PublicHumanAction.APPROVE,
         PublicHumanAction.OMIT,
         PublicHumanAction.REWRITE,
-    ),
-    HumanActionProfile.LEGACY_RECERTIFICATION: (
-        PublicHumanAction.CONFIRM,
     ),
 }
 

@@ -40,7 +40,6 @@ def _recognized_book(root: Path, *, legacy_commit: bool = False) -> None:
     ("legacy_commit", "bootstrap_mode", "action"),
     [
         (False, "new_project", "initialize_v3"),
-        (True, "legacy_cutover", "migrate_legacy"),
     ],
 )
 def test_no_current_fails_closed_across_all_public_surfaces(
@@ -53,7 +52,7 @@ def test_no_current_fails_closed_across_all_public_surfaces(
 
     workflow = WorkflowAuthority(tmp_path).snapshot()
     assert workflow == CanonV3Service(tmp_path).workflow_snapshot()
-    assert workflow["state"] == "migration_required"
+    assert workflow["state"] == "initialization_required"
     assert workflow["bootstrap_mode"] == bootstrap_mode
     assert workflow["can_write_next"] is False
     assert workflow["primary_action"]["code"] == action
@@ -66,8 +65,8 @@ def test_no_current_fails_closed_across_all_public_surfaces(
         ]
 
     status = build_project_status(tmp_path, chapter=1)
-    assert status["phase"] == "canon_v3:migration_required"
-    assert status["blocking"] == ["migration_required"]
+    assert status["phase"] == "canon_v3:initialization_required"
+    assert status["blocking"] == ["initialization_required"]
     assert status["primary_action"]["code"] == action
     assert status["evidence"]["workflow_snapshot"]["workflow_digest"] == workflow[
         "workflow_digest"
@@ -84,7 +83,7 @@ def test_no_current_fails_closed_across_all_public_surfaces(
     assert runtime.primary_write_source == "canon_v3_head"
     assert runtime.latest_commit is None
     assert runtime.latest_accepted_commit is None
-    assert "canon_v3_workflow_migration_required" in runtime.fallback_sources
+    assert "canon_v3_workflow_initialization_required" in runtime.fallback_sources
 
     health = build_story_runtime_health(tmp_path, chapter=1)
     assert health["mainline_ready"] is False
@@ -125,42 +124,6 @@ def test_uninitialized_context_is_fact_empty_and_legacy_writers_are_disabled(
         )
     with pytest.raises(ValueError, match="legacy_fact_mutation_disabled"):
         HumanReviewService(tmp_path).persist_queue(1, {}, [])
-
-
-@pytest.mark.parametrize(
-    "recovery_action",
-    ["remigrate_legacy_suffix", "repair_legacy_prefix"],
-)
-def test_legacy_repair_routes_to_executable_read_only_audit(
-    recovery_action: str,
-) -> None:
-    snapshot = normalize_workflow_snapshot(
-        {
-            "schema_version": "canon-v3/workflow-snapshot/v1",
-            "state": "migration_required",
-            "head_hash": "a" * 64,
-            "generation": 2,
-            "chapter": None,
-            "transaction_hash": None,
-            "can_finalize": False,
-            "can_write_next": False,
-            "projection_fresh": True,
-            "cases": [],
-            "counts": {},
-            "recovery_action": recovery_action,
-            "workflow_digest": "b" * 64,
-        }
-    )
-
-    assert snapshot["bootstrap_mode"] == "legacy_repair"
-    assert snapshot["primary_action"] == {
-        "id": recovery_action,
-        "code": recovery_action,
-        "label": "审计失效的旧前缀并由作者修复精确来源",
-        "interface": "cli",
-        "transaction_kind": "chapter",
-        "command": "canon_ledger.py canon-v3 audit-cutover",
-    }
 
 
 def test_contract_availability_is_advisory_once_canon_is_ready(tmp_path: Path) -> None:

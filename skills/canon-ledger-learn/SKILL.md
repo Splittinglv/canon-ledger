@@ -30,7 +30,7 @@ description: 把作者明确要求长期保留的文风、口吻、句式和写�
 
 - 只修改 `设定集/文风提示词.md` 的作者提示词区域并去重。
 - 不写 hard constraints、author axioms、事实 memory、STAGING 或 HEAD。
-- 操作前后 `head_hash/workflow_digest/stage_digest/projection binding/migration digest/cases` 必须完全不变。
+- 操作前后 `head_hash/workflow_digest/stage_digest/projection binding/cases` 必须完全不变。
 - v3 retrieval 不索引 style；保存文风不触发 rebuild，也不能使 retrieval stale。
 - 优先级始终为：本轮用户要求 > 本书文风提示词 > 模型默认。
 

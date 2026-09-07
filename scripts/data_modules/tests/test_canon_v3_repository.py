@@ -56,9 +56,7 @@ def _list_reducer(state: list[dict], effect: dict) -> list[dict]:
 def _storage_genesis(repo: CanonRepository) -> str:
     return repo._initialize_objects(
         genesis_metadata={
-            "schema_version": "canon-v3/genesis-metadata/v1",
-            "source": "new_project",
-            "cutover_chapter": 0,
+            "schema_version": "canon-v3/storage-genesis/v1",
         }
     )
 
@@ -78,9 +76,7 @@ def test_private_storage_genesis_is_deterministic_for_fault_tests(tmp_path):
         "parent_head_hash": None,
         "chapters": [],
         "genesis_metadata": {
-            "schema_version": "canon-v3/genesis-metadata/v1",
-            "source": "new_project",
-            "cutover_chapter": 0,
+            "schema_version": "canon-v3/storage-genesis/v1",
         },
     }
     assert first.projection_binding().as_dict() == {
@@ -115,15 +111,6 @@ def test_public_seal_rejects_uncompiled_effects_and_missing_review_proof(tmp_pat
     assert repo.current_commits() == []
 
 
-def test_public_initialize_rejects_fabricated_cutover_metadata(tmp_path):
-    repo = CanonRepository(tmp_path)
-
-    with pytest.raises(CanonRepositoryError, match="requires_verified_fact_snapshot"):
-        repo.initialize(
-            genesis_metadata={"source": "new_project", "cutover_chapter": 10}
-        )
-
-    assert repo.current_head(validate=False) is None
 
 
 def test_public_empty_initialize_cannot_bypass_service_snapshot_import(tmp_path):
@@ -138,47 +125,6 @@ def test_public_empty_initialize_cannot_bypass_service_snapshot_import(tmp_path)
     assert repo.current_head(validate=False) is None
 
 
-def test_public_initialize_rejects_self_hashed_fabricated_legacy_snapshot(tmp_path):
-    from scripts.data_modules.canon_v3.migration import (
-        LEGACY_GENESIS_SCHEMA,
-        LEGACY_SNAPSHOT_SCHEMA,
-    )
-
-    repo = CanonRepository(tmp_path)
-    snapshot = {
-        "schema_version": LEGACY_SNAPSHOT_SCHEMA,
-        "source_schema_version": "story-memory/as-of/v2",
-        "cutover_chapter": 0,
-        "facts": {
-            "schema_version": "story-memory/as-of/v2",
-            "as_of_chapter": 0,
-            "valid_chapters": [],
-            "invalid_sources": [],
-            "canonical_facts": [
-                {
-                    "kind": "world_rule_revealed",
-                    "rule": "伪造正史",
-                }
-            ],
-        },
-    }
-
-    with pytest.raises(
-        CanonRepositoryError,
-        match="legacy_snapshot_provenance_mismatch",
-    ):
-        repo.initialize(
-            genesis_metadata={
-                "schema_version": LEGACY_GENESIS_SCHEMA,
-                "source": "new_project",
-                "cutover_chapter": 0,
-                "v2_commits": [],
-                "legacy_snapshot": snapshot,
-                "legacy_snapshot_sha256": content_hash(snapshot),
-            }
-        )
-
-    assert repo.current_head(validate=False) is None
 
 
 def test_content_addressed_inputs_are_immutable_and_order_independent(tmp_path):

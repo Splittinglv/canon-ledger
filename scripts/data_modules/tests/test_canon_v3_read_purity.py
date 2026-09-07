@@ -40,7 +40,7 @@ def test_workflow_snapshot_does_not_create_v3_layout_or_locks(tmp_path: Path) ->
 
     snapshot = WorkflowAuthority(project).snapshot()
 
-    assert snapshot["state"] == "migration_required"
+    assert snapshot["state"] == "initialization_required"
     assert _tree(project) == before
     assert not (project / ".story-system" / "v3").exists()
 

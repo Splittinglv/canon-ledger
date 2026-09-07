@@ -578,7 +578,7 @@ def test_dashboard_fact_pages_return_409_before_head_or_when_projection_stale(
     for path in fact_paths:
         before = client.get(path)
         assert before.status_code == 409
-        assert before.json()["detail"]["workflow"]["state"] == "migration_required"
+        assert before.json()["detail"]["workflow"]["state"] == "initialization_required"
 
     from data_modules.canon_v3.service import CanonV3Service
 

@@ -43,9 +43,8 @@ fi
 /api/canon-v3/obligations
 ```
 
-所有事实响应必须携带同一 `{authority, head_hash, generation, workflow_digest, projection_digest, as_of_chapter}`。公共 active facts 是已经准入的 genesis、legacy cutover
-基础事实、章节 effects 和 active author axioms 的去重并集；`origin=legacy_cutover` 只表示
-历史来源，仍属于 active Canon，不能与未迁移的 `legacy_read_only` 混淆。人物、关系、
+所有事实响应必须携带同一 `{authority, head_hash, generation, workflow_digest, projection_digest, as_of_chapter}`。公共 active facts 是已经准入的 genesis
+基础事实、章节 effects 和 active author axioms 的去重并集。人物、关系、
 状态、知识、在场、持有、时间线和 obligations 从同一 public read bundle 派生，不能读取 legacy `index.db`、`state.json` 中的事实缓存或旧 commit/projection 作为当前事实。
 
 `/api/canon-v3/facts` 默认只返回 `authority_layer=active_canon`。显式
@@ -78,9 +77,9 @@ Dashboard 只展示 `primary_action`、命令和人工审核材料，不提供 d
 - workflow API 与 CLI 的 `workflow_digest` 相同。
 - 所有事实页绑定同一 HEAD/generation。
 - retrieval 状态明确标记非权威与 `writing_blocked=false`，旧向量库不冒充 ready。
-- stale/migration/invalid 状态被明确展示，不泄漏旧 index 数据。
+- stale/initialization/invalid 状态被明确展示，不泄漏旧 index 数据。
 - 首页显示 exact workflow、STAGING、cases、`can_write_next` 和 `primary_action`。
 - 伏笔页的数据源为 `/api/canon-v3/obligations`。
-- Canon 事实页的数据源为 `/api/canon-v3/facts`，能显示 genesis/cutover/chapter/axiom
+- Canon 事实页的数据源为 `/api/canon-v3/facts`，能显示 genesis/chapter/axiom
   origin，且不会把 STAGING、style 或 raw legacy 合入。
 - Dashboard 全程只提供 GET/只读接口。

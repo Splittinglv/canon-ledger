@@ -1032,7 +1032,7 @@ def _build_project_tree(
     # New books enter the single Canon v3 write path before the first chapter.
     # CURRENT points at an immutable empty genesis and the disposable projection
     # is already bound to it, so the first prewrite gate has one authoritative
-    # workflow state. Existing projects use the explicit migration command.
+    # workflow state. Existing/non-empty targets are rejected by init.
     from data_modules.canon_v3.service import CanonV3Service
 
     CanonV3Service(project_path).initialize_new_project()

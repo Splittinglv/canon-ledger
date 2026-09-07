@@ -35,7 +35,7 @@ description: 审查章节的长期事实连续性；下一章草稿复用 Canon 
 - 目标章等于 `expected_next_chapter`，且 workflow 为 ready，使用 staged draft review。
 - 目标章等于当前 staged chapter，使用 staged draft review 恢复同一事务。
 - 目标章已经在活动 manifest 或输入为范围，使用 historical audit。
-- migration/projection/invalid 状态不创建 staged review；按 snapshot 的恢复动作停止。
+- initialization/projection/invalid 状态不创建 staged review；按 snapshot 的恢复动作停止。
 
 ## 2. 固化输入
 

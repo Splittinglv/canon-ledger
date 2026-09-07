@@ -1,6 +1,6 @@
 ---
 name: canon-ledger-doctor
-description: 只读诊断 Canon v3 workflow、cutover 认证、事务对象、正文绑定、HEAD 投影和插件运行环境，并给出唯一恢复动作。
+description: 只读诊断 Canon v3 workflow、事务对象、正文绑定、HEAD 投影和插件运行环境，并给出唯一恢复动作。
 ---
 
 # Canon v3 体检
@@ -14,7 +14,7 @@ description: 只读诊断 Canon v3 workflow、cutover 认证、事务对象、�
 2. 读取 exact `canon-v3 status`；把完整 `workflow_snapshot`、
    `workflow_digest` 和 `primary_action` 当作同一版本。
 3. 运行标准 doctor。它始终校验 CURRENT/manifest/可达对象、唯一 STAGING、
-   author-axiom、cutover（适用时）和 HEAD-bound projection。
+   author-axiom 和 HEAD-bound projection。
 4. 用户要求 `--deep` 时，再检查 Dashboard 打包和额外运行环境；深度模式仍然只读。
 5. 按 workflow state 解释问题，不让旧 state/index/RAG、旧 projection 日志或
    合同阶段覆盖 Canon blocker，也不让这些兼容诊断自行产生事实恢复动作。
@@ -33,12 +33,6 @@ description: 只读诊断 Canon v3 workflow、cutover 认证、事务对象、�
 - chapter 与 author-axiom STAGING 是否互斥，并与 transaction/stage digest 精确绑定；
 - active author-axiom snapshot 是否绑定同一 HEAD 和 digest；
 - workflow 的 HEAD/generation、可写状态和唯一 `primary_action`；
-- `legacy_cutover|legacy_repair|recertification` 的只读 cutover audit、稳定
-  reason codes、detached plan 和所需人工 case；
-- legacy prefix/genesis 是否需要 recertification，并明确区分首次迁移与已有
-  HEAD 的 `legacy_repair`；
-- `legacy-genesis/v2` 的只读 `fact_boundary_analysis`：已知软事实、待人工分类项、
-  下游依赖以及 `ready_to_supersede|manual_fork_required`；
 - canon projection 的 HEAD/generation freshness；
 - 可选 `canon-v3 retrieval status`：ready 时展示 mode、fact/vector count 与 exact binding；
   missing/stale/invalid 时只给 `canon-v3 retrieval rebuild` 增强建议，不改变 `report.ok`、
@@ -55,19 +49,7 @@ warning；它们不改变 `report.ok`、`can_write_next` 或唯一事实恢复�
 
 ## 状态对应报告
 
-- `migration_required + new_project`：报告 snapshot 的 initialize action。
-- `migration_required + legacy_cutover`：展示只读 audit，再报告 snapshot 的 migrate action。
-- `migration_required + legacy_repair`：展示 stale prefix/suffix 的 audit 证据，且只报告
-  snapshot 指向的 `canon-v3 audit-cutover`。作者按稳定 reason code 恢复冻结来源或
-  后重新读取 status。有意修改且无法恢复时保留原项目只读，在 clean target
-  fork/rebuild；不得再次调用 migrate、猜 cutover、原地 initialize/重写后缀，或用旧
-  commit/索引覆盖当前 HEAD。
-- `migration_required + recertification`：展示 `repair-cutover --dry-run` 产生的
-  exact detached plan/cases；逐项确认完成后，snapshot 才可能给出
-  `repair-cutover --apply --input-file <request.json>`。这两者都是 confirm 的后续
-  恢复动作，Doctor 只报告、绝不执行。
-  若被已有 STAGING 占用，只报告 snapshot 的 exact
-  `archive_conflicting_staging` 动作；作者明确放弃后交 `/canon-ledger-confirm` 执行，Doctor 不自动归档。
+- `initialization_required + new_project`：报告 snapshot 的 initialize action。
 - `awaiting_human`：报告 `/canon-ledger-confirm` 和当前 transaction/stage。
 - `ready_to_finalize`：报告当前 exact finalize action，不宣称已经发布。
 - `rewrite_required|recompile_required`：恢复当前章或当前 author-axiom 事务，不建议下一章。

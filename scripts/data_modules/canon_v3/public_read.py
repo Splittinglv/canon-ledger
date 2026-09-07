@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 """Pure serializers for the public, active Canon read surface.
 
-The immutable projection keeps genesis/cutover records separate from chapter
+The immutable projection keeps genesis records separate from chapter
 effects.  Public consumers must not mistake that storage split for an
 authority split: admitted genesis facts, active chapter facts and active
 author axioms all belong to the same exact HEAD.  This module builds that
-union from the already-sanitized as-of snapshot; it never reads raw legacy
-stores, STAGING, style memory or mutable setting files.
+union from the already-sanitized as-of snapshot; it never reads STAGING,
+style memory or mutable setting files.
 """
 from __future__ import annotations
 
@@ -57,10 +57,7 @@ def _fact_view(raw: Mapping[str, Any]) -> dict[str, Any]:
     elif str(row.get("commit_hash") or row.get("effect_id") or "").strip():
         origin = "chapter_commit"
     else:
-        # A cutover keeps the fact's original chapter for chronology, but the
-        # admitted row is authoritative because it lives in the v3 genesis
-        # snapshot—not because the old commit/event store remains readable.
-        origin = "legacy_cutover"
+        raise PublicReadError("canon_v3_public_fact_origin_invalid")
     row.update(
         {
             "schema_version": ACTIVE_FACT_SCHEMA,
@@ -143,9 +140,8 @@ def active_fact_rows(snapshot: Mapping[str, Any]) -> list[dict[str, Any]]:
 
     origin_order = {
         "genesis": 0,
-        "legacy_cutover": 1,
-        "author_axiom": 2,
-        "chapter_commit": 3,
+        "author_axiom": 1,
+        "chapter_commit": 2,
     }
     return sorted(
         indexed.values(),

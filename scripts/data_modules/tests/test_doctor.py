@@ -19,13 +19,11 @@ def _ensure_scripts_on_path() -> None:
 _ensure_scripts_on_path()
 
 import data_modules.doctor as doctor_module  # noqa: E402
-from data_modules.canon_v3.migration import migrate_legacy  # noqa: E402
 from data_modules.canon_v3.projection import projection_path  # noqa: E402
 from data_modules.canon_v3.service import CanonV3Service  # noqa: E402
 from data_modules.projection_log import append_projection_run  # noqa: E402
 from data_modules.workflow_authority import WorkflowAuthority  # noqa: E402
 from .test_canon_v3_author_axiom import _draft_record, _proposal  # noqa: E402
-from .test_canon_v3_migration import _persist_accepted_commit  # noqa: E402
 from .test_canon_v3_service import _batch, _power, _project  # noqa: E402
 
 
@@ -159,33 +157,6 @@ def test_doctor_reports_invalid_current_and_reachable_object_failure(
     assert checks["canon_v3.author_axioms"]["status"] == "error"
 
 
-def test_doctor_audits_legacy_repair_without_mutating_head(tmp_path, monkeypatch):
-    _make_init_ready(tmp_path)
-    manuscript, _commit, _payload = _persist_accepted_commit(tmp_path, 1)
-    migrated = migrate_legacy(tmp_path)
-    old_head = migrated["head_hash"]
-    manuscript.write_text("第1章正文已经被改写。", encoding="utf-8")
-    monkeypatch.setattr(doctor_module, "_python_checks", lambda: [])
-
-    report = doctor_module.build_doctor_report(tmp_path)
-
-    audit = next(
-        item for item in report["checks"] if item["id"] == "canon_v3.cutover_audit"
-    )
-    assert report["workflow_snapshot"]["bootstrap_mode"] == "legacy_repair"
-    assert report["primary_action"]["code"] in {
-        "remigrate_legacy_suffix",
-        "repair_legacy_prefix",
-    }
-    assert report["primary_action"]["command"] == (
-        "canon_ledger.py canon-v3 audit-cutover"
-    )
-    assert report["recommended_actions"] == [
-        "canon_ledger.py canon-v3 audit-cutover"
-    ]
-    assert report["canon_v3"]["cutover_audit"]["state"] == "blocked"
-    assert audit["status"] == "error"
-    assert CanonV3Service(tmp_path).repository.current_head() == old_head
 
 
 def test_doctor_missing_planning_file_is_advisory(tmp_path, monkeypatch):

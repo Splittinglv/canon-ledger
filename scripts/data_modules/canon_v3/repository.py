@@ -47,10 +47,7 @@ AUTHOR_AXIOM_COMMIT_SCHEMA = (
     f"{V3_SCHEMA_PREFIX}/author-axiom-commit-object/v1"
 )
 PROJECTION_BINDING_SCHEMA = f"{V3_SCHEMA_PREFIX}/projection-binding/v1"
-NEW_PROJECT_GENESIS_SCHEMA = f"{V3_SCHEMA_PREFIX}/genesis-metadata/v1"
-RECERTIFIED_SUFFIX_TRANSACTION_SCHEMA = (
-    f"{V3_SCHEMA_PREFIX}/legacy-recertified-suffix-transaction/v1"
-)
+NEW_PROJECT_GENESIS_SCHEMA = f"{V3_SCHEMA_PREFIX}/genesis/v1"
 
 V3_RELATIVE_ROOT = Path(".story-system") / "v3"
 CURRENT_FILE = "CURRENT"
@@ -352,276 +349,41 @@ class CanonV3Repository:
         metadata: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         raw = dict(metadata or {})
-        if not raw:
-            return {
-                "schema_version": NEW_PROJECT_GENESIS_SCHEMA,
-                "source": "new_project",
-                "cutover_chapter": 0,
-            }
         schema = str(raw.get("schema_version") or "")
         source = str(raw.get("source") or "")
         if schema == NEW_PROJECT_GENESIS_SCHEMA:
-            if set(raw) != {"schema_version", "source", "cutover_chapter"}:
-                raise CanonRepositoryError("canon_v3_new_genesis_fields_invalid")
-            if source != "new_project" or raw.get("cutover_chapter") != 0:
-                raise CanonRepositoryError("canon_v3_new_genesis_invalid")
-            return _deep_json_copy(raw)
-        if schema not in {
-            "canon-v3/legacy-genesis/v1",
-            "canon-v3/legacy-genesis/v2",
-            "canon-v3/legacy-genesis/v3",
-        }:
-            raise CanonRepositoryError("canon_v3_genesis_metadata_schema_invalid")
-        legacy_v1 = schema == "canon-v3/legacy-genesis/v1"
-        required_keys = {
-            "schema_version",
-            "source",
-            "cutover_chapter",
-            "v2_commits",
-            "legacy_snapshot",
-            "legacy_snapshot_sha256",
-        }
-        allowed_keys = set(required_keys)
-        if not legacy_v1:
-            allowed_keys.add("recertification")
-        if not required_keys.issubset(raw) or not set(raw).issubset(allowed_keys):
-            raise CanonRepositoryError("canon_v3_legacy_genesis_fields_invalid")
-        try:
-            cutover = int(raw.get("cutover_chapter"))
-        except (TypeError, ValueError) as exc:
-            raise CanonRepositoryError("canon_v3_legacy_cutover_invalid") from exc
-        refs = raw.get("v2_commits")
-        snapshot = raw.get("legacy_snapshot")
-        if not isinstance(refs, list) or not isinstance(snapshot, dict):
-            raise CanonRepositoryError("canon_v3_legacy_genesis_shape_invalid")
-        if content_hash(snapshot) != str(raw.get("legacy_snapshot_sha256") or ""):
-            raise CanonRepositoryError("canon_v3_legacy_snapshot_hash_invalid")
-        expected_snapshot_schema = {
-            "canon-v3/legacy-genesis/v1": (
-                "canon-v3/legacy-fact-snapshot/v1"
-            ),
-            "canon-v3/legacy-genesis/v2": (
-                "canon-v3/legacy-fact-snapshot/v2"
-            ),
-            "canon-v3/legacy-genesis/v3": (
-                "canon-v3/legacy-fact-snapshot/v3"
-            ),
-        }[schema]
-        if snapshot.get("schema_version") != expected_snapshot_schema:
-            raise CanonRepositoryError("canon_v3_legacy_snapshot_schema_invalid")
-        if int(snapshot.get("cutover_chapter") or 0) != cutover:
-            raise CanonRepositoryError("canon_v3_legacy_snapshot_cutover_mismatch")
-        if source == "new_project":
-            if cutover != 0 or refs:
-                raise CanonRepositoryError("canon_v3_legacy_new_project_invalid")
-        elif source != "v2_accepted_commits" or cutover <= 0:
-            raise CanonRepositoryError("canon_v3_legacy_source_invalid")
-        chapters = [
-            int(item.get("chapter") or 0) if isinstance(item, dict) else 0
-            for item in refs
-        ]
-        if chapters != list(range(1, cutover + 1)):
-            raise CanonRepositoryError("canon_v3_legacy_commit_refs_not_contiguous")
-        for chapter, item in zip(chapters, refs):
-            assert isinstance(item, dict)
-            if set(item) != {
+            if set(raw) != {
                 "schema_version",
-                "chapter",
-                "path",
-                "content_sha256",
-                "manuscript_binding",
+                "source",
+                "snapshot",
+                "snapshot_sha256",
             }:
-                raise CanonRepositoryError("canon_v3_legacy_commit_ref_fields_invalid")
-            expected_ref_schema = (
-                "canon-v3/legacy-v2-commit-ref/v1"
-                if legacy_v1
-                else "canon-v3/legacy-v2-commit-ref/v2"
-            )
-            if item.get("schema_version") != expected_ref_schema:
-                raise CanonRepositoryError("canon_v3_legacy_commit_ref_schema_invalid")
-            relative = str(item.get("path") or "")
-            expected_path = f".story-system/commits/chapter_{chapter:03d}.commit.json"
-            if relative != expected_path:
-                raise CanonRepositoryError("canon_v3_legacy_commit_ref_path_invalid")
-            path = (self.project_root / relative).resolve()
-            try:
-                path.relative_to(self.project_root)
-                source_bytes = path.read_bytes()
-            except (ValueError, OSError) as exc:
-                raise CanonRepositoryError("canon_v3_legacy_commit_ref_unreadable") from exc
-            if hashlib.sha256(source_bytes).hexdigest() != item.get("content_sha256"):
-                raise CanonRepositoryError("canon_v3_legacy_commit_ref_hash_mismatch")
-            try:
-                payload = json.loads(source_bytes.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise CanonRepositoryError("canon_v3_legacy_commit_ref_invalid_json") from exc
-            meta = payload.get("meta") if isinstance(payload, dict) else {}
+                raise CanonRepositoryError("canon_v3_new_genesis_fields_invalid")
+            if source != "new_project":
+                raise CanonRepositoryError("canon_v3_new_genesis_invalid")
+            snapshot = raw.get("snapshot")
             if (
-                not isinstance(meta, dict)
-                or meta.get("chapter") != chapter
-                or meta.get("status") != "accepted"
-                or payload.get("chapter_binding") != item.get("manuscript_binding")
+                not isinstance(snapshot, dict)
+                or snapshot.get("schema_version")
+                != "canon-v3/genesis-fact-snapshot/v1"
+                or content_hash(snapshot)
+                != str(raw.get("snapshot_sha256") or "")
             ):
-                raise CanonRepositoryError("canon_v3_legacy_commit_ref_payload_invalid")
-            from ..chapter_content_binding import verify_commit_content_binding
-
-            ok, code = verify_commit_content_binding(
-                self.project_root,
-                chapter,
-                payload,
-            )
-            if not ok:
-                raise CanonRepositoryError(
-                    f"canon_v3_legacy_commit_binding_invalid:{chapter}:{code}"
-                )
-        # A self-hash only proves internal consistency; it does not prove that
-        # the imported facts came from the verified v2 prefix.  Rebuild the
-        # fact-only snapshot from those exact sources and require full equality
-        # before a public initialize may publish CURRENT.
-        if not legacy_v1:
+                raise CanonRepositoryError("canon_v3_genesis_snapshot_invalid")
             try:
-                if schema == "canon-v3/legacy-genesis/v2":
-                    from .migration import _fact_snapshot_v2
+                from .genesis import build_genesis_snapshot
 
-                    verified_snapshot = _fact_snapshot_v2(
-                        self.project_root, cutover
-                    )
-                else:
-                    from .migration import _fact_snapshot
-
-                    verified_snapshot = _fact_snapshot(
-                        self.project_root, cutover
-                    )
+                verified_snapshot = build_genesis_snapshot(self.project_root)
             except Exception as exc:
                 raise CanonRepositoryError(
-                    "canon_v3_legacy_snapshot_recompute_failed"
+                    "canon_v3_genesis_snapshot_recompute_failed"
                 ) from exc
-            if schema == "canon-v3/legacy-genesis/v3":
-                from .migration import legacy_snapshot_active_provenance
-
-                provenance_matches = legacy_snapshot_active_provenance(
-                    snapshot
-                ) == legacy_snapshot_active_provenance(verified_snapshot)
-            else:
-                # v2 predates advisory exclusion receipts.  Preserve its exact
-                # source interpretation byte-for-byte for existing CURRENTs.
-                provenance_matches = snapshot == verified_snapshot
-            if not provenance_matches:
+            if snapshot != verified_snapshot:
                 raise CanonRepositoryError(
-                    "canon_v3_legacy_snapshot_provenance_mismatch"
+                    "canon_v3_genesis_snapshot_provenance_mismatch"
                 )
-        recertification = raw.get("recertification")
-        if recertification is not None:
-            if legacy_v1 or not isinstance(recertification, dict):
-                raise CanonRepositoryError(
-                    "canon_v3_legacy_recertification_receipt_invalid"
-                )
-            receipt_fields = {
-                "schema_version",
-                "prior_head_hash",
-                "detached_plan_digest",
-                "publish_token",
-                "review_decisions",
-                "review_decision_set_digest",
-                "review_cases_digest",
-                "semantic_negative_lineage",
-            }
-            if (
-                set(recertification) != receipt_fields
-                or recertification.get("schema_version")
-                != "canon-v3/legacy-recertification-receipt/v1"
-            ):
-                raise CanonRepositoryError(
-                    "canon_v3_legacy_recertification_receipt_invalid"
-                )
-            digest_fields = (
-                "prior_head_hash",
-                "detached_plan_digest",
-                "publish_token",
-                "review_decision_set_digest",
-                "review_cases_digest",
-            )
-            if any(
-                not isinstance(recertification.get(field), str)
-                or not _HASH_RE.fullmatch(str(recertification.get(field)))
-                for field in digest_fields
-            ):
-                raise CanonRepositoryError(
-                    "canon_v3_legacy_recertification_digest_invalid"
-                )
-            decisions = recertification.get("review_decisions")
-            if (
-                not isinstance(decisions, list)
-                or content_hash(decisions)
-                != recertification.get("review_decision_set_digest")
-            ):
-                raise CanonRepositoryError(
-                    "canon_v3_legacy_recertification_decisions_invalid"
-                )
-            decision_keys: list[str] = []
-            for decision in decisions:
-                if (
-                    not isinstance(decision, dict)
-                    or set(decision)
-                    != {
-                        "schema_version",
-                        "case_key",
-                        "target_digest",
-                        "material_digest",
-                        "action",
-                    }
-                    or decision.get("schema_version")
-                    != "canon-v3/legacy-recertification-decision/v1"
-                    or decision.get("action") != "confirm"
-                ):
-                    raise CanonRepositoryError(
-                        "canon_v3_legacy_recertification_decision_invalid"
-                    )
-                hashes = (
-                    decision.get("case_key"),
-                    decision.get("target_digest"),
-                    decision.get("material_digest"),
-                )
-                if any(
-                    not isinstance(value, str) or not _HASH_RE.fullmatch(value)
-                    for value in hashes
-                ):
-                    raise CanonRepositoryError(
-                        "canon_v3_legacy_recertification_decision_invalid"
-                    )
-                decision_keys.append(str(decision["case_key"]))
-            if decision_keys != sorted(set(decision_keys)):
-                raise CanonRepositoryError(
-                    "canon_v3_legacy_recertification_decisions_not_canonical"
-                )
-            lineage = recertification.get("semantic_negative_lineage")
-            if not isinstance(lineage, dict):
-                raise CanonRepositoryError(
-                    "canon_v3_legacy_recertification_lineage_invalid"
-                )
-            for chapter, hashes in lineage.items():
-                try:
-                    chapter_number = int(chapter)
-                except (TypeError, ValueError) as exc:
-                    raise CanonRepositoryError(
-                        "canon_v3_legacy_recertification_lineage_invalid"
-                    ) from exc
-                if (
-                    chapter_number <= 0
-                    or str(chapter_number) != str(chapter)
-                    or not isinstance(hashes, list)
-                    or hashes != sorted(set(hashes))
-                    or any(
-                        not isinstance(value, str) or not _HASH_RE.fullmatch(value)
-                        for value in hashes
-                    )
-                ):
-                    raise CanonRepositoryError(
-                        "canon_v3_legacy_recertification_lineage_invalid"
-                    )
-                for decision_hash in hashes:
-                    self.read_decision(decision_hash)
-        return _deep_json_copy(raw)
+            return _deep_json_copy(raw)
+        raise CanonRepositoryError("canon_v3_genesis_metadata_schema_invalid")
 
     def initialize(
         self,
@@ -632,17 +394,13 @@ class CanonV3Repository:
     ) -> str:
         """Create the empty generation-0 manifest and publish it as CURRENT.
 
-        The public boundary only accepts a provenance-verified fact snapshot.
+        The public boundary only accepts a provenance-verified native snapshot.
         Storage-only empty genesis creation is private and used by repository
-        fault tests; production callers must use CanonV3Service/migrate_legacy.
+        fault tests; production callers use CanonV3Service.initialize_new_project.
         """
         if (
             genesis_metadata is None
-            or genesis_metadata.get("schema_version")
-            not in {
-                "canon-v3/legacy-genesis/v2",
-                "canon-v3/legacy-genesis/v3",
-            }
+            or genesis_metadata.get("schema_version") != NEW_PROJECT_GENESIS_SCHEMA
         ):
             raise CanonRepositoryError(
                 "canon_v3_public_initialize_requires_verified_fact_snapshot"
@@ -742,232 +500,9 @@ class CanonV3Repository:
     def read_transaction(self, object_hash: str) -> dict[str, Any]:
         return self.read_object("transaction", object_hash)
 
-    def recertified_suffix_wrapper(
-        self,
-        object_hash: str,
-    ) -> dict[str, Any] | None:
-        """Validate and return a detached-recompiled suffix wrapper."""
-
-        payload = self.read_transaction(object_hash)
-        if payload.get("schema_version") != RECERTIFIED_SUFFIX_TRANSACTION_SCHEMA:
-            return None
-        expected_fields = {
-            "schema_version",
-            "chapter",
-            "parent_head",
-            "source_current_head",
-            "source_commit_hash",
-            "source_transaction_hash",
-            "source_transaction_content_sha256",
-            "source_canon_effects_digest",
-            "source_decision_hashes",
-            "source_lineage_decision_hashes",
-            "active_source_candidate_digests",
-            "recertified_envelope",
-            "recertified_canon_effects_digest",
-            "entity_registry_digest",
-            "recertification_binding",
-            "semantic_negative_lineage_hashes",
-        }
-        if set(payload) != expected_fields:
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_fields_invalid"
-            )
-        hash_fields = (
-            "parent_head",
-            "source_current_head",
-            "source_commit_hash",
-            "source_transaction_hash",
-            "source_transaction_content_sha256",
-            "source_canon_effects_digest",
-            "recertified_canon_effects_digest",
-            "entity_registry_digest",
-        )
-        if any(
-            not isinstance(payload.get(field), str)
-            or not _HASH_RE.fullmatch(str(payload.get(field)))
-            for field in hash_fields
-        ):
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_digest_invalid"
-            )
-        try:
-            chapter = int(payload.get("chapter"))
-        except (TypeError, ValueError) as exc:
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_chapter_invalid"
-            ) from exc
-        if chapter <= 0:
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_chapter_invalid"
-            )
-
-        source_head = str(payload["source_current_head"])
-        source_manifest = self.read_manifest(
-            source_head, validate_references=True
-        )
-        source_commit_hash = str(payload["source_commit_hash"])
-        if source_commit_hash not in {
-            str(entry.get("commit_hash") or "")
-            for entry in source_manifest.get("chapters") or ()
-        }:
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_source_commit_not_active"
-            )
-        source_commit = self.read_commit(source_commit_hash)
-        source_transaction_hash = str(payload["source_transaction_hash"])
-        if (
-            int(source_commit.get("chapter") or 0) != chapter
-            or source_commit.get("transaction_hash") != source_transaction_hash
-            or list(source_commit.get("decision_hashes") or ())
-            != payload.get("source_decision_hashes")
-            or list(source_commit.get("lineage_decision_hashes") or ())
-            != payload.get("source_lineage_decision_hashes")
-            or content_hash(source_commit.get("canon_effects") or [])
-            != payload.get("source_canon_effects_digest")
-        ):
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_source_commit_mismatch"
-            )
-        source_transaction = self.read_transaction(source_transaction_hash)
-        if (
-            source_transaction.get("schema_version")
-            == RECERTIFIED_SUFFIX_TRANSACTION_SCHEMA
-            or content_hash(source_transaction)
-            != payload.get("source_transaction_content_sha256")
-        ):
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_source_transaction_invalid"
-            )
-        try:
-            from .service import PreparedEnvelope
-            from .evidence import candidate_digest
-            from .schema import AuthorAxiomSource
-            from .author_axiom import (
-                AuthorAxiomChannel,
-                active_candidate_source_key,
-            )
-
-            source_envelope = PreparedEnvelope.model_validate(
-                source_transaction
-            )
-            recertified_envelope = PreparedEnvelope.model_validate(
-                payload.get("recertified_envelope")
-            )
-        except Exception as exc:
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_envelope_invalid"
-            ) from exc
-        if (
-            source_envelope.chapter != chapter
-            or recertified_envelope.chapter != chapter
-            or recertified_envelope.chapter_binding
-            != source_envelope.chapter_binding
-            or recertified_envelope.prepared_transaction.parent_head
-            != payload.get("parent_head")
-            or recertified_envelope.prepared_transaction.entity_registry_digest
-            != payload.get("entity_registry_digest")
-        ):
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_envelope_binding_mismatch"
-            )
-        active_digests = payload.get("active_source_candidate_digests")
-        if (
-            not isinstance(active_digests, list)
-            or active_digests != sorted(set(active_digests))
-            or any(
-                not isinstance(value, str) or not _HASH_RE.fullmatch(value)
-                for value in active_digests
-            )
-        ):
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_candidates_invalid"
-            )
-        source_candidate_digests = {
-            candidate_digest(candidate)
-            for candidate in source_envelope.candidates
-        }
-        source_effect_digests = sorted(
-            {
-                str(effect.get("candidate_digest") or "")
-                for effect in source_commit.get("canon_effects") or ()
-                if isinstance(effect, Mapping)
-            }
-        )
-        recertified_candidate_digests = sorted(
-            candidate_digest(candidate)
-            for candidate in recertified_envelope.candidates
-        )
-        if (
-            set(active_digests) - source_candidate_digests
-            or active_digests != source_effect_digests
-            or active_digests != recertified_candidate_digests
-            or content_hash(
-                [
-                    effect.model_dump(mode="json")
-                    for effect in recertified_envelope.prepared_transaction.effects
-                ]
-            )
-            != payload.get("recertified_canon_effects_digest")
-        ):
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_effect_recompile_mismatch"
-            )
-        active_axiom_source_keys = AuthorAxiomChannel(
-            self.project_root,
-            repository=self,
-        ).active_candidate_source_keys(str(payload.get("parent_head") or ""))
-        if any(
-            active_candidate_source_key(source)
-            not in active_axiom_source_keys
-            for candidate in recertified_envelope.candidates
-            for source in candidate.sources
-            if isinstance(source, AuthorAxiomSource)
-        ):
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_author_axiom_membership_invalid"
-            )
-        binding = payload.get("recertification_binding")
-        binding_fields = {
-            "prior_head_hash",
-            "detached_plan_digest",
-            "publish_token",
-            "review_decision_set_digest",
-            "review_cases_digest",
-        }
-        if (
-            not isinstance(binding, dict)
-            or set(binding) != binding_fields
-            or any(
-                not isinstance(binding.get(field), str)
-                or not _HASH_RE.fullmatch(str(binding.get(field)))
-                for field in binding_fields
-            )
-            or binding.get("prior_head_hash") != source_head
-        ):
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_review_binding_invalid"
-            )
-        negative = payload.get("semantic_negative_lineage_hashes")
-        if (
-            not isinstance(negative, list)
-            or negative != sorted(set(negative))
-            or any(
-                not isinstance(value, str) or not _HASH_RE.fullmatch(value)
-                for value in negative
-            )
-        ):
-            raise CanonIntegrityError(
-                "canon_v3_recertified_suffix_lineage_invalid"
-            )
-        return copy.deepcopy(payload)
-
     def prepared_envelope_payload(self, object_hash: str) -> dict[str, Any]:
-        """Resolve normal and recertified transactions through one validator."""
+        """Return the single supported native chapter transaction payload."""
 
-        wrapper = self.recertified_suffix_wrapper(object_hash)
-        if wrapper is not None:
-            return copy.deepcopy(wrapper["recertified_envelope"])
         return self.read_transaction(object_hash)
 
     def read_decision(self, object_hash: str) -> dict[str, Any]:
@@ -1506,7 +1041,6 @@ class CanonV3Repository:
             label="transaction_hash",
         )
         transaction = self.read_transaction(transaction_hash)
-        recertified_wrapper = self.recertified_suffix_wrapper(transaction_hash)
         transaction_chapter = self._chapter_from_payload(transaction)
         if transaction_chapter is not None and transaction_chapter != chapter:
             raise CanonIntegrityError("canon_v3_commit_transaction_chapter_mismatch")
@@ -1553,26 +1087,6 @@ class CanonV3Repository:
             not isinstance(effect, dict) for effect in effects
         ):
             raise CanonIntegrityError("canon_v3_commit_effects_not_mapping_list")
-        if recertified_wrapper is not None:
-            envelope = recertified_wrapper["recertified_envelope"]
-            prepared = envelope.get("prepared_transaction")
-            expected_effects = (
-                prepared.get("effects") if isinstance(prepared, Mapping) else None
-            )
-            required_lineage = set(
-                recertified_wrapper.get("semantic_negative_lineage_hashes") or ()
-            )
-            if (
-                payload.get("base_head_hash")
-                != recertified_wrapper.get("parent_head")
-                or decision_hashes
-                or effects != expected_effects
-                or not required_lineage.issubset(set(normalized_lineage))
-            ):
-                raise CanonIntegrityError(
-                    "canon_v3_recertified_suffix_commit_binding_invalid"
-                )
-
     def _resolve_author_axiom_decisions_unlocked(
         self,
         decisions: Sequence[Mapping[str, Any] | str],
@@ -1613,7 +1127,7 @@ class CanonV3Repository:
         lineage_decisions: Sequence[str],
         records: Sequence[Mapping[str, Any]],
         axiom_set_digest: str,
-        superseded_legacy_admission_digests: Sequence[str],
+        superseded_genesis_admission_digests: Sequence[str],
         expected_stage_digest: str,
         finalize_token: str,
         fault_injector: FaultInjector | None = None,
@@ -1664,7 +1178,7 @@ class CanonV3Repository:
                     _validate_hash(
                         str(item), label="legacy_admission_digest"
                     )
-                    for item in superseded_legacy_admission_digests
+                    for item in superseded_genesis_admission_digests
                 }
             )
         )
@@ -1707,7 +1221,7 @@ class CanonV3Repository:
                             == normalized_set_digest
                             and tuple(
                                 current_commit.get(
-                                    "superseded_legacy_admission_digests"
+                                    "superseded_genesis_admission_digests"
                                 )
                                 or ()
                             )
@@ -1731,7 +1245,7 @@ class CanonV3Repository:
                                 ),
                                 records=normalized_records,
                                 axiom_set_digest=normalized_set_digest,
-                                superseded_legacy_admission_digests=(
+                                superseded_genesis_admission_digests=(
                                     requested_superseded_admissions
                                 ),
                                 expected_head=expected,
@@ -1793,7 +1307,7 @@ class CanonV3Repository:
                     lineage_decision_hashes=lineage_hashes,
                     records=normalized_records,
                     axiom_set_digest=normalized_set_digest,
-                    superseded_legacy_admission_digests=(
+                    superseded_genesis_admission_digests=(
                         requested_superseded_admissions
                     ),
                     expected_head=expected,
@@ -1822,7 +1336,7 @@ class CanonV3Repository:
                 "previous_author_axiom_commit_hash": previous_commit_hash,
                 "records": normalized_records,
                 "axiom_set_digest": normalized_set_digest,
-                "superseded_legacy_admission_digests": list(
+                "superseded_genesis_admission_digests": list(
                     requested_superseded_admissions
                 ),
             }
@@ -1917,7 +1431,7 @@ class CanonV3Repository:
             str(payload.get("axiom_set_digest") or ""),
             label="author_axiom_set_digest",
         )
-        superseded = payload.get("superseded_legacy_admission_digests", [])
+        superseded = payload.get("superseded_genesis_admission_digests", [])
         if not isinstance(superseded, list):
             raise CanonIntegrityError(
                 "canon_v3_author_axiom_superseded_admissions_invalid"
@@ -2195,7 +1709,6 @@ __all__ = [
     "CanonV3Repository",
     "ProjectionBinding",
     "ProjectionStaleError",
-    "RECERTIFIED_SUFFIX_TRANSACTION_SCHEMA",
     "SealResult",
     "canonical_json_bytes",
     "content_hash",

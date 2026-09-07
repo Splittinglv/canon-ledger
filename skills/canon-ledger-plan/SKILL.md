@@ -1,6 +1,6 @@
 ---
 name: canon-ledger-plan
-description: 基于活动 Canon HEAD 规划卷纲、时间线和章纲；规划默认是软方向，新增长期硬设定必须单独重新认证。
+description: 基于活动 Canon HEAD 规划卷纲、时间线和章纲；规划默认是软方向，新增长期硬设定必须走独立事务认证。
 ---
 
 # 规划卷纲与章纲
@@ -10,7 +10,7 @@ description: 基于活动 Canon HEAD 规划卷纲、时间线和章纲；规划�
 
 ## 1. Workflow Gate
 
-运行 `canon-v3 status`。已有章节的项目只有 `ready + projection_fresh=true` 才能开始新规划；migration、pending、rewrite、recompile、projection stale 或 invalid 时停止并执行唯一恢复动作。
+运行 `canon-v3 status`。已有章节的项目只有 `ready + projection_fresh=true` 才能开始新规划；initialization、pending、rewrite、recompile、projection stale 或 invalid 时停止并执行唯一恢复动作。
 
 规划不能用合同就绪或旧 state/index 绕过 Canon 状态。
 
@@ -111,6 +111,6 @@ review contract 的事实 `must_check/blocking_rules` 必须为空，不能把�
 - 输出明确区分软计划、硬设定草案和 style。
 - 未认证硬设定没有进入 HEAD、projection、query 或 context；draft 可修改或
   删除，但发布前任一字节变化都会使事务失效。
-- Canon workflow 仍为 ready；若产生 axiom recertification，则唯一下一步是完成该事务，而不是开始写章。
+- Canon workflow 仍为 ready；若产生 author-axiom 事务，则唯一下一步是完成该事务，而不是开始写章。
 - 合同刷新返回 source outline/input digest，且应用前后 HEAD/generation/workflow digest 不变。
 - 最终报告列出更新文件、待认证硬设定和下一步章节，不输出文风评分。

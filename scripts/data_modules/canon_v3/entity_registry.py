@@ -66,7 +66,7 @@ class AliasBinding:
     candidate_digests: tuple[str, ...]
     fact_digests: tuple[str, ...]
     approval_decision_hashes: tuple[str, ...]
-    legacy_snapshot_digests: tuple[str, ...] = ()
+    genesis_snapshot_digests: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "namespace", IdentityNamespace(self.namespace))
@@ -83,7 +83,7 @@ class AliasBinding:
             "candidate_digests",
             "fact_digests",
             "approval_decision_hashes",
-            "legacy_snapshot_digests",
+            "genesis_snapshot_digests",
         ):
             values = getattr(self, name)
             if values != tuple(sorted(set(values))):
@@ -104,8 +104,8 @@ class AliasBinding:
             and self.fact_digests
             and self.approval_decision_hashes
         )
-        legacy_proof = bool(self.legacy_snapshot_digests and self.fact_digests)
-        if not (v3_proof or legacy_proof):
+        genesis_proof = bool(self.genesis_snapshot_digests and self.fact_digests)
+        if not (v3_proof or genesis_proof):
             raise EntityRegistryIntegrityError(
                 "canon_v3_entity_binding_missing_approval_proof"
             )
@@ -119,7 +119,7 @@ class AliasBinding:
             "candidate_digests": list(self.candidate_digests),
             "fact_digests": list(self.fact_digests),
             "approval_decision_hashes": list(self.approval_decision_hashes),
-            "legacy_snapshot_digests": list(self.legacy_snapshot_digests),
+            "genesis_snapshot_digests": list(self.genesis_snapshot_digests),
         }
 
     @property
@@ -338,7 +338,7 @@ def build_approved_entity_registry(
         candidate_digests: Iterable[str] = (),
         fact_digests: Iterable[str] = (),
         approval_hashes: Iterable[str] = (),
-        legacy_snapshot_digests: Iterable[str] = (),
+        genesis_snapshot_digests: Iterable[str] = (),
     ) -> None:
         namespace_value = IdentityNamespace(namespace)
         canonical_name = str(canonical or "").strip()
@@ -359,25 +359,25 @@ def build_approved_entity_registry(
                 "candidate_digests": set(),
                 "fact_digests": set(),
                 "approval_decision_hashes": set(),
-                "legacy_snapshot_digests": set(),
+                "genesis_snapshot_digests": set(),
             }
             merged[key] = current
         current["effect_ids"].update(effect_ids)
         current["candidate_digests"].update(candidate_digests)
         current["fact_digests"].update(fact_digests)
         current["approval_decision_hashes"].update(approval_hashes)
-        current["legacy_snapshot_digests"].update(legacy_snapshot_digests)
+        current["genesis_snapshot_digests"].update(genesis_snapshot_digests)
 
-    # The cutover snapshot is itself a content-addressed author/migration
-    # approval. Seed all legacy aliases before reading v3 chapters.
+    # The native genesis snapshot is content-addressed author approval. Seed
+    # its aliases before reading chapter transactions.
     for fact_digest, record in sorted(prior_facts.items()):
         record_type = str(record.get("record_type") or "")
-        snapshot_digest = str(record.get("legacy_snapshot_sha256") or "")
-        if record_type == "legacy_identity":
+        snapshot_digest = str(record.get("genesis_snapshot_sha256") or "")
+        if record_type == "genesis_identity":
             entity = record.get("entity")
             if not isinstance(entity, Mapping):
                 raise EntityRegistryIntegrityError(
-                    "canon_v3_legacy_identity_payload_invalid"
+                    "canon_v3_genesis_identity_payload_invalid"
                 )
             key = str(record.get("entity_key") or "").strip()
             canonical = str(
@@ -389,7 +389,7 @@ def build_approved_entity_registry(
                     namespace = IdentityNamespace(explicit_namespace)
                 except ValueError as exc:
                     raise EntityRegistryIntegrityError(
-                        "canon_v3_legacy_identity_namespace_invalid"
+                        "canon_v3_genesis_identity_namespace_invalid"
                     ) from exc
                 expected_type = {
                     IdentityNamespace.ACTOR: "角色",
@@ -398,16 +398,13 @@ def build_approved_entity_registry(
                 }[namespace]
                 if str(entity.get("type") or "") != expected_type:
                     raise EntityRegistryIntegrityError(
-                        "canon_v3_legacy_identity_namespace_type_mismatch"
+                        "canon_v3_genesis_identity_namespace_type_mismatch"
                     )
             else:
-                # v1 snapshots remain readable only for recertification
-                # diagnostics.  New cutovers always persist namespace as the
-                # sole authority and derive type from it.
-                legacy_type = str(entity.get("type") or "")
-                if any(marker in legacy_type for marker in ("地点", "场所", "location")):
+                entity_type = str(entity.get("type") or "")
+                if any(marker in entity_type for marker in ("地点", "场所", "location")):
                     namespace = IdentityNamespace.LOCATION
-                elif any(marker in legacy_type for marker in ("物品", "法宝", "item")):
+                elif any(marker in entity_type for marker in ("物品", "法宝", "item")):
                     namespace = IdentityNamespace.ITEM
                 else:
                     namespace = IdentityNamespace.ACTOR
@@ -416,7 +413,7 @@ def build_approved_entity_registry(
                 not isinstance(alias, str) for alias in aliases
             ):
                 raise EntityRegistryIntegrityError(
-                    "canon_v3_legacy_identity_aliases_invalid"
+                    "canon_v3_genesis_identity_aliases_invalid"
                 )
             tokens = {
                 token
@@ -434,9 +431,9 @@ def build_approved_entity_registry(
                     token=token,
                     canonical=canonical,
                     fact_digests=(fact_digest,),
-                    legacy_snapshot_digests=(snapshot_digest,),
+                    genesis_snapshot_digests=(snapshot_digest,),
                 )
-        elif record_type == "legacy_fact":
+        elif record_type == "genesis_fact":
             fact = record.get("fact")
             if not isinstance(fact, Mapping):
                 continue
@@ -453,7 +450,7 @@ def build_approved_entity_registry(
                         token=canonical,
                         canonical=canonical,
                         fact_digests=(fact_digest,),
-                        legacy_snapshot_digests=(snapshot_digest,),
+                        genesis_snapshot_digests=(snapshot_digest,),
                     )
 
     for entry in manifest.get("chapters") or ():
@@ -587,8 +584,8 @@ def build_approved_entity_registry(
             approval_decision_hashes=tuple(
                 sorted(value["approval_decision_hashes"])
             ),
-            legacy_snapshot_digests=tuple(
-                sorted(value["legacy_snapshot_digests"])
+            genesis_snapshot_digests=tuple(
+                sorted(value["genesis_snapshot_digests"])
             ),
         )
         for key, value in sorted(merged.items())

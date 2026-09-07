@@ -183,7 +183,7 @@ def _canon_dashboard_view() -> dict[str, Any]:
                     if state
                     in {
                         "projection_rebuild_required",
-                        "migration_required",
+                        "initialization_required",
                         "recompile_required",
                         "rewrite_required",
                         "invalid",

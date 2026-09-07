@@ -149,20 +149,11 @@ gate、报告、CLI、context、Skills 与 dashboard 只能读取同一个带 `w
 - `rewrite_required`：确认存在正文穿帮，必须先改稿。
 - `recompile_required`：正文、HEAD、证据或人工 correction 已使当前编译绑定失效，必须重新 binding/extract/scan/prepare。
 - `projection_rebuild_required`：HEAD 已发布但派生投影未追上，禁止下一章。
-- `migration_required`：项目尚未切换到 v3 或编辑穿过迁移边界。
+- `initialization_required`：新项目骨架尚未建立原生 Canon genesis。
 - `invalid`：不可变对象、引用或摘要校验失败。
 
-`bootstrap_mode` 表示当前权威来源需要的唯一恢复路由，不是“是否存在目录”的别名：
-
-- 已识别 clean skeleton、无 CURRENT 且无 accepted legacy prefix：`new_project`，执行 initialize。
-- 无 CURRENT 但存在 accepted legacy prefix：`legacy_cutover`，执行 migrate。
-- 已有 CURRENT，但冻结的 legacy prefix/来源绑定变化：`legacy_repair`。唯一通用下一步是只读 `audit-cutover`；作者按稳定 reason code 恢复冻结来源，再重读 status。有意修改且无法恢复时保留旧项目只读，并在 clean target fork/rebuild；本版本不原地重写后缀。普通 `migrate` 会拒绝 stale CURRENT，不能作为修复命令。
-- 已有 CURRENT，且 genesis schema 为 `canon-v3/legacy-genesis/v1`：`recertification`，先产生 detached review material，再逐项确认和 CAS 发布。
-- 已有 v2 CURRENT 但 fact-boundary analysis 非 clean：`legacy_fact_boundary`；写作与公开事实 query 都停止，只允许 exact supersession、人工分类或 clean-target fork。
-- 旧 active author-axiom record 的 key/category/value 命中软设计：`author_axiom_fact_boundary`；保留其它记录并逐项人工移除后才恢复。
-- 有可验证 CURRENT 且无迁移 blocker：`canon_v3`。初始化成功后必须是这个模式，不是 `new_project`。
-
-所有待恢复模式都是 `migration_required && can_write_next=false`。规划合同就绪不能覆盖 Canon 状态。
+`bootstrap_mode` 只区分尚待初始化的 `new_project` 与已建立 CURRENT 的 `canon_v3`。
+`initialization_required` 必须保持 `can_write_next=false`；规划合同就绪不能覆盖 Canon 状态。
 
 独立 review 不再调用 legacy `review-pipeline/update-state`。下一章草稿复用 extract→reviewer→assemble→prepare；历史范围默认 audit-only。队列完全由 compiler 从 prepared transaction 推导。
 
@@ -173,20 +164,18 @@ HEAD-bound facade。它们要求 fresh projection，在查询前后复查 HEAD/g
 invalid source 直接 fail closed。实体同名时返回 `ambiguous + requires_human_resolution`，
 不把多个匹配伪装成空状态。旧 state/index/RAG/memory/entity adapters 即使名为读取也
 可能初始化数据库或写 observation，因此生产入口一律拒绝，`--legacy-read-only` 只是
-保留稳定错误的退役参数。迁移诊断只走纯读 `audit-cutover` 或
-`repair-cutover --dry-run`。所有 status/query/Doctor/Dashboard GET 路径不创建 lock、目录或其它文件。
+保留稳定错误的退役参数。所有 status/query/Doctor/Dashboard GET 路径不创建 lock、目录或其它文件。
 
 Agent 交界使用运行时 JSON Schema：章节是 candidate-draft → reviewer-output →
 runtime assemble proposal；author axiom 使用独立 `author-axiom-proposal` schema 与 validator。
 Reviewer output v3 逐项绑定 validator 返回的 `candidate_id -> candidate_digest`，assemble
 与 exact draft map 比较后才生成 proposal；digest 集合相同但 ID 被互换也会失败。
 Agent 不计算权威 digest，也不根据文档猜 strict payload。
-`fact-boundary/v2` 是章节 candidate、legacy event、setting/initial 与 author-axiom 的
+`fact-boundary/v2` 是章节 candidate、setting/initial 与 author-axiom 的
 共同准入层。已知 advisory 不能生成 effect；闭合结构可证明的客观事实直接准入；自由
 字段、关系或规则语义为 ambiguous，必须绑定 exact candidate/record 的人工分类 case。
 未命中软关键词不再等于硬事实，普通 conflict/checkpoint approve 也不能绕过分类。
-准入在 validator/prepare/compiler、迁移、workflow 与 public read 重复验证；缺少当前
-policy 证明的 active effect 会让项目保持只读，不能在 projection 中静默略过。
+准入在 validator/prepare/compiler、workflow 与 public read 重复验证，不能在 projection 中静默略过。
 
 `planning refresh-contracts` 仅在 ready/fresh 下从已落盘大纲生成卷/章/审查三份
 planning-only JSON。输入、HEAD 和共同 `planning_batch_digest` 使混合版本可检测；它不写
@@ -213,43 +202,9 @@ blocker。STAGING、style、legacy vectors 和历史失效事实不入库，检�
 exact digest，将 pointer 移入非权威 archive，保留不可变 transaction/decisions。摘要冲突
 不移动，exact replay 幂等。归档后旧 finalize 必须失败，后续事务重新 prepare。
 
-## 迁移与兼容
-
-v1/v2 在切换后只读。迁移先生成 detached cutover transaction：所有 event、state/entity/timeline delta、appearance、scene 和旧人工决定都转成 typed legacy candidates；正文 span、identity resolution、slot transition 和 normalized facts 分别留下 admission receipt。全部通过后才在章节边界 K CAS 发布新 genesis；随后只有 v3 能写。
-
-新迁移使用 `legacy-genesis/v3 + legacy-fact-snapshot/v3` 与版本化
-`fact-boundary/v2`。已知软设计（文风、欲望、动机、性格、人设、成长弧等）从
-active facts/admissions/initial-setting Canon 中真正移除，仅在 snapshot 顶层保留 exclusion
-receipt；空模板和 placeholder 不生成 blocker。未知自定义字段只在它实际活动时
-返回确定性人工分类材料，不由模型猜。
-
-旧 `legacy-genesis/v2` 仍用原 `_fact_snapshot_v2` 字节语义校验，避免软件升级静默
-重解释已发布 HEAD。`audit-cutover/repair-cutover --dry-run` 可附带只读
-`fact_boundary_analysis`：无依赖软事实给出必须保留当前全部 author-axiom records 的
-override plan；活动下游对该 genesis fact 有引用时只能 `manual_fork_required`。
-author-axiom prepare/finalize 在 CAS 前复查 commit/transaction/decision 依赖，不得原地
-悬空后缀。
-分析为 `clean` 之前 workflow 与公共 query/context 都 fail closed；原投影只保留作迁移
-审计证据，不可继续参与写章。
-
-旧 opaque ID 只作为 alias，不能直接决定 rule/information/timeline/promise/loop slot。update/terminal 必须命中 exact active prior；重复 ID、错目标或不同语义复用进入人工。迁移先构建 namespace-aware 身份图，再编译事实；namespace 是唯一类型权威，type 由它派生，alias 不唯一时不得自动取第一个。`omitted_fact_ids`、字段无法证明、namespace 冲突或未映射输入都会直接进入 `migration_required`。
-
-只有 `canon-v3/legacy-genesis/v1` 走 recertification。只读
-`repair-cutover --dry-run` 为 prefix admission、identity、target、suffix、positive decision
-和 negative lineage 生成逐项 review material，并绑定 current HEAD、detached plan digest 与
-publish token。全部 case 由作者确认后，`repair-cutover --apply` 才在统一 staging lock 下重读
-来源、针对新 parent HEAD 重新编译 suffix wrapper，并 CAS 切换 CURRENT；partial、stale、并发
-HEAD 或任一重编译差异都不发布。旧 transaction 只保留为 provenance，不能继续成为新链 parent。
-
-未发布的 v1 chapter/author-axiom STAGING 不进入上述 detached 认证，而是
-`recompile_required`：调用方必须使用当前 proposal schema、正文/axiom source、HEAD 与 workflow
-重新 prepare。任何 chapter/author-axiom STAGING 存在时，recertification audit/apply 都报告冲突，
-保证全项目只有一个权威待审事务。若作者明确放弃冲突事务，status 给出带
-exact kind/digest 的 `archive_conflicting_staging` 动作；归档后才重新开始 recertification。
-
 ## Skill 与 Author Axiom 边界
 
-9 个 Canon Skills 都是本协议的调用方，不能复制另一套状态判断。`init` 对作者确认的 `MASTER_SETTING.initial_canon` 做一次性净化和 verified `author_axiom_snapshot` 导入，以 genesis admissions 建立 CURRENT；这不是一个 managed author-axiom commit。`plan` 的章纲是软计划；`write/review/confirm` 共用唯一事务；`query/dashboard` 只读 HEAD；`doctor` 诊断；`learn` 永远 style-only。
+9 个 Canon Skills 都是本协议的调用方，不能复制另一套状态判断。`init` 对作者确认的 `MASTER_SETTING.initial_canon` 做一次性净化和 verified native snapshot 导入，以 genesis admissions 建立 CURRENT；这不是一个 managed author-axiom commit。`plan` 的章纲是软计划；`write/review/confirm` 共用唯一事务；`query/dashboard` 只读 HEAD；`doctor` 诊断；`learn` 永远 style-only。
 
 长期硬设定由 HEAD 可达的独立 `author_axiom_commits` 绑定。`plan` 只在受管
 `.canon-ledger/tmp/author_axioms/*.json` 生成 draft；每个 JSON leaf 绑定文件、UTF-8 byte span、
@@ -257,15 +212,11 @@ JSON Pointer、quote 与 value digest。ADD/UPDATE/REMOVE 以及 genesis admissi
 exact 人工 case，使用与章节事务相同的全局 staging lock 和 CURRENT CAS，但不改变章节列表。
 完成 finalize 前 draft 不进入 projection/query/context；发布后读取只依赖不可变 commit，draft
 可删除。章节引用 axiom 时按该章节 parent HEAD 的 active axiom set 校验，后续 axiom 更新不能让
-旧章失绑。文风文件明确排除在 axiom digest、HEAD、迁移与人工 case 外。
-
-如果冻结边界 K 之前的正文发生变化，先尝试恢复 exact source bytes。有意修改且无法
-恢复时，保留原项目只读，在 clean target fork/rebuild；本版本不原地改写旧后缀、猜新
-cutover 或转接旧人工决定。禁止长期双写和正常路径上的 legacy replay。
+旧章失绑。文风文件明确排除在 axiom digest、HEAD 与人工 case 外。
 
 ## 发布门槛
 
-必须用属性测试、故障注入和迁移夹具证明：
+必须用属性测试和故障注入证明：
 
 ```text
 CanonFacts <= MachineProvenFacts union ExactHumanApprovedFacts

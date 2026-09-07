@@ -58,13 +58,13 @@ def _remove_pointer(document: Any, pointer: str) -> None:
 
 
 def _apply_genesis_axiom_supersessions(
-    legacy_base: dict[str, Any],
+    genesis_base: dict[str, Any],
     superseded: set[str],
 ) -> dict[str, Any]:
     if not superseded:
-        return legacy_base
-    result = copy.deepcopy(legacy_base)
-    admissions = result.get("cutover_fact_admissions") or []
+        return genesis_base
+    result = copy.deepcopy(genesis_base)
+    admissions = result.get("genesis_fact_admissions") or []
     selected = [
         item
         for item in admissions
@@ -110,13 +110,13 @@ def _apply_genesis_axiom_supersessions(
         ),
     ):
         _remove_pointer(result, pointer)
-    result["cutover_fact_admissions"] = [
+    result["genesis_fact_admissions"] = [
         item
         for item in admissions
         if not isinstance(item, dict)
         or str(item.get("admission_digest") or "") not in superseded
     ]
-    result["superseded_cutover_fact_admissions"] = selected
+    result["superseded_genesis_fact_admissions"] = selected
     initial = result.get("initial_canon")
     if isinstance(initial, dict):
         for fact in facts:
@@ -200,7 +200,7 @@ def _projection_from_head(
         superseded_genesis_admissions = {
             str(item)
             for item in active_axiom_commit.get(
-                "superseded_legacy_admission_digests"
+                "superseded_genesis_admission_digests"
             )
             or ()
         }
@@ -219,71 +219,58 @@ def _projection_from_head(
     metadata = cursor.get("genesis_metadata")
     if not isinstance(metadata, dict):
         raise CanonIntegrityError("canon_v3_genesis_metadata_invalid")
-    genesis_schema = str(metadata.get("schema_version") or "")
-    recertified_genesis = genesis_schema in {
-        "canon-v3/legacy-genesis/v2",
-        "canon-v3/legacy-genesis/v3",
-    }
-    legacy_snapshot = metadata.get("legacy_snapshot")
-    if legacy_snapshot is None:
-        legacy_base: dict[str, Any] = {}
-    elif not isinstance(legacy_snapshot, dict):
-        raise CanonIntegrityError("canon_v3_legacy_snapshot_invalid")
+    storage_only = metadata.get("schema_version") == "canon-v3/storage-genesis/v1"
+    if storage_only:
+        genesis_base: dict[str, Any] = {}
+        snapshot_digest = ""
     else:
-        expected_snapshot_hash = str(metadata.get("legacy_snapshot_sha256") or "")
-        if expected_snapshot_hash and content_hash(legacy_snapshot) != expected_snapshot_hash:
-            raise CanonIntegrityError("canon_v3_legacy_snapshot_hash_mismatch")
-        raw_facts = legacy_snapshot.get("facts")
-        if not isinstance(raw_facts, dict):
-            raise CanonIntegrityError("canon_v3_legacy_snapshot_facts_invalid")
-        expected_snapshot_schema = {
-            "canon-v3/legacy-genesis/v2": (
-                "canon-v3/legacy-fact-snapshot/v2"
-            ),
-            "canon-v3/legacy-genesis/v3": (
-                "canon-v3/legacy-fact-snapshot/v3"
-            ),
-        }.get(genesis_schema)
+        if metadata.get("schema_version") != "canon-v3/genesis/v1":
+            raise CanonIntegrityError("canon_v3_genesis_schema_invalid")
+        snapshot = metadata.get("snapshot")
+        if not isinstance(snapshot, dict):
+            raise CanonIntegrityError("canon_v3_genesis_snapshot_invalid")
+        snapshot_digest = str(metadata.get("snapshot_sha256") or "")
         if (
-            recertified_genesis
-            and legacy_snapshot.get("schema_version")
-            != expected_snapshot_schema
+            snapshot.get("schema_version") != "canon-v3/genesis-fact-snapshot/v1"
+            or not snapshot_digest
+            or content_hash(snapshot) != snapshot_digest
         ):
-            raise CanonIntegrityError("canon_v3_legacy_snapshot_schema_invalid")
-        legacy_base = _apply_genesis_axiom_supersessions(
+            raise CanonIntegrityError("canon_v3_genesis_snapshot_hash_mismatch")
+        raw_facts = snapshot.get("facts")
+        if not isinstance(raw_facts, dict):
+            raise CanonIntegrityError("canon_v3_genesis_snapshot_facts_invalid")
+        genesis_base = _apply_genesis_axiom_supersessions(
             copy.deepcopy(raw_facts), superseded_genesis_admissions
         )
-    legacy_fact_records: list[dict[str, Any]] = []
-    snapshot_digest = str(metadata.get("legacy_snapshot_sha256") or "")
+    genesis_fact_records: list[dict[str, Any]] = []
     admission_index: dict[str, dict[str, Any]] = {}
-    if recertified_genesis:
-        raw_admissions = legacy_base.get("cutover_fact_admissions")
-        if not isinstance(raw_admissions, list):
-            raise CanonIntegrityError("canon_v3_legacy_fact_admissions_missing")
-        for raw_admission in raw_admissions:
-            if not isinstance(raw_admission, dict):
-                raise CanonIntegrityError("canon_v3_legacy_fact_admission_invalid")
-            if raw_admission.get("schema_version") != (
-                "canon-v3/legacy-fact-admission/v2"
-            ):
-                raise CanonIntegrityError("canon_v3_legacy_fact_admission_schema_invalid")
-            digest = str(raw_admission.get("fact_content_sha256") or "")
-            admission_digest = str(raw_admission.get("admission_digest") or "")
-            unsigned = {
-                key: value
-                for key, value in raw_admission.items()
-                if key != "admission_digest"
-            }
-            if (
-                not digest
-                or not admission_digest
-                or content_hash(unsigned) != admission_digest
-                or digest in admission_index
-            ):
-                raise CanonIntegrityError("canon_v3_legacy_fact_admission_digest_invalid")
-            admission_index[digest] = copy.deepcopy(raw_admission)
-    grouped_legacy: dict[str, dict[str, Any]] = {}
-    initial_canon = legacy_base.get("initial_canon")
+    raw_admissions = genesis_base.get("genesis_fact_admissions", [])
+    if not isinstance(raw_admissions, list):
+        raise CanonIntegrityError("canon_v3_genesis_fact_admissions_missing")
+    for raw_admission in raw_admissions:
+        if not isinstance(raw_admission, dict):
+            raise CanonIntegrityError("canon_v3_genesis_fact_admission_invalid")
+        if raw_admission.get("schema_version") != (
+            "canon-v3/genesis-fact-admission/v1"
+        ):
+            raise CanonIntegrityError("canon_v3_genesis_fact_admission_schema_invalid")
+        digest = str(raw_admission.get("fact_content_sha256") or "")
+        admission_digest = str(raw_admission.get("admission_digest") or "")
+        unsigned = {
+            key: value
+            for key, value in raw_admission.items()
+            if key != "admission_digest"
+        }
+        if (
+            not digest
+            or not admission_digest
+            or content_hash(unsigned) != admission_digest
+            or digest in admission_index
+        ):
+            raise CanonIntegrityError("canon_v3_genesis_fact_admission_digest_invalid")
+        admission_index[digest] = copy.deepcopy(raw_admission)
+    grouped_genesis: dict[str, dict[str, Any]] = {}
+    initial_canon = genesis_base.get("initial_canon")
     protagonist = (
         initial_canon.get("protagonist")
         if isinstance(initial_canon, dict)
@@ -292,14 +279,14 @@ def _projection_from_head(
     )
     protagonist_name = str(protagonist.get("name") or "").strip()
 
-    def remember_legacy_fact(channel: str, path: str, row: Any) -> None:
+    def remember_genesis_fact(channel: str, path: str, row: Any) -> None:
         if not isinstance(row, dict):
             raise CanonIntegrityError(
-                f"canon_v3_legacy_{channel}_fact_not_mapping"
+                f"canon_v3_genesis_{channel}_fact_not_mapping"
             )
-        if recertified_genesis and not str(row.get("slot_id") or "").strip():
+        if not str(row.get("slot_id") or "").strip():
             raise CanonIntegrityError(
-                f"canon_v3_legacy_{channel}_stable_slot_missing"
+                f"canon_v3_genesis_{channel}_stable_slot_missing"
             )
         if str(row.get("category") or "") == "world_rule" and not row.get(
             "slot_id"
@@ -307,7 +294,7 @@ def _projection_from_head(
             row["slot_id"] = content_hash(
                 {
                     "kind_family": "world_rule",
-                    "legacy_id": str(row.get("id") or ""),
+                    "genesis_id": str(row.get("id") or ""),
                     "subject": str(row.get("subject") or ""),
                     "field": str(row.get("field") or ""),
                 }
@@ -418,12 +405,12 @@ def _projection_from_head(
             )
         unsigned = {key: value for key, value in row.items() if key != "fact_digest"}
         identity = content_hash(unsigned)
-        admission = admission_index.get(identity) if recertified_genesis else None
-        if recertified_genesis and admission is None:
+        admission = admission_index.get(identity)
+        if admission is None:
             raise CanonIntegrityError(
-                f"canon_v3_legacy_{channel}_fact_without_admission"
+                f"canon_v3_genesis_{channel}_fact_without_admission"
             )
-        group = grouped_legacy.setdefault(
+        group = grouped_genesis.setdefault(
             identity,
             {
                 "fact": copy.deepcopy(unsigned),
@@ -437,7 +424,7 @@ def _projection_from_head(
             },
         )
         if group["fact"] != unsigned:
-            raise CanonIntegrityError("canon_v3_legacy_fact_identity_collision")
+            raise CanonIntegrityError("canon_v3_genesis_fact_identity_collision")
         group["locations"].append({"channel": channel, "path": path})
         group["refs"].append(row)
 
@@ -452,18 +439,18 @@ def _projection_from_head(
         "presence_history",
         "custody_history",
     ):
-        rows = legacy_base.get(channel) or []
+        rows = genesis_base.get(channel) or []
         if not isinstance(rows, list):
-            raise CanonIntegrityError(f"canon_v3_legacy_{channel}_not_list")
+            raise CanonIntegrityError(f"canon_v3_genesis_{channel}_not_list")
         for index, row in enumerate(rows):
-            remember_legacy_fact(channel, f"/{channel}/{index}", row)
+            remember_genesis_fact(channel, f"/{channel}/{index}", row)
     for channel in ("information", "presence", "custody"):
-        rows = legacy_base.get(channel) or {}
+        rows = genesis_base.get(channel) or {}
         if not isinstance(rows, dict):
-            raise CanonIntegrityError(f"canon_v3_legacy_{channel}_not_mapping")
+            raise CanonIntegrityError(f"canon_v3_genesis_{channel}_not_mapping")
         for key, row in sorted(rows.items()):
             if not isinstance(row, dict):
-                raise CanonIntegrityError(f"canon_v3_legacy_{channel}_fact_not_mapping")
+                raise CanonIntegrityError(f"canon_v3_genesis_{channel}_fact_not_mapping")
             if channel == "presence":
                 row.setdefault("category", "presence")
                 row.setdefault(
@@ -481,21 +468,21 @@ def _projection_from_head(
                         or key
                     ),
                 )
-            remember_legacy_fact(channel, f"/{channel}/{key}", row)
-    knowledge = legacy_base.get("knowledge_by_entity") or {}
+            remember_genesis_fact(channel, f"/{channel}/{key}", row)
+    knowledge = genesis_base.get("knowledge_by_entity") or {}
     if not isinstance(knowledge, dict):
-        raise CanonIntegrityError("canon_v3_legacy_knowledge_not_mapping")
+        raise CanonIntegrityError("canon_v3_genesis_knowledge_not_mapping")
     for entity_key, facts_by_key in sorted(knowledge.items()):
         if not isinstance(facts_by_key, dict):
-            raise CanonIntegrityError("canon_v3_legacy_entity_knowledge_not_mapping")
+            raise CanonIntegrityError("canon_v3_genesis_entity_knowledge_not_mapping")
         for fact_key, row in sorted(facts_by_key.items()):
             if not isinstance(row, dict):
                 raise CanonIntegrityError(
-                    "canon_v3_legacy_entity_knowledge_fact_not_mapping"
+                    "canon_v3_genesis_entity_knowledge_fact_not_mapping"
                 )
-            if recertified_genesis and not str(row.get("slot_id") or "").strip():
+            if not str(row.get("slot_id") or "").strip():
                 raise CanonIntegrityError(
-                    "canon_v3_legacy_knowledge_stable_slot_missing"
+                    "canon_v3_genesis_knowledge_stable_slot_missing"
                 )
             # v2 already had the right stable identity (information_id / map
             # key); retain it as compiler metadata instead of using mutable
@@ -509,20 +496,20 @@ def _projection_from_head(
                     {
                         "kind_family": "knowledge",
                         "subject": str(entity_key),
-                        "legacy_information_id": str(fact_key),
+                        "genesis_information_id": str(fact_key),
                     }
                 ),
             )
-            remember_legacy_fact(
+            remember_genesis_fact(
                 "knowledge_by_entity",
                 f"/knowledge_by_entity/{entity_key}/{fact_key}",
                 row,
             )
-    for identity in sorted(grouped_legacy):
-        group = grouped_legacy[identity]
+    for identity in sorted(grouped_genesis):
+        group = grouped_genesis[identity]
         record = {
-            "record_type": "legacy_fact",
-            "legacy_snapshot_sha256": snapshot_digest,
+            "record_type": "genesis_fact",
+            "genesis_snapshot_sha256": snapshot_digest,
             "fact_content_sha256": identity,
             "locations": sorted(
                 group["locations"],
@@ -530,49 +517,39 @@ def _projection_from_head(
             ),
             "fact": group["fact"],
         }
-        if recertified_genesis:
-            record["admission_digest"] = str(
-                group.get("admission_digest") or ""
-            )
+        record["admission_digest"] = str(group.get("admission_digest") or "")
         record["fact_digest"] = content_hash(record)
-        legacy_fact_records.append(record)
+        genesis_fact_records.append(record)
         for row in group["refs"]:
             row["fact_digest"] = record["fact_digest"]
-    legacy_entities = legacy_base.get("entities") or {}
-    if not isinstance(legacy_entities, dict):
-        raise CanonIntegrityError("canon_v3_legacy_entities_not_mapping")
-    for entity_key, raw_entity in sorted(legacy_entities.items()):
+    genesis_entities = genesis_base.get("entities") or {}
+    if not isinstance(genesis_entities, dict):
+        raise CanonIntegrityError("canon_v3_genesis_entities_not_mapping")
+    for entity_key, raw_entity in sorted(genesis_entities.items()):
         if not isinstance(raw_entity, dict):
-            raise CanonIntegrityError("canon_v3_legacy_entity_not_mapping")
+            raise CanonIntegrityError("canon_v3_genesis_entity_not_mapping")
         entity_content_digest = content_hash(raw_entity)
-        entity_admission = (
-            admission_index.get(entity_content_digest)
-            if recertified_genesis
-            else None
-        )
-        if recertified_genesis and entity_admission is None:
+        entity_admission = admission_index.get(entity_content_digest)
+        if entity_admission is None:
             raise CanonIntegrityError(
-                "canon_v3_legacy_identity_without_admission"
+                "canon_v3_genesis_identity_without_admission"
             )
         identity_record = {
-            "record_type": "legacy_identity",
-            "legacy_snapshot_sha256": snapshot_digest,
+            "record_type": "genesis_identity",
+            "genesis_snapshot_sha256": snapshot_digest,
             "entity_key": str(entity_key),
             "entity": copy.deepcopy(raw_entity),
+            "fact_content_sha256": entity_content_digest,
+            "admission_digest": str(entity_admission.get("admission_digest") or ""),
         }
-        if recertified_genesis:
-            identity_record["fact_content_sha256"] = entity_content_digest
-            identity_record["admission_digest"] = str(
-                entity_admission.get("admission_digest") or ""
-            )
         identity_record["fact_digest"] = content_hash(identity_record)
-        legacy_fact_records.append(identity_record)
+        genesis_fact_records.append(identity_record)
     facts: dict[str, dict[str, Any]] = {}
     history: list[dict[str, Any]] = []
     available_fact_records: dict[str, dict[str, Any]] = {
         str(record["fact_digest"]): record
-        for record in legacy_fact_records
-        if record.get("record_type") == "legacy_fact"
+        for record in genesis_fact_records
+        if record.get("record_type") == "genesis_fact"
     }
     chapter_ledger: list[dict[str, Any]] = []
     for entry in manifest.get("chapters") or []:
@@ -680,8 +657,8 @@ def _projection_from_head(
             "generation": int(manifest.get("generation") or 0),
             "head_hash": head_hash,
         },
-        "legacy_base": legacy_base,
-        "legacy_fact_records": legacy_fact_records,
+        "genesis_base": genesis_base,
+        "genesis_fact_records": genesis_fact_records,
         "chapters": chapter_ledger,
         "author_axioms": author_axioms,
         "facts": [facts[key] for key in sorted(facts)],
@@ -697,7 +674,7 @@ def fact_record_index(
 
     payload = _projection_from_head(repository, head_hash)
     rows = [
-        *(payload.get("legacy_fact_records") or []),
+        *(payload.get("genesis_fact_records") or []),
         *(payload.get("history") or []),
     ]
     result: dict[str, dict[str, Any]] = {}
@@ -751,16 +728,16 @@ def _read_projection_once(
     if not isinstance(payload, dict) or payload.get("schema_version") != PROJECTION_SCHEMA:
         raise CanonProjectionError("canon_v3_projection_schema_invalid")
     binding = payload.get("binding")
-    legacy_base = payload.get("legacy_base")
-    legacy_fact_records = payload.get("legacy_fact_records")
+    genesis_base = payload.get("genesis_base")
+    genesis_fact_records = payload.get("genesis_fact_records")
     chapters = payload.get("chapters")
     author_axioms = payload.get("author_axioms")
     facts = payload.get("facts")
     history = payload.get("history")
     if (
         not isinstance(binding, dict)
-        or not isinstance(legacy_base, dict)
-        or not isinstance(legacy_fact_records, list)
+        or not isinstance(genesis_base, dict)
+        or not isinstance(genesis_fact_records, list)
         or not isinstance(chapters, list)
         or not isinstance(author_axioms, dict)
         or not isinstance(author_axioms.get("records"), list)

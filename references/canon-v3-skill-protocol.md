@@ -43,7 +43,7 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_le
 
 不得扫描缓存目录寻找另一个插件副本，不得凭当前工作目录猜项目根。
 
-`/canon-ledger-init` 创建**全新且尚未可识别**的目标目录时是唯一定位例外：它先记录用户明示给出的绝对目标路径，不对该未建项目运行 `where/status`，也不把当前工作区中的另一本书当作目标。统一 `canon_ledger.py init <target> <title> <genre> ...` 会创建可识别骨架并尝试建立 genesis；它返回后才对 exact target 运行 locator 和 `canon-v3 status`。目标已是书项目或包含任何旧内容时不属于 clean init，必须先读它自己的 workflow，不得覆盖。
+`/canon-ledger-init` 创建**全新且尚未可识别**的目标目录时是唯一定位例外：它先记录用户明示给出的绝对目标路径，不对该未建项目运行 `where/status`，也不把当前工作区中的另一本书当作目标。统一 `canon_ledger.py init <target> <title> <genre> ...` 会创建可识别骨架并尝试建立 genesis；它返回后才对 exact target 运行 locator 和 `canon-v3 status`。目标已是书项目或包含任何旧内容时不属于 clean init，必须停止并改用新的空目录。
 
 ## 唯一 Workflow Authority
 
@@ -58,10 +58,7 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_le
 
 | state | 允许的事实推进动作 |
 |---|---|
-| `migration_required` + `bootstrap_mode=new_project` | 仅对已识别、无 CURRENT 且无 accepted legacy prefix 的 clean skeleton 执行 `canon-v3 initialize`；统一 init 工具已成功时不重复调用 |
-| `migration_required` + `bootstrap_mode=legacy_cutover` | `canon-v3 migrate` |
-| `migration_required` + `bootstrap_mode=legacy_repair` | 只执行 snapshot 的 `canon-v3 audit-cutover`，按稳定 reason code 恢复冻结来源，再重读 status；有意修改且无法恢复时在 clean target fork/rebuild，不得原地重写后缀、再次调用 migrate、猜测新边界或 initialize |
-| `migration_required` + `bootstrap_mode=recertification` | `repair-cutover --dry-run`，再由 `/canon-ledger-confirm` 逐项确认并 apply |
+| `initialization_required` + `bootstrap_mode=new_project` | 仅对已识别、无 CURRENT 的 clean skeleton 执行 `canon-v3 initialize`；统一 init 工具已成功时不重复调用 |
 | `ready` | 仅允许 `allowed_write_chapters` 中的目标章进入 plan/write/staged review |
 | `ready_to_finalize` | 只允许对当前 STAGING 做 exact finalize |
 | `awaiting_human` | 只允许 `/canon-ledger-confirm` 处理当前事务 |
@@ -71,9 +68,6 @@ export PROJECT_ROOT="$("${CANON_LEDGER_PYTHON}" -X utf8 "${SCRIPTS_DIR}/canon_le
 | `invalid` | 只允许 doctor、只读诊断和 style-only 操作 |
 
 只有 `state=ready && can_write_next=true && projection_fresh=true` 才能建议开始下一章。成功建立 CURRENT 后 `bootstrap_mode=canon_v3`；`new_project` 只表示尚待 initialize 的无 HEAD 状态，不是初始化成功标志。
-当 recertification 被已有 chapter/author-axiom STAGING 占用时，status 可返回
-`primary_action.id=archive_conflicting_staging` 以及 exact kind/digest。这不是自动授权；
-只有作者明确放弃未发布事务后，`confirm` 才执行 archive，然后重读 status。
 
 ## 有版本的人工操作
 
@@ -122,29 +116,6 @@ request 做 exact retry。
 `--transaction-kind` 与 `--expected-stage-digest`。摘要变化时拒绝，exact retry 幂等。禁止直接删文件或
 使用兼容别名 `cancel`。
 
-legacy v1 genesis 的 recertification 不伪造章节或 axiom STAGING。`status` 必须返回
-`transaction_kind=legacy_recertification`、`head_hash`、
-`recertification_plan_digest`、`recertification_publish_token` 和全部逐项 cases。
-先只读运行 `repair-cutover --dry-run`，然后把作者对每个 case 的 `confirm` 原样组装为：
-
-```text
-canon-v3/legacy-recertification-publish-request/v1
-  expected_current_head
-  detached_plan_digest
-  publish_token
-  decisions[]:
-    canon-v3/legacy-recertification-decision/v1
-    case_key / target_digest / material_digest / action=confirm
-```
-
-只有全部 cases 均由作者明确确认后，才能执行
-`repair-cutover --apply --input-file <request>`。它在统一 staging lock 下重读 legacy
-来源、重新编译 detached suffix，并对 CURRENT 做 CAS；partial、stale 或并发变化一律不发布。
-响应丢失只允许原请求 exact retry。任何 chapter/author-axiom STAGING 存在时，
-recertification 审计与 apply 都必须报告冲突，不能出现第个权威事务。
-snapshot 可返回 exact `archive_conflicting_staging` primary action，但仍需作者明确放弃
-该未发布事务后才执行；归档后重读 status，再开始 detached recertification。
-
 ## 负裁决与语义谱系
 
 `omit`、`rewrite`、`correct` 不只绑定一次候选 ID。系统还以章节内容和事实语义计算
@@ -189,7 +160,7 @@ candidate/record/effect/transaction digest 或根据文档猜 strict schema。
   删除，active authority 也不回读 live 文件。
 - add/update/remove 都生成 exact 人工 case；旧 active record 未提及会形成
   remove case，不能静默删除。同语义更换 source 不会绕过负裁决谱系。
-- runtime 使用 `fact-boundary/v2` 同时检查章节 candidate、legacy event、初始化/设定
+- runtime 使用 `fact-boundary/v2` 同时检查章节 candidate、初始化/设定
   leaf 与 author axiom。已知文风、文笔、动机、人格、人设、成长弧等软内容即使用
   `world_rule`、`规则` 或无害 key 包装也必须拒绝；未能由闭合结构证明的自由字段是
   `ambiguous`，必须以 exact case 明确分类或改写，不能因“未命中软关键词”自动变成
@@ -198,11 +169,8 @@ candidate/record/effect/transaction digest 或根据文档猜 strict schema。
   `fact_boundary_human_classification_required=true` 或 reason code
   `fact_boundary:human_classification_required`，`approve` 的精确含义仅是把该版本的
   proposed value 分类为客观故事事实；candidate/source/digest 变化后必须重新分类。
-- 存量软或旧 policy record/effect 会让 workflow 保持只读。能够安全精确清理的走
-  recertification/supersession；有活动下游依赖或无法原地重认证时保留原 HEAD 只读，
-  按 primary action 在 clean target 重建，不能静默过滤事实后继续写作。
-- 未重新认证的设定不得进入事实查询或写作上下文。
-- `设定集/文风提示词.md` 永远属于 style-only；修改它不得改变 HEAD、workflow、migration digest、projection 或人工 case。
+- 未认证的设定不得进入事实查询或写作上下文。
+- `设定集/文风提示词.md` 永远属于 style-only；修改它不得改变 HEAD、workflow、projection 或人工 case。
 
 大纲落盘后只能通过 `canon-v3 planning refresh-contracts --chapter N`刷新卷/章/审查
 三份 planning-only 合同。先 dry-run 核对 source/input/head 和共同
@@ -241,15 +209,7 @@ projection 与活动 fact-set digest；STAGING、style、设定草稿、历史�
 `story-events`，以及全部 state/index/memory/rag/entity adapters。这些 adapters 即使执行
 查询也可能建库、读取失绑事件或写 observation。
 
-legacy 数据只允许迁移编译器以及纯读 `audit-cutover` / `repair-cutover --dry-run` 读取；退役参数 `--legacy-read-only` 不再开放 adapter 查询。legacy 不能成为写作上下文或发布依据。
-
-新 cutover 只把通过 `fact-boundary/v2` 的客观长期事实收入
-`legacy-genesis/v3 + legacy-fact-snapshot/v3`；
-已知文风/动机/性格/人设/成长弧只留 exclusion receipt，不进 active Canon。旧 v2
-按原字节语义校验，`audit-cutover|repair-cutover --dry-run` 附带只读
-`fact_boundary_analysis`。`ready_to_supersede` fragment 必须合并进保留全部当前
-author-axiom records 的完整 proposal；`manual_fork_required` 或人工分类未完成时保持只读。
-只有 `clean` 才能继续写作；其它 state 不得通过 query/context 消费污染投影。
+退役参数 `--legacy-read-only` 不开放 adapter 查询。旧数据不能成为写作上下文或发布依据，也没有导入当前产品的迁移入口。
 
 ## 派生工件与 CLI capability
 
@@ -264,7 +224,7 @@ author-axiom records 的完整 proposal；`manual_fork_required` 或人工分类
 不能因 Hook 缺失而获得更宽权限。
 
 `memory-contract query-*`、`get-open-loops|get-obligations|get-timeline` 也属于事实读取面。
-当 HEAD/projection 不可用、迁移未完成、历史来源无效或读中 workflow 变化时必须非零退出并
+当 HEAD/projection 不可用、初始化未完成、历史来源无效或读中 workflow 变化时必须非零退出并
 返回 `usable_for_writing=false`；禁止用空数组、`not_found` 或空时间线伪装成“当前没有事实”。
 
 ## 报告与恢复

@@ -6,7 +6,6 @@ import sys
 import pytest
 
 from scripts.data_modules import canon_ledger
-from scripts.data_modules.canon_v3 import migration
 from scripts.data_modules.canon_v3 import retrieval
 from scripts.data_modules.canon_v3.service import CanonV3Service
 
@@ -128,95 +127,6 @@ def test_author_axiom_service_actions_are_exposed_by_cli(
     assert json.loads(capsys.readouterr().out)["ok"] is True
     assert called["root"] == root
     assert called["payload"] == ({"probe": "exact"} if needs_input else None)
-
-
-@pytest.mark.parametrize(
-    ("action", "extra", "target"),
-    [
-        ("audit-cutover", [], "audit_cutover"),
-        ("repair-cutover", ["--dry-run"], "repair_cutover_dry_run"),
-    ],
-)
-def test_canon_v3_cutover_diagnostics_are_exposed_as_read_only_cli_actions(
-    tmp_path, monkeypatch, capsys, action, extra, target
-) -> None:
-    root = _project(tmp_path)
-    called = {}
-
-    def fake(project_root, cutover_chapter=None):
-        called["root"] = project_root
-        called["chapter"] = cutover_chapter
-        return {
-            "schema_version": f"test/{target}",
-            "read_only": True,
-            "writes_performed": False,
-        }
-
-    monkeypatch.setattr(migration, target, fake)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "canon-ledger",
-            "--project-root",
-            str(root),
-            "canon-v3",
-            action,
-            "--cutover-chapter",
-            "3",
-            *extra,
-        ],
-    )
-    with pytest.raises(SystemExit) as completed:
-        canon_ledger.main()
-    assert completed.value.code == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["read_only"] is True
-    assert payload["writes_performed"] is False
-    assert called == {"root": root, "chapter": 3}
-
-
-def test_canon_v3_repair_cutover_apply_consumes_project_bound_request(
-    tmp_path, monkeypatch, capsys
-) -> None:
-    root = _project(tmp_path)
-    request_path = root / ".canon-ledger" / "tmp" / "recertify.json"
-    request_path.parent.mkdir(parents=True, exist_ok=True)
-    request = {
-        "schema_version": "canon-v3/legacy-recertification-publish-request/v1",
-        "expected_current_head": "a" * 64,
-        "detached_plan_digest": "b" * 64,
-        "publish_token": "c" * 64,
-        "decisions": [],
-    }
-    request_path.write_text(json.dumps(request), encoding="utf-8")
-    called = {}
-
-    def fake(project_root, payload):
-        called["root"] = project_root
-        called["payload"] = payload
-        return {"published": True, "head_hash": "d" * 64}
-
-    monkeypatch.setattr(migration, "repair_cutover_apply", fake)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "canon-ledger",
-            "--project-root",
-            str(root),
-            "canon-v3",
-            "repair-cutover",
-            "--apply",
-            "--input-file",
-            str(request_path.relative_to(root)),
-        ],
-    )
-    with pytest.raises(SystemExit) as completed:
-        canon_ledger.main()
-    assert completed.value.code == 0
-    assert json.loads(capsys.readouterr().out)["published"] is True
-    assert called == {"root": root, "payload": request}
 
 
 @pytest.mark.parametrize(

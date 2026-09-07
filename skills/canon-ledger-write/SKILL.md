@@ -30,7 +30,6 @@ chapter 已进入活动 manifest
 ```
 
 - 新项目无 CURRENT：先 `canon-v3 initialize`，重新读取 status。
-- legacy cutover/recertification：停止起草，执行 snapshot 的 migrate/repair 动作。
 - 当前章已有 STAGING：只恢复同一事务，禁止另开章。
 - 只有 ready 且目标章位于 `allowed_write_chapters` 才继续。
 
@@ -117,7 +116,7 @@ Agent artifact 后重跑；reviewer map 与 draft 不完全相同（包括审核
 - `ready_to_finalize`：仍由 confirm Skill 生成 exact finalize request。
 - `rewrite_required`：按已确认的事实穿帮修改正文，从 binding 重跑。
 - `recompile_required`：重新 binding、extract、scan、prepare。
-- migration/projection/invalid：停止并执行唯一恢复动作。
+- initialization/projection/invalid：停止并执行唯一恢复动作。
 
 ## 6. 发布前与发布
 

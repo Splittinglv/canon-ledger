@@ -31,17 +31,6 @@ test('active fact view merges genesis, author axioms and chapter facts only', ()
             {
                 authority_layer: 'active_canon',
                 authority_state: 'active',
-                origin: 'legacy_cutover',
-                fact_digest: 'f'.repeat(64),
-                category: 'relationship_changed',
-                subject: '林舟',
-                field: '苏月',
-                value: '盟友',
-                source_chapter: 2,
-            },
-            {
-                authority_layer: 'active_canon',
-                authority_state: 'active',
                 origin: 'chapter_commit',
                 fact_digest: 'c'.repeat(64),
                 category: 'custody_changed',
@@ -67,10 +56,10 @@ test('active fact view merges genesis, author axioms and chapter facts only', ()
         ],
     })
 
-    assert.deepEqual(rows.map(row => row.value), ['九州大陆', '盟友', '死者不能复生', '林舟'])
+    assert.deepEqual(rows.map(row => row.value), ['九州大陆', '死者不能复生', '林舟'])
     assert.deepEqual(activeFactSummary(rows), {
-        total: 4,
-        genesis: 2,
+        total: 3,
+        genesis: 1,
         authorAxioms: 1,
         chapters: 1,
     })

@@ -1119,7 +1119,7 @@ def test_session_start_preserves_valid_blocked_v3_status_from_exit_one(tmp_path)
         tmp_path,
         {
             "schema_version": "canon-v3/workflow-snapshot/v3",
-            "state": "migration_required",
+            "state": "initialization_required",
             "head_hash": None,
             "generation": 0,
             "workflow_digest": "c" * 64,
@@ -1129,7 +1129,7 @@ def test_session_start_preserves_valid_blocked_v3_status_from_exit_one(tmp_path)
             "chapter": None,
             "can_write_next": False,
             "primary_action": {
-                "id": "migrate_legacy",
+                "id": "initialize_v3",
                 "interface": "cli",
             },
         },
@@ -1153,10 +1153,10 @@ def test_session_start_preserves_valid_blocked_v3_status_from_exit_one(tmp_path)
     assert proc.returncode == 0
     runtime = _session_runtime_payload(proc)
     assert runtime["authority_status"] == "available"
-    assert runtime["phase"] == "canon_v3:migration_required"
-    assert runtime["workflow"]["state"] == "migration_required"
+    assert runtime["phase"] == "canon_v3:initialization_required"
+    assert runtime["workflow"]["state"] == "initialization_required"
     assert runtime["primary_action"] == {
-        "id": "migrate_legacy",
+        "id": "initialize_v3",
         "interface": "cli",
     }
     assert runtime["facts_available"] is False

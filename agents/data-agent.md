@@ -162,7 +162,7 @@ setting/timeline/continuity/character/logic
 禁止输出或沿用 `accepted_events/state_deltas/entity_deltas/timeline_events`、legacy review result、人工队列、blocking_count 或 Canon effects。
 不得写 delta、人工队列或正史；唯一文件写入是上述有版本的 proposal 临时产物。
 
-## Author-axiom recertification
+## Author-axiom proposal
 
 规划产生长期硬设定草案时，使用 `mode=author_axiom_proposal` 组装
 `canon-v3/author-axiom-proposal/v2`，不得伪造 chapter/body binding。来源只能是

@@ -17,15 +17,14 @@
 新增 Canon v3 权威测试时必须同步 current-authority manifest。这个显式步骤防止新测试因目录级
 排除而静默消失，同时保留冻结 v2 规格，避免为了“零 deselected”重新开放已退役写入口。
 
-旧规格仍保留在仓库中，供迁移审计和历史设计对照。需要查看它们时可以显式执行：
+旧规格仍保留在仓库中，供历史设计对照。需要查看它们时可以显式执行：
 
 ```bash
 CANON_LEDGER_INCLUDE_RETIRED_V2_TESTS=1 python -m pytest <旧测试路径>
 ```
 
 这些规格描述的是已删除产品，不能作为当前主验收；其中要求写入 legacy 数据的断言预期会被
-`legacy_fact_mutation_disabled` 拒绝。legacy 的当前支持范围由 Canon v3 migration、cutover audit、
-recertification 和只读解析测试覆盖。
+`legacy_fact_mutation_disabled` 拒绝。当前产品不提供旧项目迁移入口。
 
 当前发布至少运行：
 
@@ -51,10 +50,9 @@ Windows 使用 `powershell -File scripts/run_tests.ps1 -Mode full`，POSIX 使�
 | 内容寻址对象、并发与故障注入原子性 | `test_canon_v3_repository.py`、`test_canon_v3_author_axiom.py` |
 | 身份命名空间、同名实例与历史边界 | `test_canon_v3_entity_registry.py` |
 | projection freshness、可删除重建与 HEAD 绑定 | `test_canon_v3_projection.py` |
-| v2 cutover、legacy repair、v1 recertification、stale/partial/race | `test_canon_v3_migration.py`、`test_canon_v3_cli.py` |
 | 发布包、版本、release range、文档/fixture 路径 | `test_validate_plugin_package.py`、`test_sync_plugin_version.py`、`test_validate_release_notes.py`、`test_validate_document_links.py` |
 
 另需在干净临时目录做独立前向测试：新项目定位前初始化、genesis 只接收允许的硬事实、
-初始化后 workflow 为 `canon_v3/ready`、Doctor 对 clean/healthy/stale projection/legacy repair 给出
+初始化后 workflow 为 `canon_v3/ready`、Doctor 对 clean/healthy/stale projection 给出
 唯一正确动作，以及 checkpoint/ambiguity 的人工决定不能跨版本复用。前向测试必须真实调用 CLI
 和读取产物，不能只检查关键词或复述设计答案。

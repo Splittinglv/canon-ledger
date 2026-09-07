@@ -230,30 +230,6 @@ def test_public_active_facts_include_genesis_and_published_author_axioms(
     assert {row["fact_digest"] for row in facts} == context_rows
 
 
-def test_admitted_legacy_prefix_fact_is_active_but_keeps_cutover_origin() -> None:
-    rows = active_fact_rows(
-        {
-            "canonical_facts": [
-                {
-                    "id": "legacy-relation",
-                    "category": "relationship_changed",
-                    "subject": "林舟",
-                    "field": "苏月",
-                    "value": "盟友",
-                    "source_chapter": 4,
-                    "source_event_id": "legacy-event-4",
-                    "fact_digest": "a" * 64,
-                }
-            ],
-            "hard_constraints": [],
-            "author_axioms": {"records": []},
-        }
-    )
-
-    assert rows[0]["authority_layer"] == "active_canon"
-    assert rows[0]["authority_state"] == "active"
-    assert rows[0]["origin"] == "legacy_cutover"
-    assert rows[0]["source_chapter"] == 4
 
 
 def test_cli_knowledge_uses_canon_query_and_legacy_index_is_disabled(

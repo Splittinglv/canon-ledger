@@ -107,7 +107,7 @@ AUTHOR_AXIOM_SET_SCHEMA = "canon-v3/author-axiom-set/v2"
 EMPTY_AUTHOR_AXIOM_DIGEST = canonical_digest(
     {
         "schema_version": AUTHOR_AXIOM_SET_SCHEMA,
-        "legacy_admission_digests": [],
+        "genesis_admission_digests": [],
         "active_author_axiom_commit_hash": None,
         "active_record_set_digest": None,
     }
@@ -118,7 +118,7 @@ class CanonV3ServiceError(RuntimeError):
     pass
 
 
-class MigrationRequiredError(CanonV3ServiceError):
+class InitializationRequiredError(CanonV3ServiceError):
     pass
 
 
@@ -335,19 +335,12 @@ class CanonV3Service:
         self.staging_path = self.project_root / STAGING_RELATIVE_PATH
         self.staging_lock = FileLock(str(self.staging_path) + ".lock", timeout=10)
 
-    def _legacy_commits_exist(self) -> bool:
-        return any(
-            (self.project_root / ".story-system" / "commits").glob(
-                "chapter_*.commit.json"
-            )
-        )
-
-    def _legacy_prefix_guard(self) -> dict[str, Any] | None:
-        """Return status only for a genesis that imported a v2 prefix."""
+    def _assert_native_genesis(self) -> None:
+        """Require the only supported, brand-new-project genesis schema."""
 
         head = self.repository.current_head(validate=True)
         if head is None:
-            return None
+            raise InitializationRequiredError("canon_v3_initialize_required")
         cursor = self.repository.read_manifest(head, validate_references=True)
         seen: set[str] = set()
         while int(cursor.get("generation") or 0) > 0:
@@ -357,363 +350,13 @@ class CanonV3Service:
             seen.add(parent)
             cursor = self.repository.read_manifest(parent, validate_references=True)
         metadata = cursor.get("genesis_metadata")
-        if not isinstance(metadata, dict):
-            return None
-        if metadata.get("schema_version") == "canon-v3/legacy-genesis/v1":
-            raise MigrationRequiredError(
-                "canon_v3_legacy_genesis_v1_recertification_required"
-            )
-        legacy_snapshot = metadata.get("legacy_snapshot")
-        legacy_facts = (
-            legacy_snapshot.get("facts")
-            if isinstance(legacy_snapshot, Mapping)
-            else None
-        )
-        if isinstance(legacy_facts, Mapping):
-            from .migration import (
-                LegacyMigrationError,
-                analyze_legacy_fact_boundary,
-            )
-
-            try:
-                boundary = analyze_legacy_fact_boundary(
-                    self.project_root, head_hash=head
-                )
-            except LegacyMigrationError as exc:
-                raise MigrationRequiredError(
-                    "canon_v3_legacy_fact_boundary_analysis_failed:"
-                    + str(exc)
-                ) from exc
-            boundary_state = str(boundary.get("state") or "invalid")
-            if boundary_state != "clean":
-                raise MigrationRequiredError(
-                    "canon_v3_legacy_fact_boundary_"
-                    f"{boundary_state}:"
-                    f"analysis_digest={boundary.get('analysis_digest')}"
-                )
-        snapshot = metadata.get("legacy_snapshot")
-        facts = snapshot.get("facts") if isinstance(snapshot, dict) else None
-        omitted = (
-            facts.get("omitted_fact_ids")
-            if isinstance(facts, dict)
-            else ()
-        )
-        if omitted:
-            raise MigrationRequiredError(
-                "canon_v3_genesis_contains_unresolved_omitted_facts:"
-                + ",".join(sorted(str(item) for item in omitted))
-            )
-        from .author_axiom import AuthorAxiomChannel
-        from .fact_boundary import (
-            FACT_BOUNDARY_POLICY_VERSION,
-            FactBoundaryClass,
-            classify_author_axiom_leaf,
-            classify_candidate_claim,
-        )
-
-        active_records = AuthorAxiomChannel(
-            self.project_root, repository=self.repository
-        ).active_records(head)
-        non_fact_keys = sorted(
-            record.axiom_key
-            for record in active_records
-            if classify_author_axiom_leaf(
-                axiom_key=record.axiom_key,
-                category=record.category,
-                value=record.source.value,
-            )
-            is FactBoundaryClass.KNOWN_SOFT
-        )
-        if non_fact_keys:
-            raise MigrationRequiredError(
-                "canon_v3_active_author_axiom_non_fact_records:"
-                + ",".join(non_fact_keys)
-            )
-        ambiguous_axiom_keys = sorted(
-            record.axiom_key
-            for record in active_records
-            if classify_author_axiom_leaf(
-                axiom_key=record.axiom_key,
-                category=record.category,
-                value=record.source.value,
-            )
-            is FactBoundaryClass.AMBIGUOUS
-        )
-        if ambiguous_axiom_keys:
-            from .author_axiom import (
-                AuthorAxiomPreparedEnvelope,
-                record_digest,
-            )
-
-            commits = self.repository.current_author_axiom_commits()
-            policy_version: str | None = None
-            certified_record_digests: set[str] = set()
-            if commits:
-                _commit_hash, active_commit = commits[-1]
-                try:
-                    raw_transaction = self.repository.read_author_axiom_transaction(
-                        str(active_commit.get("transaction_hash") or "")
-                    )
-                    boundary_envelope = (
-                        AuthorAxiomPreparedEnvelope.model_validate(
-                            raw_transaction
-                        )
-                    )
-                    policy_version = (
-                        boundary_envelope.fact_boundary_policy_version
-                    )
-                    certified_record_digests = set(
-                        boundary_envelope.fact_boundary_certified_record_digests
-                    )
-                except Exception:
-                    policy_version = None
-            required_record_digests = {
-                record_digest(record)
-                for record in active_records
-                if record.axiom_key in ambiguous_axiom_keys
-            }
-            if (
-                policy_version != FACT_BOUNDARY_POLICY_VERSION
-                or not required_record_digests.issubset(
-                    certified_record_digests
-                )
-            ):
-                raise MigrationRequiredError(
-                    "canon_v3_active_author_axiom_boundary_recertification_required:"
-                    + ",".join(ambiguous_axiom_keys)
-                )
-
-        polluted_active_candidates: list[str] = []
-        uncertified_active_candidates: list[str] = []
-        for _commit_hash, commit in self.repository.current_commits():
-            active_digests = {
-                str(effect.get("candidate_digest") or "")
-                for effect in commit.get("canon_effects") or ()
-                if isinstance(effect, Mapping)
-            }
-            if not active_digests:
-                continue
-            envelope = self._load_envelope(
-                str(commit.get("transaction_hash") or "")
-            )
-            requirements = {
-                requirement.candidate_digest: requirement
-                for requirement in envelope.prepared_transaction.requirements
-            }
-            for candidate in envelope.candidates:
-                digest = candidate_digest(candidate)
-                if digest not in active_digests:
-                    continue
-                classification = classify_candidate_claim(candidate.claim)
-                if classification is FactBoundaryClass.KNOWN_SOFT:
-                    polluted_active_candidates.append(digest)
-                    continue
-                if classification is FactBoundaryClass.AMBIGUOUS:
-                    requirement = requirements.get(digest)
-                    if (
-                        requirement is None
-                        or "fact_boundary:human_classification_required"
-                        not in requirement.reason_codes
-                    ):
-                        uncertified_active_candidates.append(digest)
-        if polluted_active_candidates or uncertified_active_candidates:
-            raise MigrationRequiredError(
-                "canon_v3_active_chapter_fact_boundary_recertification_required:"
-                + ",".join(
-                    sorted(
-                        set(
-                            polluted_active_candidates
-                            + uncertified_active_candidates
-                        )
-                    )
-                )
-            )
-        if metadata.get("source") != "v2_accepted_commits":
-            return None
-        from .migration import legacy_prefix_status
-
-        status = legacy_prefix_status(self.project_root)
-        reasons = {str(item) for item in status.get("reason_codes") or []}
-        prefix_reasons = reasons - {"v3_projection_stale"}
-        if status.get("migration_required") and prefix_reasons:
-            raise MigrationRequiredError(
-                "canon_v3_legacy_prefix_stale:"
-                + ",".join(sorted(prefix_reasons))
-            )
-        return status
-
-    def _legacy_recertification_workflow_fields(
-        self,
-        error: Exception,
-    ) -> dict[str, Any]:
-        """Expose the one reviewable v1 repair transaction on every surface."""
-
-        message = str(error)
-        if "canon_v3_active_author_axiom_boundary_recertification_required:" in message:
-            keys = sorted(
-                set(
-                    message.split(
-                        "canon_v3_active_author_axiom_boundary_recertification_required:",
-                        1,
-                    )[1].split(":", 1)[0].split(",")
-                )
-                - {""}
-            )
-            return {
-                "cases": [],
-                "counts": {"ambiguous_author_axioms": len(keys)},
-                "recovery_action": "recertify_active_author_axioms",
-                "ambiguous_author_axiom_keys": keys,
-            }
-        if "canon_v3_active_chapter_fact_boundary_recertification_required:" in message:
-            digests = sorted(
-                set(
-                    message.split(
-                        "canon_v3_active_chapter_fact_boundary_recertification_required:",
-                        1,
-                    )[1].split(":", 1)[0].split(",")
-                )
-                - {""}
-            )
-            return {
-                "cases": [],
-                "counts": {"uncertified_active_facts": len(digests)},
-                "recovery_action": "fork_active_fact_boundary",
-                "uncertified_active_candidate_digests": digests,
-            }
-        if "canon_v3_active_author_axiom_non_fact_records:" in message:
-            keys = sorted(
-                set(
-                    message.split(
-                        "canon_v3_active_author_axiom_non_fact_records:", 1
-                    )[1].split(":", 1)[0].split(",")
-                )
-                - {""}
-            )
-            return {
-                "cases": [],
-                "counts": {"non_fact_author_axioms": len(keys)},
-                "recovery_action": "supersede_active_soft_author_axioms",
-                "non_fact_author_axiom_keys": keys,
-            }
-        if "canon_v3_legacy_fact_boundary_" in message:
-            from .migration import analyze_legacy_fact_boundary
-
-            analysis = analyze_legacy_fact_boundary(self.project_root)
-            state = str(analysis.get("state") or "invalid")
-            recovery_by_state = {
-                "ready_to_supersede": "supersede_legacy_soft_facts",
-                "human_classification_required": (
-                    "classify_legacy_fact_boundary"
-                ),
-                "manual_fork_required": "fork_legacy_fact_boundary",
-            }
-            recovery = recovery_by_state.get(
-                state, "audit_legacy_fact_boundary"
-            )
-            return {
-                "cases": [],
-                "counts": {
-                    "known_soft": len(
-                        analysis.get("known_soft_admission_digests") or ()
-                    ),
-                    "ambiguous": len(
-                        analysis.get("ambiguous_admission_digests") or ()
-                    ),
-                    "dependencies": len(
-                        (analysis.get("dependency_report") or {}).get(
-                            "dependencies"
-                        )
-                        or ()
-                    ),
-                },
-                "recovery_action": recovery,
-                "fact_boundary_analysis": analysis,
-            }
-        if "legacy_genesis_v1_recertification_required" not in message:
-            return {
-                "cases": [],
-                "counts": {},
-                "recovery_action": "remigrate_legacy_suffix",
-            }
-        from .migration import audit_cutover
-
-        report = audit_cutover(self.project_root)
-        conflicts = list(report.get("conflicting_staging_kinds") or ())
-        conflicting_stage_digest: str | None = None
-        conflicting_transaction_hash: str | None = None
-        conflicting_transaction_kind: str | None = None
-        if len(conflicts) == 1 and conflicts[0] in {"chapter", "author_axiom"}:
-            conflicting_transaction_kind = str(conflicts[0])
-            active_path = self._active_stage_path(conflicting_transaction_kind)
-            try:
-                stage_raw = active_path.read_bytes()
-                (
-                    conflicting_stage_digest,
-                    conflicting_transaction_hash,
-                ) = self._stage_identity_from_bytes(
-                    conflicting_transaction_kind,
-                    stage_raw,
-                )
-            except (OSError, StagingArchiveConflict):
-                # audit_cutover already records the conflicting file.  A
-                # malformed pointer cannot be safely archived by an exact
-                # action and remains a Doctor/manual-integrity path.
-                conflicting_stage_digest = None
-                conflicting_transaction_hash = None
-        cases = [] if conflicts else list(report.get("cases") or ())
-        recovery = (
-            "resolve_recertification_staging_conflict"
-            if conflicts
-            else "audit_blocked_legacy_recertification"
-            if report.get("state") == "blocked"
-            else "review_and_publish_legacy_recertification"
-        )
-        return {
-            "cases": cases,
-            "counts": {"human_required": len(cases)},
-            "recovery_action": recovery,
-            "authoritative_transaction": "legacy_recertification",
-            "transaction_kind": "legacy_recertification",
-            "recertification_state": report.get("state"),
-            "recertification_plan_digest": report.get(
-                "detached_plan_digest"
-            ),
-            "recertification_publish_token": report.get("publish_token"),
-            "recertification_required_case_count": report.get(
-                "required_case_count"
-            ),
-            "conflicting_staging_kinds": conflicts,
-            "conflicting_transaction_kind": conflicting_transaction_kind,
-            "conflicting_stage_digest": conflicting_stage_digest,
-            "conflicting_transaction_hash": conflicting_transaction_hash,
-            "recertification_reason_codes": list(
-                report.get("reason_codes") or ()
-            ),
-            "recertification_details": list(report.get("details") or ()),
-        }
-
-    def _cutover_chapter(self, head: str) -> int:
-        cursor = self.repository.read_manifest(head, validate_references=True)
-        seen: set[str] = set()
-        while int(cursor.get("generation") or 0) > 0:
-            parent = str(cursor.get("parent_head_hash") or "")
-            if not parent or parent in seen:
-                raise PreparedTransactionInvalid("canon_v3_genesis_chain_invalid")
-            seen.add(parent)
-            cursor = self.repository.read_manifest(parent, validate_references=True)
-        metadata = cursor.get("genesis_metadata")
-        if not isinstance(metadata, dict):
-            raise PreparedTransactionInvalid("canon_v3_genesis_metadata_invalid")
-        try:
-            cutover = int(metadata.get("cutover_chapter") or 0)
-        except (TypeError, ValueError) as exc:
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("schema_version") != "canon-v3/genesis/v1"
+        ):
             raise PreparedTransactionInvalid(
-                "canon_v3_cutover_chapter_invalid"
-            ) from exc
-        if cutover < 0:
-            raise PreparedTransactionInvalid("canon_v3_cutover_chapter_invalid")
-        return cutover
+                "canon_v3_native_genesis_required"
+            )
 
     def _active_author_axiom_digest(self, head: str | None) -> str:
         """Return only HEAD-reachable immutable axiom authority."""
@@ -739,23 +382,16 @@ class CanonV3Service:
     def _assert_chapter_sequence(self, head: str, chapter: int) -> None:
         manifest = self.repository.read_manifest(head, validate_references=True)
         entries = manifest.get("chapters") or []
-        cutover = self._cutover_chapter(head)
         if not entries:
-            expected = cutover + 1
-            if int(chapter) != expected:
+            if int(chapter) != 1:
                 raise CanonChapterSequenceError(
-                    f"canon_v3_first_chapter_must_be_cutover_plus_one:"
-                    f"expected={expected},actual={chapter}"
+                    f"canon_v3_first_chapter_must_be_one:actual={chapter}"
                 )
             return
         last = int(entries[-1].get("chapter") or 0)
         if int(chapter) > last + 1:
             raise CanonChapterSequenceError(
                 f"canon_v3_chapter_gap:last={last},requested={chapter}"
-            )
-        if int(chapter) <= cutover:
-            raise MigrationRequiredError(
-                f"canon_v3_edit_crosses_legacy_cutover:{chapter}<={cutover}"
             )
 
     def _assert_active_chapter_bindings(
@@ -782,9 +418,6 @@ class CanonV3Service:
             except ChapterBindingError as exc:
                 raise ActiveCanonBindingError(chapter, exc.code) from exc
             try:
-                wrapper = self.repository.recertified_suffix_wrapper(
-                    transaction_hash
-                )
                 verify_all_candidate_sources(
                     self.project_root,
                     envelope.chapter_binding,
@@ -800,13 +433,6 @@ class CanonV3Service:
                     chapter,
                     "source_reference_changed",
                 ) from exc
-            if wrapper is not None:
-                self._validate_active_recertified_suffix(
-                    wrapper=wrapper,
-                    envelope=envelope,
-                    commit=commit,
-                )
-                continue
             pointer = StagingPointer(
                 transaction_hash=transaction_hash,
                 decision_hashes=tuple(commit.get("decision_hashes") or ()),
@@ -829,91 +455,12 @@ class CanonV3Service:
                     "canon_v3_active_commit_effects_mismatch"
                 )
 
-    def _validate_active_recertified_suffix(
-        self,
-        *,
-        wrapper: Mapping[str, Any],
-        envelope: PreparedEnvelope,
-        commit: Mapping[str, Any],
-    ) -> None:
-        """Prove a migration wrapper is bound to this active v2 genesis."""
-
-        head = self.repository.current_head(validate=False)
-        if head is None:
-            raise PreparedTransactionInvalid(
-                "canon_v3_recertified_suffix_without_active_head"
-            )
-        cursor = self.repository.read_manifest(head, validate_references=True)
-        seen: set[str] = set()
-        while int(cursor.get("generation") or 0) > 0:
-            parent = str(cursor.get("parent_head_hash") or "")
-            if not parent or parent in seen:
-                raise PreparedTransactionInvalid(
-                    "canon_v3_recertified_suffix_manifest_lineage_invalid"
-                )
-            seen.add(parent)
-            cursor = self.repository.read_manifest(
-                parent, validate_references=True
-            )
-        metadata = cursor.get("genesis_metadata")
-        receipt = (
-            metadata.get("recertification")
-            if isinstance(metadata, Mapping)
-            else None
-        )
-        binding = wrapper.get("recertification_binding")
-        if not isinstance(receipt, Mapping) or not isinstance(binding, Mapping):
-            raise PreparedTransactionInvalid(
-                "canon_v3_recertified_suffix_receipt_missing"
-            )
-        receipt_binding = {
-            "prior_head_hash": receipt.get("prior_head_hash"),
-            "detached_plan_digest": receipt.get("detached_plan_digest"),
-            "publish_token": receipt.get("publish_token"),
-            "review_decision_set_digest": receipt.get(
-                "review_decision_set_digest"
-            ),
-            "review_cases_digest": receipt.get("review_cases_digest"),
-        }
-        if dict(binding) != receipt_binding:
-            raise PreparedTransactionInvalid(
-                "canon_v3_recertified_suffix_receipt_mismatch"
-            )
-        parent_head = str(wrapper.get("parent_head") or "")
-        expected_registry = build_approved_entity_registry(
-            self.repository,
-            parent_head,
-            target_chapter=envelope.chapter,
-        ).registry_digest
-        if (
-            envelope.prepared_transaction.parent_head != parent_head
-            or envelope.prepared_transaction.entity_registry_digest
-            != expected_registry
-            or envelope.author_axiom_digest
-            != self._active_author_axiom_digest(parent_head)
-            or commit.get("canon_effects")
-            != [
-                effect.model_dump(mode="json")
-                for effect in envelope.prepared_transaction.effects
-            ]
-            or commit.get("decision_hashes")
-        ):
-            raise PreparedTransactionInvalid(
-                "canon_v3_recertified_suffix_active_binding_invalid"
-            )
-
     def initialize_new_project(self) -> str:
-        if self._legacy_commits_exist():
-            raise MigrationRequiredError("canon_v3_legacy_cutover_required")
         head = self.repository.current_head(validate=True)
         if head is None:
-            # Bind the author's explicit initialization facts into the same
-            # immutable fact snapshot format used at a v2 cutover.  This is a
-            # one-time author-approved genesis import; later live file edits do
-            # not mutate Canon and must enter as author_axiom candidates.
-            from .migration import migrate_legacy
+            from .genesis import initialize_genesis
 
-            result = migrate_legacy(self.project_root, cutover_chapter=0)
+            result = initialize_genesis(self.project_root)
             head = str(result["head_hash"])
         else:
             rebuild_projection(self.project_root)
@@ -922,14 +469,12 @@ class CanonV3Service:
     def _ensure_initialized_for_prepare(self, chapter: int) -> str:
         head = self.repository.current_head(validate=True)
         if head is not None:
-            self._legacy_prefix_guard()
+            self._assert_native_genesis()
             self._assert_active_chapter_bindings(before_chapter=chapter)
             if not projection_is_fresh(self.project_root):
                 raise ProjectionStaleError("canon_v3_projection_rebuild_required")
             return head
-        if self._legacy_commits_exist():
-            raise MigrationRequiredError("canon_v3_legacy_cutover_required")
-        raise MigrationRequiredError("canon_v3_initialize_required")
+        raise InitializationRequiredError("canon_v3_initialize_required")
 
     def _read_staging_unlocked(self) -> StagingPointer | None:
         try:
@@ -1323,7 +868,7 @@ class CanonV3Service:
         return self._bind_prior_facts(prepared, prior_bindings)
 
     @staticmethod
-    def _legacy_fact_key(record: Mapping[str, Any]) -> str | None:
+    def _genesis_fact_key(record: Mapping[str, Any]) -> str | None:
         fact = record.get("fact")
         if not isinstance(fact, Mapping):
             return None
@@ -1433,7 +978,7 @@ class CanonV3Service:
             "custody_history": 4,
             "information": 5,
         }
-        legacy: dict[str, tuple[int, int, str, dict[str, Any]]] = {}
+        genesis: dict[str, tuple[int, int, str, dict[str, Any]]] = {}
         chronology: list[tuple[int, int, int, str, dict[str, Any]]] = []
         lifecycle_categories = {
             "reader_promise",
@@ -1446,8 +991,8 @@ class CanonV3Service:
         }
         for digest, record in records.items():
             record_type = str(record.get("record_type") or "")
-            if record_type == "legacy_fact":
-                fact_key = self._legacy_fact_key(record)
+            if record_type == "genesis_fact":
+                fact_key = self._genesis_fact_key(record)
                 fact = record.get("fact")
                 if fact_key is None or not isinstance(fact, Mapping):
                     continue
@@ -1467,9 +1012,9 @@ class CanonV3Service:
                 rank = min((channel_rank.get(item, 99) for item in channels), default=99)
                 source_chapter = int(fact.get("source_chapter") or 0)
                 candidate = (rank, -source_chapter, digest, dict(record))
-                previous = legacy.get(fact_key)
+                previous = genesis.get(fact_key)
                 if previous is None or candidate[:3] < previous[:3]:
-                    legacy[fact_key] = candidate
+                    genesis[fact_key] = candidate
             elif record_type == "v3_effect":
                 record_chapter = int(record.get("chapter") or 0)
                 fact_key = str(record.get("fact_key") or "")
@@ -1485,7 +1030,7 @@ class CanonV3Service:
                     )
         active = {
             fact_key: (candidate[2], candidate[3])
-            for fact_key, candidate in legacy.items()
+            for fact_key, candidate in genesis.items()
         }
         for _ch, _rev, _index, digest, record in sorted(chronology):
             active[str(record["fact_key"])] = (digest, record)
@@ -1495,7 +1040,7 @@ class CanonV3Service:
     def _record_claim(record: Mapping[str, Any]) -> Mapping[str, Any]:
         payload = (
             record.get("fact")
-            if str(record.get("record_type") or "") == "legacy_fact"
+            if str(record.get("record_type") or "") == "genesis_fact"
             else record.get("claim")
         )
         return payload if isinstance(payload, Mapping) else {}
@@ -2016,7 +1561,7 @@ class CanonV3Service:
                 self.repository,
                 parent_head,
             ).items()
-            if str(record.get("record_type") or "").startswith("legacy_")
+            if str(record.get("record_type") or "").startswith("genesis_")
             or int(record.get("chapter") or 0) < int(chapter)
         }
         for observation in observations:
@@ -2423,22 +1968,6 @@ class CanonV3Service:
                         commit.get("decision_hashes") or ()
                     )
                 )
-            metadata = manifest.get("genesis_metadata")
-            receipt = (
-                metadata.get("recertification")
-                if isinstance(metadata, Mapping)
-                else None
-            )
-            recertified_lineage = (
-                receipt.get("semantic_negative_lineage")
-                if isinstance(receipt, Mapping)
-                and receipt.get("schema_version")
-                == "canon-v3/legacy-recertification-receipt/v1"
-                else None
-            )
-            if isinstance(recertified_lineage, Mapping):
-                hashes = recertified_lineage.get(str(int(chapter))) or ()
-                lineage.update(self._negative_head_hashes(hashes))
             parent = manifest.get("parent_head_hash")
             head = str(parent) if parent else None
         return tuple(sorted(lineage))
@@ -2641,11 +2170,10 @@ class CanonV3Service:
                 if existing.is_v2:
                     pass
                 else:
-                    # v1 stage is read-only and must go through the explicit
-                    # recertification path; a normal proposal cannot replace
-                    # its unpublished positive decisions.
+                    # A v1 stage is unsupported and cannot be replaced by a
+                    # current proposal without explicit archive/reprepare.
                     raise ActiveTransactionError(
-                        "canon_v3_prepare_legacy_stage_recertification_required"
+                        "canon_v3_prepare_stage_protocol_upgrade_required"
                     )
             pointer = StagingPointer(
                 transaction_hash=transaction_hash,
@@ -2683,7 +2211,7 @@ class CanonV3Service:
         except Exception as exc:
             raise InvalidDecision("canon_v3_decision_request_v2_invalid") from exc
         with self.staging_lock:
-            self._legacy_prefix_guard()
+            self._assert_native_genesis()
             pointer = self._read_staging_unlocked()
             if pointer is None:
                 raise ActiveTransactionError("canon_v3_no_staged_transaction")
@@ -2994,7 +2522,7 @@ class CanonV3Service:
                 "canon_v3_finalize_request_v2_invalid"
             ) from exc
         with self.staging_lock:
-            self._legacy_prefix_guard()
+            self._assert_native_genesis()
             pointer = self._read_staging_unlocked()
             if pointer is None:
                 return self._completed_finalize_retry(request)
@@ -3199,7 +2727,7 @@ class CanonV3Service:
         if head is None:
             return {
                 "schema_version": WORKFLOW_SCHEMA,
-                "state": "migration_required",
+                "state": "initialization_required",
                 "head_hash": None,
                 "generation": 0,
                 "chapter": None,
@@ -3209,28 +2737,9 @@ class CanonV3Service:
                 "projection_fresh": False,
                 "cases": [],
                 "counts": {},
-                "recovery_action": (
-                    "migrate_legacy" if self._legacy_commits_exist() else "initialize_v3"
-                ),
+                "recovery_action": "initialize_v3",
             }
-        try:
-            legacy_status = self._legacy_prefix_guard()
-        except MigrationRequiredError as exc:
-            manifest = self.repository.current_manifest() or {}
-            repair = self._legacy_recertification_workflow_fields(exc)
-            return {
-                "schema_version": WORKFLOW_SCHEMA,
-                "state": "migration_required",
-                "head_hash": head,
-                "generation": int(manifest.get("generation") or 0),
-                "chapter": None,
-                "transaction_hash": None,
-                "can_finalize": False,
-                "can_write_next": False,
-                "projection_fresh": projection_is_fresh(self.project_root),
-                **repair,
-                "error": str(exc),
-            }
+        self._assert_native_genesis()
         try:
             self._assert_active_chapter_bindings()
         except ActiveCanonBindingError as exc:
@@ -3265,7 +2774,6 @@ class CanonV3Service:
             "cases": [],
             "counts": {},
             "recovery_action": "write_next_chapter" if fresh else "rebuild_projection",
-            "legacy_prefix": legacy_status,
         }
 
     def _workflow_snapshot_core(self) -> dict[str, Any]:
@@ -3307,26 +2815,7 @@ class CanonV3Service:
                         "recovery_action": "reprepare_transaction_protocol_v2",
                         "error": "canon_v3_unpublished_v1_stage_not_authoritative",
                     }
-                try:
-                    self._legacy_prefix_guard()
-                except MigrationRequiredError as exc:
-                    repair = self._legacy_recertification_workflow_fields(exc)
-                    return {
-                        "schema_version": WORKFLOW_SCHEMA,
-                        "state": "migration_required",
-                        "head_hash": self.repository.current_head(validate=False),
-                        "generation": int(
-                            (self.repository.current_manifest() or {}).get("generation")
-                            or 0
-                        ),
-                        "chapter": envelope.chapter,
-                        "transaction_hash": pointer.transaction_hash,
-                        "can_finalize": False,
-                        "can_write_next": False,
-                        "projection_fresh": projection_is_fresh(self.project_root),
-                        **repair,
-                        "error": str(exc),
-                    }
+                self._assert_native_genesis()
                 try:
                     self._assert_active_chapter_bindings(
                         before_chapter=envelope.chapter
@@ -3585,7 +3074,6 @@ class CanonV3Service:
 
         snapshot = self._workflow_snapshot_core()
         head = snapshot.get("head_hash")
-        cutover: int | None = None
         active_chapters: list[int] = []
         if isinstance(head, str) and head:
             try:
@@ -3593,7 +3081,6 @@ class CanonV3Service:
                     head,
                     validate_references=True,
                 )
-                cutover = self._cutover_chapter(head)
                 active_chapters = [
                     int(entry.get("chapter") or 0)
                     for entry in manifest.get("chapters") or []
@@ -3602,13 +3089,8 @@ class CanonV3Service:
             except (CanonRepositoryError, ValueError):
                 # The core snapshot already reports the integrity failure.  Do
                 # not invent sequence authority when HEAD cannot be validated.
-                cutover = None
                 active_chapters = []
-        latest = (
-            max([cutover or 0, *active_chapters])
-            if cutover is not None
-            else None
-        )
+        latest = max([0, *active_chapters]) if head else None
         expected_next = latest + 1 if latest is not None else None
         allowed = sorted(
             {
@@ -3618,7 +3100,6 @@ class CanonV3Service:
         )
         result = {
             **snapshot,
-            "cutover_chapter": cutover,
             "active_chapters": active_chapters,
             "latest_chapter": latest,
             "expected_next_chapter": expected_next,
@@ -3682,11 +3163,7 @@ class CanonV3Service:
                 }
             )
             result["author_axiom_workflow"] = axiom_workflow
-            if (
-                axiom_workflow.get("transaction_hash")
-                and result.get("authoritative_transaction")
-                != "legacy_recertification"
-            ):
+            if axiom_workflow.get("transaction_hash"):
                 # There is exactly one project-wide authoritative staging
                 # transaction.  Surface the axiom case/tokens through the same
                 # workflow fields so confirm cannot choose the wrong channel.
@@ -3753,7 +3230,7 @@ __all__ = [
     "FINALIZE_TOKEN_SCHEMA",
     "FinalizeRequestV2",
     "FinalizeBlockedError",
-    "MigrationRequiredError",
+    "InitializationRequiredError",
     "PREPARED_ENVELOPE_SCHEMA",
     "PREPARED_ENVELOPE_SCHEMA_V1",
     "PROPOSAL_SCHEMA",

@@ -10,7 +10,7 @@ def test_error_catalog_loads_known_entries_and_fallback():
 
     codes = {entry.code for entry in entries}
     assert "exact-version-conflict" in codes
-    assert "migration_required" in codes
+    assert "initialization_required" in codes
     assert "awaiting_human" in codes
     assert "ready_to_finalize" in codes
     assert "mainline_ready=false" in codes
@@ -74,7 +74,7 @@ def test_error_catalog_routes_exact_version_conflicts_to_refresh_only():
 
 def test_error_catalog_routes_each_v3_workflow_state_to_v3_action():
     cases = {
-        "migration_required": ("migration_required", "canon-v3 status"),
+        "initialization_required": ("initialization_required", "canon-v3 status"),
         "awaiting_human": ("awaiting_human", "/canon-ledger-confirm"),
         "rewrite_required": ("rewrite_required", "/canon-ledger-write"),
         "recompile_required": ("recompile_required", "canon-v3 status"),

@@ -22,14 +22,14 @@
     },
     {
       "id": 2,
-      "prompt": "使用 /canon-ledger-write 写第4章，但项目没有 CURRENT 且存在 legacy accepted prefix。",
-      "expected_output": "不开始起草，统一 workflow 返回 migration_required，只给 legacy cutover/repair 恢复动作。",
+      "prompt": "使用 /canon-ledger-write 写第1章，但新项目骨架还没有 CURRENT。",
+      "expected_output": "不开始起草，统一 workflow 返回 initialization_required，只执行 initialize_v3 后重新读取状态。",
       "files": [],
       "expectations": [
         "prewrite 不回落 legacy gate",
         "不调用 chapter-commit、review-pipeline、update-state 或 legacy human-review",
         "不生成正文或可 prepare proposal",
-        "唯一下一步是 migrate/repair 后重新读取 status"
+        "唯一下一步是 initialize 后重新读取 status"
       ]
     },
     {
@@ -40,7 +40,7 @@
       "expectations": [
         "本轮文风覆盖优先于全书偏好",
         "不生成 style/prose observation 或人工 case",
-        "style 文件不进入 author_axiom_digest、HEAD 或 migration digest",
+        "style 文件不进入 author_axiom_digest、HEAD 或 workflow digest",
         "事实检查仍完整执行五维长期一致性扫描"
       ]
     }

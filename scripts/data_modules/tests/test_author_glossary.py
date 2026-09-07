@@ -27,8 +27,7 @@ def test_author_glossary_covers_v3_workflow_and_recovery_states():
     terms = load_terms()
 
     required = {
-        "migration_required",
-        "legacy_repair",
+        "initialization_required",
         "awaiting_human",
         "rewrite_required",
         "recompile_required",

@@ -38,7 +38,7 @@
 
 - 将产品定位收敛为“长篇小说一致性引擎”，默认不规定口吻、句式、章长、爽点或网文风格；
 - 建立 Canon v3 单一事实事务链，以不可变 HEAD、typed candidates、逐字段证据、完整事实扫描和 exact 人工决定约束正史发布；
-- 将作者认证硬设定纳入 managed author-axiom 通道，并为旧前缀、旧 genesis 与未发布事务提供 fail-closed migration/recertification；
+- 将作者认证硬设定纳入 managed author-axiom 通道，并为未发布事务提供 fail-closed 版本绑定；
 - 将已接受事实与最终正文字节及其章节边界绑定，使历史状态能够按 N-1 时点重放；
 - 支持从 Canon v3 HEAD 重建唯一 `canon.json` 事实投影，并由 HEAD-bound API 派生状态、时间线和查询视图；`state.json/index.db` 保持 legacy，不再冒充可重建正史投影；
 - 将章纲目标保留为 advisory，并明确排除文风、文笔、人物动机、一般因果与剧情取舍的默认强制检查；

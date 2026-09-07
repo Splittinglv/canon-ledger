@@ -4,8 +4,8 @@
 
 ``CURRENT`` is an implementation detail of the Canon v3 repository, not a
 feature flag.  Public callers must consult this module even before a v3 HEAD
-exists so an uninitialised or legacy project fails closed instead of silently
-falling back to v2 fact writers/read models.
+exists so an uninitialised project fails closed instead of silently falling
+back to retired fact writers or read models.
 """
 
 from __future__ import annotations
@@ -45,35 +45,9 @@ def _digest(payload: Mapping[str, Any]) -> str:
 
 def _bootstrap_mode(snapshot: Mapping[str, Any]) -> str:
     action = str(snapshot.get("recovery_action") or "")
-    state = str(snapshot.get("state") or "invalid")
     head = snapshot.get("head_hash")
-    if action in {
-        "recertify_legacy_v1",
-        "review_and_publish_legacy_recertification",
-        "resolve_recertification_staging_conflict",
-        "audit_blocked_legacy_recertification",
-    } or snapshot.get("authoritative_transaction") == "legacy_recertification":
-        return "recertification"
     if not head and action == "initialize_v3":
         return "new_project"
-    if not head and action == "migrate_legacy":
-        return "legacy_cutover"
-    if action in {"remigrate_legacy_suffix", "repair_legacy_prefix"}:
-        return "legacy_repair"
-    if action in {
-        "supersede_legacy_soft_facts",
-        "classify_legacy_fact_boundary",
-        "fork_legacy_fact_boundary",
-        "audit_legacy_fact_boundary",
-    }:
-        return "legacy_fact_boundary"
-    if action in {
-        "supersede_active_soft_author_axioms",
-        "recertify_active_author_axioms",
-    }:
-        return "author_axiom_fact_boundary"
-    if state == "migration_required" and head:
-        return "recertification"
     return "canon_v3"
 
 
@@ -141,18 +115,10 @@ def _primary_action(snapshot: Mapping[str, Any]) -> dict[str, Any]:
             "按当前 HEAD 重建事实投影",
             "canon_ledger.py canon-v3 rebuild-projection",
         ),
-        "migration_required": (
-            recovery,
-            (
-                "初始化 Canon v3"
-                if recovery == "initialize_v3"
-                else "迁移并重新认证旧正史"
-            ),
-            (
-                "canon_ledger.py canon-v3 initialize"
-                if recovery == "initialize_v3"
-                else "canon_ledger.py canon-v3 migrate"
-            ),
+        "initialization_required": (
+            "initialize_v3",
+            "初始化 Canon v3",
+            "canon_ledger.py canon-v3 initialize",
         ),
         "invalid": (
             "run_canon_v3_doctor",
@@ -174,126 +140,6 @@ def _primary_action(snapshot: Mapping[str, Any]) -> dict[str, Any]:
                     "/canon-ledger-plan",
                 ),
             }
-        )
-    if state == "migration_required" and recovery in {
-        "recertify_legacy_v1",
-        "review_and_publish_legacy_recertification",
-    }:
-        return _structured_action(
-            code="review_and_publish_legacy_recertification",
-            label="逐项确认旧正史并原子发布重新认证链",
-            command="canon_ledger.py canon-v3 repair-cutover --apply --input-file <request.json>",
-            transaction_kind=transaction_kind,
-        )
-    if state == "migration_required" and recovery in {
-        "remigrate_legacy_suffix",
-        "repair_legacy_prefix",
-    }:
-        # A frozen v2 prefix that changed after cutover cannot be made safe by
-        # calling ``migrate`` again: migrate_legacy deliberately rejects an
-        # existing stale CURRENT.  The only universally executable next step
-        # is the read-only audit.  It identifies the exact invalid source so a
-        # human can restore the frozen bytes or explicitly rebuild the suffix;
-        # status must then be re-read before any write is attempted.
-        return _structured_action(
-            code=recovery,
-            label="审计失效的旧前缀并由作者修复精确来源",
-            command="canon_ledger.py canon-v3 audit-cutover",
-            transaction_kind=transaction_kind,
-        )
-    if state == "migration_required" and recovery in {
-        "supersede_legacy_soft_facts",
-        "classify_legacy_fact_boundary",
-        "audit_legacy_fact_boundary",
-    }:
-        labels = {
-            "supersede_legacy_soft_facts": (
-                "审阅 v2 软事实清理计划，再生成完整 author-axiom supersession"
-            ),
-            "classify_legacy_fact_boundary": (
-                "逐项人工分类 v2 自定义设定叶子，保持项目只读"
-            ),
-            "audit_legacy_fact_boundary": "审计 v2 事实边界，保持项目只读",
-        }
-        return _structured_action(
-            code=recovery,
-            label=labels[recovery],
-            command="canon_ledger.py canon-v3 repair-cutover --dry-run",
-            transaction_kind=transaction_kind,
-        )
-    if state == "migration_required" and recovery == (
-        "supersede_active_soft_author_axioms"
-    ):
-        return _structured_action(
-            code=recovery,
-            label="旧 active author axioms 含软偏好；逐项人工移除后再继续写作",
-            command="/canon-ledger-plan",
-            transaction_kind="author_axiom",
-        )
-    if state == "migration_required" and recovery == (
-        "recertify_active_author_axioms"
-    ):
-        return _structured_action(
-            code=recovery,
-            label="旧 author axioms 缺少当前事实边界证明；逐项重新分类并认证",
-            command="/canon-ledger-plan",
-            transaction_kind="author_axiom",
-        )
-    if state == "migration_required" and recovery == (
-        "fork_legacy_fact_boundary"
-    ):
-        return _structured_action(
-            code=recovery,
-            label="活动后缀依赖旧软 admission；保留原项目只读并在 clean target 建立分支",
-            command="/canon-ledger-init",
-            transaction_kind=transaction_kind,
-        )
-    if state == "migration_required" and recovery == (
-        "fork_active_fact_boundary"
-    ):
-        return _structured_action(
-            code=recovery,
-            label="活动章节含旧策略事实；保留原 HEAD 只读并在 clean target 重认证",
-            command="/canon-ledger-init",
-            transaction_kind=transaction_kind,
-        )
-    if state == "migration_required" and recovery == (
-        "resolve_recertification_staging_conflict"
-    ):
-        stage_kind = str(
-            snapshot.get("conflicting_transaction_kind") or ""
-        )
-        stage_digest = str(snapshot.get("conflicting_stage_digest") or "")
-        if stage_kind in {"chapter", "author_axiom"} and len(stage_digest) == 64:
-            return _structured_action(
-                code=recovery,
-                label="精确归档冲突的未发布事实事务，再继续旧正史认证",
-                command=(
-                    "canon_ledger.py canon-v3 archive-staging "
-                    f"--transaction-kind {stage_kind} "
-                    f"--expected-stage-digest {stage_digest}"
-                ),
-                transaction_kind=stage_kind,
-                parameters={
-                    "transaction_kind": stage_kind,
-                    "expected_stage_digest": stage_digest,
-                },
-                action_id="archive_conflicting_staging",
-            )
-        return _structured_action(
-            code="run_canon_v3_doctor",
-            label="冲突的 STAGING 无法建立精确摘要；先运行完整性检查",
-            command="canon_ledger.py doctor --deep",
-            transaction_kind=transaction_kind,
-        )
-    if state == "migration_required" and recovery == (
-        "audit_blocked_legacy_recertification"
-    ):
-        return _structured_action(
-            code=recovery,
-            label="旧正史重新认证审计失败，保持当前 HEAD 并先修复来源",
-            command="canon_ledger.py canon-v3 audit-cutover",
-            transaction_kind=transaction_kind,
         )
     code, label, command = actions.get(
         state,
