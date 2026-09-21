@@ -21,6 +21,7 @@ from pydantic import (
     ConfigDict,
     Field,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -279,6 +280,23 @@ class RelationshipChangedClaim(_Claim):
     object: str = Field(min_length=1)
     before: str | None = Field(default=None, min_length=1)
     after: str = Field(min_length=1)
+    # A human-selected independent relationship, e.g. 婚姻 or 师承. Reuse its
+    # key to change it; another key coexists. None keeps the legacy pair slot.
+    relationship_key: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @field_validator("relationship_key")
+    @classmethod
+    def key_is_nonblank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("relationship_key must not be blank")
+        return value.strip() if value is not None else None
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_payload(self, handler: Any) -> dict[str, Any]:
+        payload = handler(self)
+        if self.relationship_key is None:
+            payload.pop("relationship_key", None)
+        return payload
 
 
 class WorldRuleRevealedClaim(_Claim):
@@ -305,7 +323,9 @@ class PowerBreakthroughClaim(_Claim):
     canonical_field: str | None = Field(default=None, min_length=1)
     subject: str = Field(min_length=1)
     system: str | None = Field(default=None, min_length=1)
-    before: str = Field(min_length=1)
+    # An omitted prior realm is inherited from the exact slot, not invented
+    # or forced into the current manuscript merely to satisfy evidence checks.
+    before: str | None = Field(default=None, min_length=1)
     after: str = Field(min_length=1)
 
 
@@ -462,6 +482,7 @@ class FactCandidate(StrictModel):
                 "link_to",
                 "canonical_entity",
                 "canonical_field",
+                "relationship_key",
                 "new_instance",
             }
             and value not in ((), [], {})

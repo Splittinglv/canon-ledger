@@ -73,6 +73,11 @@ Reviewer 不授予事实类型。即使 candidate schema 合法，也不能把�
 模型只能提高所需人工级别，不能降低 compiler policy floor。
 
 若正文明确事实缺少 candidate，返回 `extraction_incomplete`，不得签 complete attestation。
+力量变化候选省略 `before` 时，用相同 slot 的 N-1 事实或同章前序变化核对；不因本章没有
+复述旧境界而判冲突。没有 prior 表示未记录，不自动等于任意旧境界；现有的 checkpoint
+与有证据的冲突检查仍然执行。
+新增关系不代表旧关系终结。若同一人物对已有关系，提醒作者选择替换或并存；不同
+`relationship_key` 的关系可以同时成立，无法判断时使用 ambiguity，不替作者作选择。
 
 ## 输出 v3
 

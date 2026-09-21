@@ -189,6 +189,18 @@ CLI、write gate、报告、context、Skills 和 Dashboard 读取同一个 `cano
 
 流程：整理 N-1 事实 → 按作者/模型文风起草 → 固化正文 binding → data-agent 提候选 → reviewer 五维事实扫描 → `prepare` → 当场人工确认或改正文 → `finalize` → 验证 ready。
 
+写前使用 `memory-contract load-context --chapter N --all-pages --out .canon-ledger/tmp/context_pages.json`
+一次生成精简上下文页，再逐页读取临时文件。重复事实集中保存，证明元数据按需回查，
+不逐页重建整份上下文。默认 4,000 token 仅是单页交付目标；事实语义不裁剪，
+读取前后校验 HEAD/workflow，变化后重新生成。旧单页接口仍可使用。
+
+正文可以省略已确认的旧境界。力量变化只需举证新状态，runtime 从同一状态槽的 exact
+prior 继承前态；无 prior 时保持未记录并由作者确认。真正的写作偏好仍被排除，而
+“恐惧魔法”等世界机制或 `stone_gate_rule` 这样的标识符不会仅凭关键词被拒绝，
+语义无法确定时进入人工分类。
+同一对人物的新关系由作者选择“替换”或“并存”；并存关系使用不同 `relationship_key`，
+例如夫妻之外再增加师徒，不会自动删除夫妻关系。继续复用现有 approve/correct 审核流程。
+
 ### 规划与长期硬设定
 
 卷纲、章纲和剧情目标是软计划，不表示事件已经发生。规划过程中新增、修改或删除世界规则、角色永久设定等硬内容时，先保存为 managed author-axiom draft，再执行 author-axiom prepare/decide/finalize；完成前，query 和写作上下文继续使用上一个 active axiom digest。这样 `/canon-ledger-plan` 不会成为第二条事实写入路径。
@@ -259,7 +271,8 @@ retrieval search --input-file .canon-ledger/tmp/retrieval_query.json
 
 作者流程的派生文件只写固定项目角色：chapter binding 写
 `.canon-ledger/tmp/chapter_binding.json`，N-1 snapshot 写
-`.canon-ledger/tmp/asof_snapshot.json`。其它 `--out`、CURRENT/STAGING/objects、正文或
+`.canon-ledger/tmp/asof_snapshot.json`，批量上下文写 `.canon-ledger/tmp/context_pages.json`。
+其它 `--out`、CURRENT/STAGING/objects、正文或
 项目外路径都会由 CLI 和 Hook 同时拒绝；retrieval rebuild 只原子替换固定的
 `.story-system/v3/projections/retrieval.sqlite3`。公开 `story-events` 已退役；活动事件事实使用
 `canon-v3 query/history`；旧 event 不进入当前产品的事实读面。

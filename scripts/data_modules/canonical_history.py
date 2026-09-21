@@ -302,7 +302,10 @@ def _compat_fact_slot(row: Dict[str, Any]) -> tuple[str, str, str, str] | None:
             return ("state", slot_id, "", "")
         return ("state", subject, field_name, "")
     if category in {"relationship", "relationship_changed"}:
-        return ("relationship", subject, object_name or field_name, "")
+        return (
+            "relationship", subject, object_name or field_name,
+            str(payload.get("relationship_key") or ""),
+        )
     if category in {"knowledge", "knowledge_state_changed"}:
         slot_id = str(payload.get("slot_id") or row.get("slot_id") or "")
         if slot_id:

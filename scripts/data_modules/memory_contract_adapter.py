@@ -224,7 +224,10 @@ class MemoryContractAdapter:
             warnings=[f"commit_status={payload['meta']['status']}"],
         )
 
-    def load_context(self, chapter: int, budget_tokens: int = 4000) -> ContextPack:
+    def load_context(
+        self, chapter: int, budget_tokens: int = 4000, *, include_retrieval: bool = True,
+        all_sections: bool = False,
+    ) -> ContextPack:
         requested_tokens = max(1, int(budget_tokens or 1))
         mandatory: Dict[str, Any] = {}
         optional: Dict[str, Any] = {}
@@ -505,15 +508,16 @@ class MemoryContractAdapter:
         # Retrieval is optional acceleration over the same sanitized active
         # facts already present above.  A hit is never injected until the v3
         # retrieval facade resolves its digest back against this exact HEAD.
-        retrieval_enabled = bool(
+        retrieval_enabled = include_retrieval and bool(
             getattr(self.config, "context_rag_assist_enabled", True)
         )
         rag_assist = empty_rag_assist(enabled=retrieval_enabled)
         if not retrieval_enabled:
-            rag_assist["reason"] = "disabled_by_config"
+            reason = "disabled_by_config" if include_retrieval else "paged_context"
+            rag_assist["reason"] = reason
             source_status["rag"] = {
                 "status": "disabled",
-                "reason": "disabled_by_config",
+                "reason": reason,
             }
         elif not workflow_ok:
             rag_assist["reason"] = "canon_v3_authority_unavailable"
@@ -702,6 +706,8 @@ class MemoryContractAdapter:
                 "mandatory_tokens": 0,
                 "hard_constraint_tokens": _estimate_tokens(hard_constraints),
                 "hard_over_budget": hard_over_budget,
+                "kind": "soft_target",
+                "delivery_hint": "paginate" if hard_over_budget else "inline",
                 "overflow_tokens": 0,
                 "truncated": bool(omitted_soft_sections),
                 "omitted_soft_sections": list(omitted_soft_sections),
@@ -715,8 +721,9 @@ class MemoryContractAdapter:
             completeness=completeness,
         )
         hard_over_budget = mandatory_tokens > requested_tokens
-        if hard_over_budget:
-            completeness["status"] = "blocked"
+        # Capacity is not factual incompleteness. Keep every hard fact and
+        # report overflow separately; model-facing callers can consume the
+        # same exact context in bounded pages instead of blocking the book.
 
         # Add soft sections by importance.  The complete public envelope is
         # measured for every decision so metadata itself cannot push a
@@ -735,7 +742,7 @@ class MemoryContractAdapter:
                 budget=candidate_budget,
                 completeness=completeness,
             )
-            if not hard_over_budget and candidate_used <= requested_tokens:
+            if all_sections or (not hard_over_budget and candidate_used <= requested_tokens):
                 sections[key] = optional[key]
             else:
                 omitted_soft_sections.append(key)
@@ -748,7 +755,7 @@ class MemoryContractAdapter:
             budget=budget,
             completeness=completeness,
         )
-        if not hard_over_budget and used_tokens > requested_tokens:
+        if not all_sections and not hard_over_budget and used_tokens > requested_tokens:
             for key in ("rag_assist", "memory_pack", "outline"):
                 if key not in sections:
                     continue
@@ -770,10 +777,12 @@ class MemoryContractAdapter:
             for key in ("outline", "memory_pack", "rag_assist")
         ):
             hard_over_budget = True
-            completeness["status"] = "blocked"
             budget["hard_over_budget"] = True
+            budget["delivery_hint"] = "paginate"
         budget["used_tokens"] = used_tokens
         budget["overflow_tokens"] = max(0, used_tokens - requested_tokens)
+        if used_tokens > requested_tokens:
+            budget["delivery_hint"] = "paginate"
         budget["truncated"] = bool(omitted_soft_sections)
         budget["omitted_soft_sections"] = list(omitted_soft_sections)
         # Digit-width changes in used/overflow are included in the final pass.

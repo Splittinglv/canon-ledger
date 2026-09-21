@@ -227,11 +227,34 @@ def test_axiom_publish_is_head_bound_and_does_not_advance_chapters(tmp_path) -> 
     )
 
 
+@pytest.mark.parametrize("action", ["approve", "omit"])
+@pytest.mark.parametrize("key", ["stone_gate_rule", "fear", "voice"])
+def test_domain_keyword_axiom_reaches_human_and_cannot_publish_without_decision(tmp_path, action, key):
+    service = _service(tmp_path)
+    before = service.workflow_snapshot()
+    record = _draft_record(
+        service.project_root, name="fear-magic", key=key,
+        value="恐惧魔法每次消耗施术者十年寿命",
+    )
+    staged = service.prepare_author_axioms(_proposal(service, [record]))
+    assert staged["state"] == "awaiting_human"
+    material = staged["cases"][0]["review_material"]
+    assert material["fact_boundary_human_classification_required"] is True
+    assert material["proposed_value"] == record["source"]["value"]
+    assert service.active_author_axioms()["records"] == []
+    with pytest.raises(AuthorAxiomFinalizeBlocked):
+        _finalize(service)
+    _decide_all(service, action=action)
+    _finalize(service)
+    assert bool(service.active_author_axioms()["records"]) == (action == "approve")
+    assert service.workflow_snapshot()["latest_chapter"] == before["latest_chapter"]
+
+
 @pytest.mark.parametrize(
     ("key", "category", "value"),
     [
-        ("core_motivation", "character_permanent_state", "复仇是永恒驱动力"),
-        ("hero_personality", "character_identity", "人格冷漠且寡言"),
+        ("core_motivation", "character_permanent_state", "人物动机：复仇是永恒驱动力"),
+        ("hero_personality", "character_identity", "人格设定为冷漠且寡言"),
         ("immutable_law", "world_rule", "全书文风冷峻，短句为主"),
         ("rule_17", "world_rule", "每段最多三句话"),
         ("rule_18", "world_rule", "禁止华丽修辞"),

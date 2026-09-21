@@ -291,8 +291,8 @@ def test_custom_writing_rules_cannot_be_promoted_by_world_rule_category(
 @pytest.mark.parametrize(
     ("key", "category", "value"),
     [
-        ("core_motivation", "character_permanent_state", "永恒复仇"),
-        ("hero_personality", "character_identity", "冷漠寡言"),
+        ("core_motivation", "character_permanent_state", "人物动机是永恒复仇"),
+        ("hero_personality", "character_identity", "人格设定为冷漠寡言"),
         ("immutable_law", "world_rule", "全书文风冷峻，短句为主"),
         ("dialogue_law", "world_rule", "对白要简短"),
         ("rule_17", "world_rule", "每段最多三句话"),
@@ -314,6 +314,66 @@ def test_open_ended_author_axiom_world_rule_requires_exact_human_classification(
         axiom_key="death_is_irreversible",
         category="world_rule",
         value="死者不能复生",
+    ) == FactBoundaryClass.AMBIGUOUS
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("stone_gate_rule", "石门只能在夜间开启"),
+        ("portrait_seal", "画像封印只能由本人解除"),
+        ("fear_magic_rule", "恐惧魔法每次消耗施术者十年寿命"),
+        ("fear", "恐惧魔法每次消耗施术者十年寿命"),
+        ("voice", "声纹锁仅允许契约者开启"),
+        ("voice_lock", "The voice lock opens only for its owner"),
+        ("tone_frequency", "The crystal emits a tone at 440 Hz"),
+        ("personality_transfer_rule", "人格转移必须消耗一枚魂石"),
+        ("spell_rule", "咒语必须以第一人称说出"),
+    ],
+)
+def test_domain_keywords_require_human_classification_not_rejection(key, value):
+    from data_modules.canon_v3.fact_boundary import classify_candidate_claim
+
+    assert classify_author_axiom_leaf(
+        axiom_key=key, category="world_rule", value=value,
+    ) == FactBoundaryClass.AMBIGUOUS
+    assert classify_candidate_claim({
+        "kind": "world_rule_revealed", "rule": value,
+    }) == FactBoundaryClass.AMBIGUOUS
+
+
+@pytest.mark.parametrize("value", [
+    "全书文风冷峻，短句为主", "对白要简短", "每段最多三句话",
+    "禁止华丽修辞", "Use a terse narrative voice", "writing style: restrained",
+])
+def test_domain_key_does_not_hide_explicit_writing_instructions(value):
+    from data_modules.canon_v3.fact_boundary import classify_candidate_claim
+
+    assert classify_author_axiom_leaf(
+        axiom_key="stone_gate_rule", category="world_rule", value=value,
+    ) == FactBoundaryClass.KNOWN_SOFT
+    assert classify_candidate_claim({
+        "kind": "world_rule_revealed", "rule": value,
+    }) == FactBoundaryClass.KNOWN_SOFT
+
+
+def test_narrower_keywords_do_not_auto_admit_uncertain_initial_setting_values():
+    assert classify_setting_leaf({
+        "source": "legacy:initial_canon", "subject": "initial_world",
+        "field": "scale", "value": "The voice lock opens only for its owner",
+    }) == FactBoundaryClass.AMBIGUOUS
+
+
+def test_key_normalization_does_not_reject_previously_admissible_axioms():
+    assert classify_author_axiom_leaf(
+        axiom_key="character.arc", category="world_rule", value="月門只能在夜間開啟",
+    ) == FactBoundaryClass.AMBIGUOUS
+
+
+@pytest.mark.parametrize("key", ["core_motivation", "hero_personality", "fear", "voice"])
+def test_axiom_identifier_alone_cannot_decide_value_semantics(key):
+    assert classify_author_axiom_leaf(
+        axiom_key=key, category="world_rule", value="尚需作者判断的含义",
     ) == FactBoundaryClass.AMBIGUOUS
 
 

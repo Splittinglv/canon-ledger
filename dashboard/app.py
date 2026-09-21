@@ -346,6 +346,7 @@ def _relationship_row(
         "description": relation,
         "chapter": int(raw.get("chapter") or raw.get("source_chapter") or 0),
         "revision": int(raw.get("revision") or 0),
+        "relationship_key": claim.get("relationship_key"),
     }
 
 

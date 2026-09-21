@@ -97,10 +97,18 @@ prepare；transaction 和 decisions 不删除。然后只调用：
 - 候选事实和所有逐字证据；
 - 会写入的 compiled effects；
 - exact prior facts / prior effects；
+- effect 中 `inherited_fields` 标出的值来自上述 prior，不能展示为本章逐字原文；
+  没有 prior 的空前态说明为“未记录”，只确认正文支持的新状态；
 - 实体消歧结果、触发原因和动作后果；
 - author-axiom 展示 material 顶层的 category/value；不得只展示看似安全的 axiom key 而隐藏实际 value。
 
 每批不超过 5 项。额外人工确认可以接受，但不得把文风、剧情偏好、人物动机或无锚点猜测加入问题。
+
+关系 case 有既有关系时，明确问作者本次是“替换旧关系”还是“保留旧关系并新增”：
+展示 prior facts/effects，以及有 key 时的 `current_relationships/relationship_write_mode`。
+替换只更新选中的同一 `relationship_key`（旧默认关系为 null）；并存使用新 key。
+需要改 key 时提交现有 `correct` 动作，由 data-agent 保留原证据并修正候选，重新扫描和
+prepare 后再确认。不要把普通“批准新事实”默认为同意删除另一种关系，不新增决定动作。
 
 ## 4. STAGING：写入 exact DecisionRequest
 

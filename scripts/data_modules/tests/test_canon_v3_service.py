@@ -141,6 +141,252 @@ def _case_key(snapshot: dict) -> str:
     return str(snapshot["cases"][0]["case_key"])
 
 
+def _natural_power(manuscript, binding, quote, *, after, before=None, slot_id=None,
+                   subject="林舟", candidate_id="natural-power"):
+    claim = PowerBreakthroughClaim(
+        subject=subject, before=before, after=after, slot_id=slot_id
+    )
+    return FactCandidate(
+        candidate_id=candidate_id,
+        claim=claim,
+        sources=(_span(manuscript, binding, candidate_id, quote),),
+        support_map={
+            key: (candidate_id,)
+            for key in ("subject", "before", "after")
+            if getattr(claim, key) is not None
+        },
+    )
+
+
+def test_power_ellipsis_inherits_exact_prior_without_rewriting_prose(tmp_path):
+    root, manuscript, binding = _project(
+        tmp_path, "林舟的境界从炼气突破到了筑基。\n"
+    )
+    service = CanonV3Service(root)
+    first = service.prepare(_batch(service, binding, [_power(manuscript, binding)]))
+    _approve_all_required(service, first)
+    finalize_v2(service)
+    prior = read_projection(root)["facts"][0]
+    manuscript = root / "正文" / "第0002章.md"
+    quote = "林舟终于突破到了金丹。"
+    manuscript.write_text(quote, encoding="utf-8")
+    binding = build_chapter_binding(root, 2)
+    candidate = _natural_power(
+        manuscript, binding, quote, after="金丹", slot_id=prior["claim"]["slot_id"]
+    )
+    from scripts.data_modules.canon_v3.evidence import EvidenceValidationError
+
+    unsupported = _natural_power(
+        manuscript, binding, quote, before="筑基", after="金丹",
+        slot_id=prior["claim"]["slot_id"],
+    )
+    with pytest.raises(EvidenceValidationError, match="before='筑基'"):
+        service.prepare(_batch(service, binding, [unsupported]))
+    staged = service.prepare(_batch(service, binding, [candidate]))
+    assert staged["state"] == "awaiting_human"
+    effect = staged["cases"][0]["review_material"]["compiled_effects"][0]
+    assert effect["claim"]["before"] == "筑基"
+    assert effect["claim"]["canonical_field"] == "境界"
+    assert effect["prior_fact_digest"] == prior["fact_digest"]
+    assert effect["inherited_fields"]["before"] == prior["fact_digest"]
+    assert "before" not in effect["support_map"]
+    with pytest.raises(FinalizeBlockedError):
+        finalize_v2(service)
+    _approve_all_required(service, staged)
+    finalize_v2(service)
+    assert service.workflow_snapshot()["state"] == "ready"
+    assert manuscript.read_text(encoding="utf-8") == quote
+    assert read_projection(root)["facts"][0]["claim"]["after"] == "金丹"
+
+
+def test_power_ellipsis_without_prior_does_not_invent_a_before(tmp_path):
+    quote = "林舟终于突破到了筑基。"
+    root, manuscript, binding = _project(tmp_path, quote)
+    service = CanonV3Service(root)
+    candidate = _natural_power(manuscript, binding, quote, after="筑基")
+    staged = service.prepare(_batch(service, binding, [candidate]))
+    assert staged["state"] == "awaiting_human"
+    effect = staged["cases"][0]["review_material"]["compiled_effects"][0]
+    assert effect["claim"]["before"] is None
+    assert "before" not in effect["inherited_fields"]
+    _approve_all_required(service, staged)
+    finalize_v2(service)
+    assert read_projection(root)["facts"][0]["claim"]["before"] is None
+
+
+@pytest.mark.parametrize("first_before", ["炼气", None])
+def test_power_ellipsis_folds_same_chapter_in_narrative_order(tmp_path, first_before):
+    from scripts.data_modules.canon_v3.compiler import default_semantic_slot_id
+
+    first_quote = "林舟从炼气突破到了筑基。" if first_before else "林舟突破到了筑基。"
+    second_quote = "林舟随后突破到了金丹。"
+    root, manuscript, binding = _project(tmp_path, first_quote + second_quote)
+    service = CanonV3Service(root)
+    first = _natural_power(
+        manuscript, binding, first_quote, before=first_before, after="筑基", candidate_id="first"
+    )
+    second = _natural_power(
+        manuscript, binding, second_quote, after="金丹", candidate_id="second",
+        slot_id=default_semantic_slot_id(first.claim),
+    )
+    staged = service.prepare(_batch(service, binding, [second, first]))
+    effects = sorted(
+        [effect for case in staged["cases"] for effect in case["review_material"]["compiled_effects"]],
+        key=lambda effect: effect["source_order"],
+    )
+    assert len(effects) == 2
+    assert effects[1]["claim"]["before"] == "筑基"
+    assert effects[1]["claim"]["canonical_field"] == "realm"
+    assert effects[1]["prior_effect_id"] == effects[0]["effect_id"]
+    assert effects[1]["inherited_fields"]["before"] == effects[0]["effect_id"]
+    _approve_all_required(service, staged)
+    finalize_v2(service)
+    assert read_projection(root)["facts"][0]["claim"]["after"] == "金丹"
+
+
+def test_explicit_power_before_still_requires_current_source_support(tmp_path):
+    from scripts.data_modules.canon_v3.evidence import EvidenceValidationError
+
+    quote = "林舟终于突破到了筑基。"
+    root, manuscript, binding = _project(tmp_path, quote)
+    candidate = _natural_power(manuscript, binding, quote, before="炼气", after="筑基")
+    service = CanonV3Service(root)
+    with pytest.raises(EvidenceValidationError, match="before='炼气'"):
+        service.prepare(_batch(service, binding, [candidate]))
+
+
+def test_power_ellipsis_cannot_inherit_another_actors_slot(tmp_path):
+    root, manuscript, binding = _project(tmp_path, "林舟从炼气突破到了筑基。")
+    service = CanonV3Service(root)
+    first = _natural_power(
+        manuscript, binding, manuscript.read_text(encoding="utf-8"), before="炼气", after="筑基"
+    )
+    staged = service.prepare(_batch(service, binding, [first]))
+    _approve_all_required(service, staged)
+    finalize_v2(service)
+    prior = read_projection(root)["facts"][0]
+    head = service.workflow_snapshot()["head_hash"]
+    manuscript = root / "正文" / "第0002章.md"
+    quote = "苏月突破到了金丹。"
+    manuscript.write_text(quote, encoding="utf-8")
+    binding = build_chapter_binding(root, 2)
+    wrong = _natural_power(
+        manuscript, binding, quote, subject="苏月", after="金丹",
+        slot_id=prior["claim"]["slot_id"],
+    )
+    with pytest.raises(PreparedTransactionInvalid, match="character_state_subject_mismatch"):
+        service.prepare(_batch(service, binding, [wrong]))
+    assert service.workflow_snapshot()["head_hash"] == head
+
+
+@pytest.mark.parametrize("repeat_before", [False, True])
+def test_consecutive_power_ellipses_preserve_system_inherited_from_previous_chapter(tmp_path, repeat_before):
+    root, manuscript, binding = _project(
+        tmp_path, "林舟的境界从炼气突破到了筑基。\n"
+    )
+    service = CanonV3Service(root)
+    staged = service.prepare(_batch(service, binding, [_power(manuscript, binding)]))
+    _approve_all_required(service, staged)
+    finalize_v2(service)
+    prior = read_projection(root)["facts"][0]
+    first_quote = "林舟突破到了金丹。"
+    second_quote = "林舟从金丹突破到了元婴。" if repeat_before else "林舟随后突破到了元婴。"
+    manuscript = root / "正文" / "第0002章.md"
+    manuscript.write_text(first_quote + second_quote, encoding="utf-8")
+    binding = build_chapter_binding(root, 2)
+    candidates = [
+        _natural_power(manuscript, binding, quote, after=after,
+                       before="金丹" if repeat_before and name == "second" else None,
+                       slot_id=prior["claim"]["slot_id"], candidate_id=name)
+        for quote, after, name in [(first_quote, "金丹", "first"), (second_quote, "元婴", "second")]
+    ]
+    staged = service.prepare(_batch(service, binding, candidates))
+    effects = sorted(
+        [effect for case in staged["cases"] for effect in case["review_material"]["compiled_effects"]],
+        key=lambda effect: effect["source_order"],
+    )
+    assert [effect["claim"]["before"] for effect in effects] == ["筑基", "金丹"]
+    assert [effect["claim"]["canonical_field"] for effect in effects] == ["境界", "境界"]
+    if repeat_before:
+        assert "before" not in effects[1]["inherited_fields"]
+    else:
+        assert effects[1]["inherited_fields"]["before"] == effects[0]["effect_id"]
+    _approve_all_required(service, staged)
+    finalize_v2(service)
+    assert read_projection(root)["facts"][0]["claim"]["canonical_field"] == "境界"
+
+
+def test_rewriting_first_chapter_never_inherits_its_future_realm(tmp_path):
+    quote = "林舟从炼气突破到了金丹。"
+    root, manuscript, binding = _project(tmp_path, quote)
+    service = CanonV3Service(root)
+    candidate = _natural_power(manuscript, binding, quote, before="炼气", after="金丹")
+    staged = service.prepare(_batch(service, binding, [candidate]))
+    _approve_all_required(service, staged)
+    finalize_v2(service)
+    quote = "林舟突破到了筑基。"
+    manuscript.write_text(quote, encoding="utf-8")
+    binding = build_chapter_binding(root, 1)
+    replacement = _natural_power(manuscript, binding, quote, after="筑基")
+    staged = service.prepare(_batch(service, binding, [replacement]))
+    effect = staged["cases"][0]["review_material"]["compiled_effects"][0]
+    assert effect["claim"]["before"] is None
+    assert effect["prior_fact_digest"] is None
+    assert effect["prior_effect_id"] is None
+    assert "before" not in effect["inherited_fields"]
+    _approve_all_required(service, staged)
+    finalize_v2(service)
+    assert read_projection(root)["facts"][0]["claim"]["after"] == "筑基"
+
+
+def test_old_pending_inheritance_is_reprepared_and_requires_new_approval(tmp_path, monkeypatch):
+    from scripts.data_modules.canon_v3.schema import PreparedTransaction
+
+    root, manuscript, binding = _project(tmp_path, "林舟的境界从炼气突破到了筑基。")
+    service = CanonV3Service(root)
+    staged = service.prepare(_batch(service, binding, [_power(manuscript, binding)]))
+    _approve_all_required(service, staged)
+    finalize_v2(service)
+    original_head = service.workflow_snapshot()["head_hash"]
+    slot = read_projection(root)["facts"][0]["claim"]["slot_id"]
+    first_text, second_text = "林舟突破到了金丹。", "林舟从金丹突破到了元婴。"
+    manuscript = root / "正文" / "第0002章.md"
+    manuscript.write_text(first_text + second_text, encoding="utf-8")
+    binding = build_chapter_binding(root, 2)
+    candidates = [
+        _natural_power(manuscript, binding, first_text, after="金丹", slot_id=slot, candidate_id="first"),
+        _natural_power(manuscript, binding, second_text, before="金丹", after="元婴", slot_id=slot, candidate_id="second"),
+    ]
+    original_bind = CanonV3Service._bind_prior_facts
+
+    def previous_compiler(self, prepared, bindings):
+        result = original_bind(self, prepared, bindings)
+        if len(result.effects) < 2:
+            return result
+        payload = result.model_dump(mode="json", exclude={"transaction_digest"})
+        effect = payload["effects"][-1]
+        effect["claim"]["canonical_field"] = "realm"
+        effect_payload = {key: value for key, value in effect.items() if key != "effect_id"}
+        effect["effect_id"] = canonical_digest({"schema_version": "canon-v3/canon-effect/v2", **effect_payload})
+        return PreparedTransaction.model_validate({
+            **payload, "transaction_digest": canonical_digest(payload)
+        })
+
+    with monkeypatch.context() as older:
+        older.setattr(CanonV3Service, "_bind_prior_facts", previous_compiler)
+        staged = service.prepare(_batch(service, binding, candidates))
+        approved = _approve_all_required(service, staged)
+        assert approved["state"] == "ready_to_finalize"
+    stale = service.workflow_snapshot()
+    assert stale["state"] == "recompile_required"
+    assert stale["head_hash"] == original_head
+    assert stale["stage_digest"] == approved["stage_digest"]
+    assert not stale["can_finalize"]
+    fresh = service.prepare(_batch(service, binding, candidates))
+    assert fresh["state"] == "awaiting_human"
+    assert fresh["transaction_hash"] != approved["transaction_hash"]
+
+
 def _approve_all_required(service: CanonV3Service, snapshot: dict) -> dict:
     decisions = [
         {"case_key": case["case_key"], "action": "approve"}

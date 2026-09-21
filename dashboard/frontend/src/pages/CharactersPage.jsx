@@ -36,7 +36,7 @@ function buildGraphData(entities, relationships, events, currentChapter) {
     const latestEventByPair = new Map()
     for (const row of eventRows) {
         if (!row?.from_entity || !row?.to_entity) continue
-        latestEventByPair.set(`${row.from_entity}|${row.to_entity}`, row)
+        latestEventByPair.set(JSON.stringify([row.from_entity, row.to_entity, row.relationship_key || '']), row)
     }
 
     const baseRelationships = [...relationships]
@@ -46,7 +46,7 @@ function buildGraphData(entities, relationships, events, currentChapter) {
     const linkMap = new Map()
     for (const row of baseRelationships) {
         if (!row?.from_entity || !row?.to_entity) continue
-        const key = `${row.from_entity}|${row.to_entity}`
+        const key = JSON.stringify([row.from_entity, row.to_entity, row.relationship_key || ''])
         linkMap.set(key, row)
     }
     for (const [key, row] of latestEventByPair.entries()) {
@@ -92,23 +92,29 @@ function buildGraphData(entities, relationships, events, currentChapter) {
         }
     })
 
+    const parallelLinks = new Map()
     const links = [...linkMap.values()]
         .filter(row => visibleEntityMap.has(row.from_entity) && visibleEntityMap.has(row.to_entity))
-        .map(row => ({
-            source: row.from_entity,
-            target: row.to_entity,
-            name: row.description || row.event_type || row.type || '关联',
-            lineStyle: {
-                color: '#8f7f5c',
-                width: 2,
-                curveness: 0.1,
-            },
-            label: {
-                show: true,
-                color: '#5d5035',
-                fontSize: 11,
-            },
-        }))
+        .map(row => {
+            const pair = JSON.stringify([row.from_entity, row.to_entity])
+            const offset = parallelLinks.get(pair) || 0
+            parallelLinks.set(pair, offset + 1)
+            return {
+                source: row.from_entity,
+                target: row.to_entity,
+                name: row.description || row.event_type || row.type || '关联',
+                lineStyle: {
+                    color: '#8f7f5c',
+                    width: 2,
+                    curveness: 0.1 + offset * 0.16,
+                },
+                label: {
+                    show: true,
+                    color: '#5d5035',
+                    fontSize: 11,
+                },
+            }
+        })
 
     return { nodes, links }
 }

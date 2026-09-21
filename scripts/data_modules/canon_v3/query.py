@@ -342,7 +342,7 @@ class CanonQueryFacade:
             stable_key, entity_row = resolved
             identifiers = _entity_identifiers(stable_key, entity_row)
 
-        latest: dict[tuple[str, str], dict[str, Any]] = {}
+        latest: dict[tuple[str, str, str], dict[str, Any]] = {}
         for row in bound.as_of.get("hard_constraints") or []:
             if not isinstance(row, Mapping):
                 continue
@@ -357,7 +357,8 @@ class CanonQueryFacade:
             # Relationship slots are directional in the compiler
             # (subject, object).  A->B and B->A may carry different facts and
             # must never overwrite one another in the public query view.
-            key = (subject, object_name)
+            relationship_key = _text(payload.get("relationship_key"))
+            key = (subject, object_name, relationship_key)
             latest[key] = {
                 "subject": subject,
                 "object": object_name,
@@ -365,6 +366,8 @@ class CanonQueryFacade:
                 "source_chapter": int(row.get("source_chapter") or 0),
                 "fact_digest": _text(row.get("fact_digest")),
             }
+            if relationship_key:
+                latest[key]["relationship_key"] = relationship_key
         return {
             **self._binding(bound, actual),
             "query": "relationships",

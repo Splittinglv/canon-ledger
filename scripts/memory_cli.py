@@ -25,6 +25,9 @@ def _ensure_scripts_path() -> None:
 _ensure_scripts_path()
 
 from data_modules.config import DataModulesConfig
+from data_modules.context_delivery import (
+    ContextPageError, ContextPager, compact_context, paginate_context,
+)
 from data_modules.memory_contract_adapter import (
     CanonMemoryReadUnavailable,
     MemoryContractAdapter,
@@ -41,9 +44,39 @@ def _json_out(data) -> None:
 
 
 def cmd_load_context(args: argparse.Namespace) -> None:
+    expected_output = Path(".canon-ledger/tmp/context_pages.json")
+    if args.out:
+        from security_utils import resolve_exact_project_role_path
+
+        resolve_exact_project_role_path(
+            args.project_root, args.out, expected_relative=expected_output
+        )
     adapter = _adapter(args.project_root)
-    pack = adapter.load_context(args.chapter, budget_tokens=args.budget_tokens)
-    _json_out(pack.to_dict())
+    if args.all_pages or args.paged:
+        # Do not repeat optional remote retrieval on each page. All facts are
+        # already in the exact Canon context; retrieval remains a separate aid.
+        pack = adapter.load_context(
+            args.chapter, budget_tokens=args.budget_tokens, include_retrieval=False,
+            all_sections=args.all_pages,
+        )
+        if args.all_pages:
+            result = ContextPager(
+                compact_context(pack), budget_tokens=args.budget_tokens
+            ).all_pages()
+            if args.out:
+                from security_utils import atomic_write_project_json_role
+
+                atomic_write_project_json_role(
+                    args.project_root, args.out, result, expected_relative=expected_output
+                )
+                result = {key: value for key, value in result.items() if key != "pages"}
+                result["path"] = expected_output.as_posix()
+            _json_out(result)
+        else:
+            _json_out(paginate_context(pack, budget_tokens=args.budget_tokens, cursor=args.cursor))
+    else:
+        pack = adapter.load_context(args.chapter, budget_tokens=args.budget_tokens)
+        _json_out(pack.to_dict())
 
 
 def cmd_query_entity(args: argparse.Namespace) -> None:
@@ -139,8 +172,12 @@ def main() -> None:
         "--budget-tokens",
         type=int,
         default=4000,
-        help="上下文目标 token 预算；硬约束绝不静默裁剪",
+        help="上下文交付目标预算；超限不代表事实缺失，硬事实不裁剪",
     )
+    p_load.add_argument("--paged", action="store_true", help="按同一版本分页读取全部上下文")
+    p_load.add_argument("--cursor", default=None, help="原样使用上一页 next_cursor；必须配合 --paged")
+    p_load.add_argument("--all-pages", action="store_true", help="一次读取，生成全部精简上下文页")
+    p_load.add_argument("--out", default="", help="仅 --all-pages 可写 .canon-ledger/tmp/context_pages.json")
 
     p_entity = sub.add_parser("query-entity", help="查询实体快照")
     p_entity.add_argument("--id", required=True, help="实体 ID")
@@ -199,6 +236,15 @@ def main() -> None:
     if not args.command:
         parser.print_help()
         sys.exit(1)
+    if args.command == "load-context":
+        if args.all_pages and args.cursor is not None:
+            parser.error("--all-pages cannot use --cursor")
+        if args.out and not args.all_pages:
+            parser.error("--out requires --all-pages")
+        if args.cursor is not None and not args.paged:
+            parser.error("--cursor requires --paged")
+        if args.budget_tokens < 1:
+            parser.error("--budget-tokens must be positive")
 
     dispatch = {
         "load-context": cmd_load_context,
@@ -215,7 +261,7 @@ def main() -> None:
             parser.error("export-asof 需要 --chapter 或 --as-of-chapter")
     try:
         dispatch[args.command](args)
-    except CanonMemoryReadUnavailable as exc:
+    except (CanonMemoryReadUnavailable, ContextPageError) as exc:
         print(
             json.dumps(
                 {

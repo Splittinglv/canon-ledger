@@ -124,6 +124,41 @@ request 做 exact retry。
 
 ## Proposal 与扫描
 
+### 写作上下文交付
+
+写前一次性生成上下文页：
+
+```text
+memory-contract load-context --chapter N --all-pages --out .canon-ledger/tmp/context_pages.json
+```
+
+该命令只加载一次 runtime，返回文件路径、页数与版本绑定。逐页读取临时 JSON 的
+`pages[i]`，不要每读一页重新调用 load-context。它是可覆盖的派生材料，不是 Canon。
+读取前后用 status 核对 `binding.workflow_digest/head_hash`；变化时重新导出。
+需要调整单页容量时附加 `--budget-tokens B`。
+`B` 是交付目标；非分页接口仍返回完整事实包，`budget.hard_over_budget=true`
+只表示超出目标，不改变事实 `completeness` 或 Canon workflow。
+
+每页使用 `canon-ledger-context-page/v1`：
+
+- `source_completeness.status=complete` 才表示源事实完整；blocked 时仍执行原恢复流程。
+- 每页 `entries[].path` 是交付上下文的 JSON Pointer，`value` 保留原值；大容器可能分拆，
+  单个字符串不会截断。必须结合路径读值，不能把局部字段当成独立事实。
+- 精简视图把重复事实集中到 `fact_catalog`，其它位置用 `fact_ref` 引用。人物、数值、
+  前后态、关系和规则正文均保留；省略的引文定位、support map 等证明元数据仍在 Canon
+  和完整 N-1 snapshot 中。审查事实证据时回查完整来源，不拿精简页作证据。
+- 从第一页开始读取到 `has_more=false`；所有页必须
+  使用同一 `context_digest` 和 HEAD/workflow binding。最后一页单独不等于完整上下文。
+- HEAD/输入变化或改预算时从第一页重新读取，
+  不拼接旧页。文风单独读取，不影响事实分页。
+- 页的 `delivery.over_budget=true` 表示单条值或页元数据超过目标；按模型实际容量调大
+  预算并重读，不能删掉该值，也不能把容量问题上报为穿帮。
+
+分页不会重复调用远程检索；需要相关性排序时另用可选 retrieval。完成事实阅读后，
+任务书保留全局规则与本章相关约束，其余仍可精确回查。章后五维扫描仍须完整执行；
+较大的 N-1 snapshot 可按实体、规则和事实类型分批读取，不能因无召回命中跳过。
+旧 `--paged --cursor ...` 接口保留用于兼容单页调用，日常批量阅读使用上述一次性导出。
+
 唯一事实提议流程：
 
 ```text
@@ -139,6 +174,14 @@ exact chapter binding + N-1 HEAD + active author axioms
   `candidate_id -> candidate_digest` map；必须逐项回显，不得自行重写或重新配对候选。
 - scan attestation 必须绑定 chapter SHA、parent HEAD、candidate set、entity registry 和 active author-axiom digest。
 - 模型不能写 state/entity/timeline delta、人工队列或正史。
+- 力量变化的 `before` 可以省略。已有状态必须使用对应稳定 `slot_id`；runtime 从 exact
+  N-1 fact 或同章紧邻 prior effect 继承前态，并标记 `inherited_fields.before`。
+  当前正文明确给出的 `before` 仍须有真实 source/support，不能用继承掩盖冲突。
+  没有已验证前态时保留 null 并交 checkpoint 人工确认新状态，不猜旧境界，不要求正文复述。
+- 同一人物对可以有多种并存关系。`relationship_key` 只是作者确认的独立关系标识，
+  不建立自动关系分类：新 key 新增并存关系，同 key 更新该关系，null 保持旧的默认关系。
+  有既有关系时必须明确问作者“替换还是并存”；选择并存可用现有 `correct` 补 key，
+  然后重新扫描、prepare 和确认。不要要求正文复述旧关系或手改已发布事实。
 
 章节 Agent 必须先读 `agent-schema candidate-draft|reviewer-output`，分别通过
 `validate-agent-output`，再由 runtime `assemble-proposal` 计算 digests、逐项比较 reviewer
@@ -165,6 +208,12 @@ candidate/record/effect/transaction digest 或根据文档猜 strict schema。
   `world_rule`、`规则` 或无害 key 包装也必须拒绝；未能由闭合结构证明的自由字段是
   `ambiguous`，必须以 exact case 明确分类或改写，不能因“未命中软关键词”自动变成
   硬事实。普通 conflict/checkpoint 批准不能覆盖这条边界。
+- 此处“已知软内容”指明确的偏好字段或写作/人物设计指令；标识符内部的字母组合、
+  恐惧魔法、声纹锁等世界机制不能仅因命中词语直接拒绝。混合或无法判定的语义继续
+  走 exact 人工分类，不能自动当作硬事实，也不绕过现有证据校验。
+- author-axiom 的 key 是标识符，不凭 `fear/voice/personality` 等名字拒绝内容；
+  命名或含义有歧义时展示实际 value，由作者分类。明显的写作指令仍排除；普通人物设计
+  不是客观事实时选择 omit，不因进入了审核就建议批准。
 - author-axiom 或章节 case 的 review material 若标记
   `fact_boundary_human_classification_required=true` 或 reason code
   `fact_boundary:human_classification_required`，`approve` 的精确含义仅是把该版本的
@@ -215,7 +264,8 @@ projection 与活动 fact-set digest；STAGING、style、设定草稿、历史�
 
 可信 `canon_ledger.py` 不是任意项目文件写权限。正文 binding 与 N-1 快照只能分别
 写入 `.canon-ledger/tmp/chapter_binding.json` 和
-`.canon-ledger/tmp/asof_snapshot.json`；其它 `--out`、CURRENT/STAGING/objects、正文、
+`.canon-ledger/tmp/asof_snapshot.json`；批量上下文只可写
+`.canon-ledger/tmp/context_pages.json`。其它 `--out`、CURRENT/STAGING/objects、正文、
 项目外路径或符号链接目标必须拒绝。prepare/decide/finalize 也只消费各 Skill 约定的
 项目内 tmp JSON，不读取 raw v3 object 或 legacy cache 猜协议。
 

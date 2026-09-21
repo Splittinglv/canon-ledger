@@ -19,6 +19,7 @@ from scripts.data_modules.canon_v3.schema import (
     EntityObservedClaim,
     PowerBreakthroughClaim,
     PresenceObservedClaim,
+    RelationshipChangedClaim,
     ReviewLevel,
     ReviewObservation,
     TransactionState,
@@ -225,6 +226,40 @@ def test_input_order_does_not_change_transaction_digest() -> None:
 
     assert first.transaction_digest == second.transaction_digest
     assert first == second
+
+
+def test_explicit_power_before_preserves_published_v2_digests() -> None:
+    # Captured before introducing optional/inherited power before-values.
+    # Existing immutable candidates and transactions must still recompile.
+    from scripts.data_modules.canon_v3.evidence import candidate_digest
+
+    candidate = _power_candidate()
+    transaction = compile_transaction([candidate], [], "GENESIS")
+    assert candidate_digest(candidate) == (
+        "f354a66208711418e4060aff6e1814eb795cb76ed9a9b14c43170d3ed4e015be"
+    )
+    assert transaction.transaction_digest == (
+        "89063c61411b76e772177875835f892ec36988af013f7b0294adb08cf071be45"
+    )
+    assert transaction.effects[0].effect_id == (
+        "06dea6c1543fd85e2d934a283b6a37a6b6013a4ada13a3a4e473bf8b1f6fe6c8"
+    )
+
+
+def test_unkeyed_relationship_preserves_existing_immutable_digests():
+    from scripts.data_modules.canon_v3.evidence import candidate_digest
+
+    candidate = FactCandidate(
+        candidate_id="relation",
+        claim=RelationshipChangedClaim(subject="林舟", object="苏月", after="夫妻"),
+        sources=(_span("source", "林舟与苏月成为夫妻。"),),
+        support_map={"subject": ("source",), "object": ("source",), "after": ("source",)},
+    )
+    assert "relationship_key" not in candidate.model_dump(mode="json")["claim"]
+    assert candidate_digest(candidate) == "1bcdfdfddb66a125cb133615eae6606b2e5561966ab3b7b562e90916ae883d4a"
+    assert compile_transaction([candidate], [], "GENESIS").transaction_digest == (
+        "af1d9a64e2cd4e771dde0c3e513eb160daa79063eef23ed63012f1b5d9fca8d7"
+    )
 
 
 def test_runtime_ids_source_order_and_set_like_alias_order_do_not_change_digest() -> None:

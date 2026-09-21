@@ -136,7 +136,7 @@ class MemoryContract(Protocol):
         ...
 
     def load_context(self, chapter: int, budget_tokens: int = 4000) -> ContextPack:
-        """写前读取：加载章节上下文包。"""
+        """写前读取完整事实包；预算是交付目标，超限不代表事实不完整。"""
         ...
 
     def query_entity(

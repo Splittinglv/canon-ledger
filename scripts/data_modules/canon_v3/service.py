@@ -1095,6 +1095,9 @@ class CanonV3Service:
             text = str(value or "").strip()
             if text:
                 return text
+        if field == "canonical_field" and payload.get("kind") == "power_breakthrough":
+            # Match default_semantic_slot_id when the prose names no system.
+            return "realm"
         return None
 
     @staticmethod
@@ -1445,7 +1448,16 @@ class CanonV3Service:
             FactKind.OPEN_LOOP_CLOSED: "loop",
         }
         effects: list[CanonEffect] = []
-        final_id_by_provisional_id: dict[str, str] = {}
+        final_effect_by_provisional_id: dict[str, CanonEffect] = {}
+        # Optional before-values are the new input shape. Apply their
+        # inheritance semantics to the whole power chain, including later
+        # explicit before-values; legacy all-explicit transactions keep their
+        # original immutable digests.
+        inherit_power_chain = any(
+            effect.claim.kind == FactKind.POWER_BREAKTHROUGH.value
+            and effect.claim.before is None
+            for effect in prepared.effects
+        )
         for effect in prepared.effects:
             prior = bindings.get(effect.candidate_digest)
             claim_payload = effect.claim.model_dump(mode="python")
@@ -1458,14 +1470,20 @@ class CanonV3Service:
                     prior_digest = prior_reference
                     exact_prior_reference = prior_reference
                 elif prior_type == "effect":
-                    prior_effect_id = final_id_by_provisional_id.get(
+                    prior_effect = final_effect_by_provisional_id.get(
                         prior_reference
                     )
-                    if prior_effect_id is None:
+                    if prior_effect is None:
                         raise PreparedTransactionInvalid(
                             "canon_v3_intra_transaction_prior_effect_order_invalid"
                         )
+                    prior_effect_id = prior_effect.effect_id
                     exact_prior_reference = prior_effect_id
+                    if (
+                        inherit_power_chain
+                        and effect.claim.kind == FactKind.POWER_BREAKTHROUGH.value
+                    ):
+                        prior_record = prior_effect.model_dump(mode="json")
                 else:  # pragma: no cover - internal closed set
                     raise PreparedTransactionInvalid(
                         "canon_v3_prior_reference_type_invalid"
@@ -1481,6 +1499,17 @@ class CanonV3Service:
                         )
                     claim_payload[field] = inherited
                     inherited_fields[field] = exact_prior_reference
+                if (
+                    effect.claim.kind == FactKind.POWER_BREAKTHROUGH.value
+                    and claim_payload.get("before") is None
+                ):
+                    inherited_before = self._prior_transition_value(prior_record)
+                    if inherited_before is None:
+                        raise PreparedTransactionInvalid(
+                            "canon_v3_prior_transition_value_missing:before"
+                        )
+                    claim_payload["before"] = inherited_before
+                    inherited_fields["before"] = exact_prior_reference
             claim = type(effect.claim).model_validate(claim_payload)
             payload = {
                 "source_order": effect.source_order,
@@ -1498,8 +1527,9 @@ class CanonV3Service:
             effect_id = canonical_digest(
                 {"schema_version": "canon-v3/canon-effect/v2", **payload}
             )
-            effects.append(CanonEffect(effect_id=effect_id, **payload))
-            final_id_by_provisional_id[effect.effect_id] = effect_id
+            bound_effect = CanonEffect(effect_id=effect_id, **payload)
+            effects.append(bound_effect)
+            final_effect_by_provisional_id[effect.effect_id] = bound_effect
         effects.sort(key=lambda item: (item.source_order, item.effect_id))
         transaction_payload = prepared.model_dump(
             mode="json", exclude={"transaction_digest"}
@@ -1608,6 +1638,7 @@ class CanonV3Service:
             for effect in envelope.prepared_transaction.effects
         }
         payloads: list[dict[str, Any]] = []
+        active_relationships: dict[str, dict[str, Any]] | None = None
         for case in cases:
             candidate = candidates.get(case.context.candidate_digest)
             if candidate is None:
@@ -1643,6 +1674,44 @@ class CanonV3Service:
                     for digest in case.context.prior_fact_hashes
                 ],
             }
+            if (
+                candidate.claim.kind == FactKind.RELATIONSHIP_CHANGED.value
+                and candidate.claim.relationship_key is not None
+            ):
+                # This is a human-chosen independent relationship, not a
+                # inferred relationship taxonomy. Show other live relations
+                # so approval explicitly means coexistence or replacement.
+                if active_relationships is None:
+                    active_relationships = {
+                        key: record for key, (_digest, record) in self._active_fact_slots(
+                            envelope.prepared_transaction.parent_head, envelope.chapter
+                        ).items()
+                        if self._record_claim(record).get(
+                            "kind", self._record_claim(record).get("category")
+                        ) in {"relationship", "relationship_changed"}
+                    }
+                live = dict(active_relationships)
+                target = candidate.claim
+                for effect in envelope.prepared_transaction.effects:
+                    if effect.candidate_digest == case.context.candidate_digest:
+                        target = effect.claim
+                        break
+                    if effect.claim.kind == FactKind.RELATIONSHIP_CHANGED.value:
+                        live[effect.fact_key] = effect.model_dump(mode="json")
+                material["current_relationships"] = [
+                    record for record in live.values()
+                    if (claim := self._record_claim(record)).get("subject") == target.subject
+                    and claim.get("object") == target.object
+                    and claim.get("kind", claim.get("category")) in {
+                        "relationship", "relationship_changed"
+                    }
+                ]
+                material["relationship_write_mode"] = (
+                    "replace" if any(
+                        item.get("prior_fact_digest") or item.get("prior_effect_id")
+                        for item in material["compiled_effects"]
+                    ) else "coexist"
+                )
             material["material_digest"] = canonical_digest(material)
             decision_head = (decision_heads or {}).get(case.case_key)
             decision_head_hash = (
@@ -2925,7 +2994,12 @@ class CanonV3Service:
                         envelope.chapter_binding,
                     )
                     reduction = self._validated_reduction(pointer, envelope)
-                except ChapterBindingError:
+                except (ChapterBindingError, PreparedTransactionInvalid) as exc:
+                    if (
+                        isinstance(exc, PreparedTransactionInvalid)
+                        and str(exc) != "canon_v3_recompile_digest_mismatch"
+                    ):
+                        raise
                     return {
                         "schema_version": WORKFLOW_SCHEMA,
                         "state": "recompile_required",
@@ -2936,12 +3010,14 @@ class CanonV3Service:
                         ),
                         "chapter": envelope.chapter,
                         "transaction_hash": pointer.transaction_hash,
+                        "stage_digest": pointer.stage_digest,
                         "can_finalize": False,
                         "can_write_next": False,
                         "projection_fresh": projection_is_fresh(self.project_root),
                         "cases": [],
                         "counts": {},
                         "recovery_action": "reprepare_changed_chapter",
+                        "error": str(exc),
                     }
                 state_map = {
                     ReviewWorkflowState.READY: "ready_to_finalize",

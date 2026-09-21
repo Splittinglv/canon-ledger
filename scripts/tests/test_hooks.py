@@ -323,6 +323,10 @@ def test_guard_blocks_trusted_cli_legacy_state_mutation_capabilities(tail):
         'story-system "玄幻" --format json',
         "style-memory show",
         (
+            "memory-contract load-context --chapter 3 --all-pages "
+            '--out "${PROJECT_ROOT}/.canon-ledger/tmp/context_pages.json"'
+        ),
+        (
             "memory-contract export-asof --chapter 3 "
             '--out "${PROJECT_ROOT}/.canon-ledger/tmp/asof_snapshot.json"'
         ),

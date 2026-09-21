@@ -560,14 +560,18 @@ def evaluate_public_command(argv: Sequence[str]) -> PublicCommandDecision:
     if tool in _EXACT_SUBCOMMANDS:
         operation = _subcommand(rest)
         if operation in _EXACT_SUBCOMMANDS[tool]:
-            if tool == "memory-contract" and operation == "export-asof":
+            if tool == "memory-contract" and operation in {"export-asof", "load-context"}:
                 if not _project_path_options_are_safe(
                     rest,
                     project_root,
                     {
                         "out": (
                             "exact",
-                            ".canon-ledger/tmp/asof_snapshot.json",
+                            (
+                                ".canon-ledger/tmp/asof_snapshot.json"
+                                if operation == "export-asof"
+                                else ".canon-ledger/tmp/context_pages.json"
+                            ),
                         )
                     },
                 ):

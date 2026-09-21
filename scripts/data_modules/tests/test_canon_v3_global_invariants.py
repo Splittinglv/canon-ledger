@@ -28,6 +28,7 @@ from scripts.data_modules.canon_v3.schema import (
     OpenLoopCreatedClaim,
     PresenceObservedClaim,
     PromiseCreatedClaim,
+    RelationshipChangedClaim,
     TimelineObservedClaim,
     WorldRuleBrokenClaim,
     WorldRuleRevealedClaim,
@@ -75,6 +76,7 @@ def _candidate(path, binding, candidate_id: str, claim, quote: str, *, links=Non
         "link_to",
         "canonical_entity",
         "canonical_field",
+        "relationship_key",
         "new_instance",
     }
     support = {
@@ -151,15 +153,16 @@ def test_known_soft_chapter_candidate_is_rejected_before_staging(tmp_path):
     assert service.workflow_snapshot()["state"] == "ready"
 
 
-def test_free_form_world_rule_requires_exact_boundary_classification(tmp_path):
+@pytest.mark.parametrize("rule_text", ["午夜后任何人都不能施法", "恐惧魔法每次消耗施术者十年寿命"])
+def test_free_form_world_rule_requires_exact_boundary_classification(tmp_path, rule_text):
     root = tmp_path / "book"
-    path, binding = _write(root, 1, "午夜后任何人都不能施法。\n")
+    path, binding = _write(root, 1, rule_text + "。\n")
     candidate = _candidate(
         path,
         binding,
         "custom-world-rule",
-        WorldRuleRevealedClaim(rule="午夜后任何人都不能施法"),
-        "午夜后任何人都不能施法。",
+        WorldRuleRevealedClaim(rule=rule_text),
+        rule_text + "。",
     )
     service = CanonV3Service(root)
 
@@ -173,9 +176,85 @@ def test_free_form_world_rule_requires_exact_boundary_classification(tmp_path):
     assert "omit" in staged["cases"][0]["allowed_actions"]
     _approve(service, staged)
     finalize_v2(service)
-    assert read_projection(root)["facts"][0]["claim"]["rule"] == (
-        "午夜后任何人都不能施法"
-    )
+    assert read_projection(root)["facts"][0]["claim"]["rule"] == rule_text
+
+
+def test_human_can_correct_relationship_to_coexist_without_rewriting_manuscript(tmp_path):
+    from scripts.data_modules.canon_v3.query import CanonQueryFacade
+    from scripts.data_modules.canon_v3.projection import rebuild_projection
+    from scripts.data_modules.canon_v3.service import FinalizeBlockedError
+
+    root = tmp_path / "book"
+    service = CanonV3Service(root)
+    first_text = "林舟与苏月成为夫妻。"
+    path, binding = _write(root, 1, first_text)
+    married = _candidate(path, binding, "married", RelationshipChangedClaim(
+        subject="林舟", object="苏月", after="夫妻"
+    ), first_text)
+    staged = service.prepare(_batch(service, binding, [married]))
+    _approve(service, staged)
+    finalize_v2(service)
+
+    second_text = "林舟与苏月成为师徒。"
+    path, binding = _write(root, 2, second_text)
+    apprentice = _candidate(path, binding, "apprentice", RelationshipChangedClaim(
+        subject="林舟", object="苏月", after="师徒"
+    ), second_text)
+    staged = service.prepare(_batch(service, binding, [apprentice]))
+    assert staged["state"] == "awaiting_human"
+    assert staged["cases"][0]["review_material"]["prior_facts"][0]["claim"]["after"] == "夫妻"
+    corrected = apprentice.model_copy(update={"claim": apprentice.claim.model_copy(
+        update={"relationship_key": "师承"}
+    )})
+    decision = record_decisions_v2(service, [{
+        "case_key": staged["cases"][0]["case_key"], "action": "correct",
+        "corrected_candidate": corrected.model_dump(mode="json"),
+    }], snapshot=staged)
+    assert decision["state"] == "recompile_required"
+    staged = service.prepare(_batch(service, binding, [corrected]))
+    material = staged["cases"][0]["review_material"]
+    assert material["relationship_write_mode"] == "coexist"
+    assert material["current_relationships"][0]["claim"]["after"] == "夫妻"
+    with pytest.raises(FinalizeBlockedError):
+        finalize_v2(service)
+    _approve(service, staged)
+    finalize_v2(service)
+    assert path.read_text(encoding="utf-8") == second_text
+    rebuild_projection(root)
+    relations = CanonQueryFacade(root).relationships("林舟")["data"]["relationships"]
+    assert {item["relationship"] for item in relations} == {"夫妻", "师徒"}
+    assert CanonQueryFacade(root).relationships("林舟", as_of_chapter=1)["data"]["relationships"][0]["relationship"] == "夫妻"
+
+    text = "林舟与苏月已解除师徒关系。"
+    path, binding = _write(root, 3, text)
+    ended = _candidate(path, binding, "ended", RelationshipChangedClaim(
+        subject="林舟", object="苏月", after="已解除师徒关系", relationship_key="师承"
+    ), text)
+    staged = service.prepare(_batch(service, binding, [ended]))
+    assert staged["cases"][0]["review_material"]["relationship_write_mode"] == "replace"
+    _approve(service, staged)
+    finalize_v2(service)
+    relations = CanonQueryFacade(root).relationships("林舟")["data"]["relationships"]
+    assert {item["relationship"] for item in relations} == {"夫妻", "已解除师徒关系"}
+
+
+def test_explicit_human_replacement_keeps_legacy_relationship_behavior(tmp_path):
+    from scripts.data_modules.canon_v3.query import CanonQueryFacade
+
+    root = tmp_path / "book"
+    service = CanonV3Service(root)
+    for chapter, relationship in [(1, "夫妻"), (2, "已离婚")]:
+        text = f"林舟与苏月的关系是{relationship}。"
+        path, binding = _write(root, chapter, text)
+        candidate = _candidate(path, binding, f"relation-{chapter}", RelationshipChangedClaim(
+            subject="林舟", object="苏月", after=relationship
+        ), text)
+        staged = service.prepare(_batch(service, binding, [candidate]))
+        assert staged["state"] == "awaiting_human"
+        _approve(service, staged)
+        finalize_v2(service)
+    relations = CanonQueryFacade(root).relationships("林舟")["data"]["relationships"]
+    assert [item["relationship"] for item in relations] == ["已离婚"]
 
 
 def test_same_wording_creates_distinct_promise_and_timeline_instances(tmp_path):

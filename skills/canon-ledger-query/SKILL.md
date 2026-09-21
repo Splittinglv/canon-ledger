@@ -90,7 +90,7 @@ snapshot --as-of-chapter N`、`history` 或更窄的 HEAD-bound facade；不能�
 | 物品归属 | canonical item custody |
 | 承诺、开放问题 | active obligations + lifecycle history |
 | 时间线 | occurrence timeline as of 指定章节 |
-| 综合写作上下文 | `memory-contract load-context --chapter N`，内部截至 N-1 |
+| 综合写作上下文 | `memory-contract load-context --chapter N --all-pages --out .canon-ledger/tmp/context_pages.json`，按共享协议一次生成再逐页读取，内部截至 N-1 |
 
 这些领域视图统一由 `canon-v3 query` 或 Dashboard 的 HEAD-bound 事实接口承载。
 需要精确历史 revision、但公开 export 返回 `source_unavailable` 时停止并说明能力缺口，

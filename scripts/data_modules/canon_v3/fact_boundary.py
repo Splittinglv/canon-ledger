@@ -162,82 +162,42 @@ _SOFT_FIELD_PARTS = (
     "对白风格",
 )
 
-_AUTHOR_AXIOM_SOFT_KEY_PARTS = (
-    *_SOFT_FIELD_PARTS,
-    "outline",
-    "plot",
-    "style",
-    "prose",
-    "tone",
-    "voice",
-    "pacing",
-    "preference",
-    "motivation",
-    "personality",
-    "character arc",
-    "character_arc",
-    "archetype",
-    "desire",
-    "fear",
-    "trait",
-    "habit",
-    "target audience",
-    "target_audience",
-    "大纲",
-    "章纲",
-    "剧情",
-    "动机",
-    "性格",
-    "人格",
-    "人设",
-    "成长弧",
-    "角色弧",
-    "欲望",
-    "渴望",
-    "恐惧",
-    "价值观",
-    "偏好",
-    "爱好",
-    "习惯",
-    "口头禅",
-    "目标读者",
-)
-
+# Match writing instructions, not isolated words that also describe the world
+# (voice locks, fear magic, spell punctuation, etc.). Unknown semantics still
+# require the existing v2 human-classification receipt; this never grants a
+# new automatic admission or changes an already-admitted fact's policy proof.
 _SETTING_CRAFT_VALUE_RE = re.compile(
     r"(?:文风|文笔|写作(?:风格|偏好|节奏|规则|要求)|"
     r"叙事(?:风格|视角|节奏|口吻)|行文|语言风格|风格要求|"
-    r"句式|短句|长句|措辞|对白(?:风格|节奏|要|应)|口吻|语气|"
+    r"对白(?:风格|节奏|要|应)|"
     r"(?:每|每一)(?:段|句|行).{0,12}(?:最多|最少|不超过|不少于|只能|必须|保持).{0,12}(?:句话|句|字数|字|段|行)|"
     r"(?:每|每一)(?:章|节).{0,16}(?:场|次|个|段|句|字)|"
-    r"(?:第一|第二|第三|有限|全知|单一|多重)人称|"
-    r"(?:感叹号|问号|逗号|句号|标点|自然段|段落长度|句子长度|句长|字数)|"
     r"(?:多用|少用|避免使用|不要使用|禁用).{0,12}(?:形容词|副词|成语|四字|标点|比喻|排比|短句|长句)|"
     r"(?:避免|禁止|不得|不要|少用|多用).{0,16}(?:修辞|描写|叙述|形容词|副词|成语|比喻|排比|短句|长句|标点)|"
     r"(?:华丽|朴素|冷峻|克制|简洁).{0,8}(?:文风|文笔|修辞|措辞|语言|行文|描写)|"
     r"(?:对白|旁白|描写).{0,8}(?:简短|克制|冷峻|口语|书面|精炼|冗长)|"
-    r"留白|阅读体验|可读性|目标读者|作品卖点|爽点|"
-    r"\b(?:writing\s+style|prose|narrative\s+style|tone|voice|pacing|"
-    r"preference|target[ _-]?audience)\b)",
+    r"阅读体验|目标读者|作品卖点|"
+    r"\b(?:writing\s+(?:style|preference)|narrative\s+(?:style|voice|tone|pacing)|"
+    r"prose\s+style|target[ _-]?audience)\b)",
     re.IGNORECASE,
 )
 
 _AUTHOR_AXIOM_SOFT_VALUE_RE = re.compile(
-    r"(?:文风|文笔|写作(?:风格|偏好|节奏|规则|要求)|"
-    r"叙事(?:风格|视角|节奏|口吻)|行文|语言风格|风格要求|"
-    r"句式|短句|长句|措辞|对白(?:风格|节奏|要|应)|口吻|语气|"
-    r"(?:每|每一)(?:段|句|行).{0,12}(?:最多|最少|不超过|不少于|只能|必须|保持).{0,12}(?:句话|句|字数|字|段|行)|"
-    r"(?:每|每一)(?:章|节).{0,16}(?:场|次|个|段|句|字)|"
+    _SETTING_CRAFT_VALUE_RE.pattern
+    + r"|(?:人物动机|角色动机|人设类型|成长弧|角色弧|人物弧|章纲|大纲|"
+    r"(?:性格|人格|人设)(?:设定为|设计为|塑造为|定位为)|"
+    r"\bcharacter[ _-]?arc\b)",
+    re.IGNORECASE,
+)
+
+# Former blanket rejections that can also be objective world vocabulary.
+# In closed initial/setting fields these must become AMBIGUOUS, not fall
+# through to automatic HARD_FACT merely because the rejection was narrowed.
+_AMBIGUOUS_SETTING_VALUE_RE = re.compile(
+    r"句式|短句|长句|措辞|口吻|语气|留白|可读性|爽点|"
     r"(?:第一|第二|第三|有限|全知|单一|多重)人称|"
-    r"(?:感叹号|问号|逗号|句号|标点|自然段|段落长度|句子长度|句长|字数)|"
-    r"(?:多用|少用|避免使用|不要使用|禁用).{0,12}(?:形容词|副词|成语|四字|标点|比喻|排比|短句|长句)|"
-    r"(?:避免|禁止|不得|不要|少用|多用).{0,16}(?:修辞|描写|叙述|形容词|副词|成语|比喻|排比|短句|长句|标点)|"
-    r"(?:华丽|朴素|冷峻|克制|简洁).{0,8}(?:文风|文笔|修辞|措辞|语言|行文|描写)|"
-    r"(?:对白|旁白|描写).{0,8}(?:简短|克制|冷峻|口语|书面|精炼|冗长)|"
-    r"留白|阅读体验|可读性|"
-    r"目标读者|作品卖点|爽点|人物动机|角色动机|性格|人格|人设|"
-    r"成长弧|角色弧|人物弧|价值观|欲望|渴望|恐惧|章纲|大纲|"
-    r"\b(?:writing\s+style|prose|narrative\s+style|tone|voice|pacing|"
-    r"preference|motivation|personality|character[ _-]?arc|target[ _-]?audience)\b)",
+    r"感叹号|问号|逗号|句号|标点|自然段|段落长度|句子长度|句长|字数|"
+    r"\b(?:prose|tone|voice|pacing|preference)\b",
     re.IGNORECASE,
 )
 
@@ -348,20 +308,14 @@ def classify_author_axiom_leaf(
     category: Any,
     value: Any,
 ) -> FactBoundaryClass:
-    """Classify a managed axiom across key/category/value.
+    """Reject explicit writing instructions; ask a human about other axioms.
 
-    Known craft/persona leaves are forbidden.  Every other open-ended value
+    An arbitrary axiom ID is not a semantic field name. Every other open-ended value
     remains ambiguous until the managed author-axiom review explicitly
     classifies that exact digest as an objective fictional fact.
     """
 
-    key = _text(axiom_key).casefold().replace("-", " ")
-    category_text = _text(getattr(category, "value", category)).casefold()
     value_text = _author_axiom_value_text(value)
-    if _contains_part(key, _AUTHOR_AXIOM_SOFT_KEY_PARTS):
-        return FactBoundaryClass.KNOWN_SOFT
-    if _contains_part(category_text, _AUTHOR_AXIOM_SOFT_KEY_PARTS):
-        return FactBoundaryClass.KNOWN_SOFT
     if _AUTHOR_AXIOM_SOFT_VALUE_RE.search(value_text):
         return FactBoundaryClass.KNOWN_SOFT
     # Author axioms are deliberately open-ended JSON leaves.  A closed
@@ -416,6 +370,8 @@ def classify_setting_leaf(fact: Mapping[str, Any]) -> FactBoundaryClass:
         return FactBoundaryClass.KNOWN_SOFT
     if _SETTING_CRAFT_VALUE_RE.search(value):
         return FactBoundaryClass.KNOWN_SOFT
+    if _AMBIGUOUS_SETTING_VALUE_RE.search(value):
+        return FactBoundaryClass.AMBIGUOUS
 
     initial_section = (
         "world"

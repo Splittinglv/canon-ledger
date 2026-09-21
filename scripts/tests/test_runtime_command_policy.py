@@ -48,6 +48,10 @@ from runtime_command_policy import evaluate_public_command
         ["doctor", "--deep"],
         ["write-gate", "--chapter", "3", "--stage", "prewrite"],
         [
+            "--project-root", "/book", "memory-contract", "load-context",
+            "--chapter", "3", "--all-pages", "--out", ".canon-ledger/tmp/context_pages.json",
+        ],
+        [
             "--project-root",
             "/book",
             "chapter-binding",

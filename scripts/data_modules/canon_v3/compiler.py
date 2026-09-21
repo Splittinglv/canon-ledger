@@ -140,6 +140,8 @@ def _fact_slot_payload(candidate: FactCandidate) -> dict[str, Any]:
         slot = {"slot_id": data["slot_id"]}
     elif kind == FactKind.RELATIONSHIP_CHANGED:
         slot = {"subject": data["subject"], "object": data["object"]}
+        if data.get("relationship_key") is not None:
+            slot["relationship_key"] = data["relationship_key"]
     elif kind == FactKind.WORLD_RULE_REVEALED:
         slot = {"slot_id": data["slot_id"]}
     elif kind == FactKind.WORLD_RULE_BROKEN:
